@@ -2,7 +2,7 @@
 
 import pytest
 
-from dauys.schedule import own_history_step
+from dauys.schedule import e005_phase, own_history_step
 
 
 @pytest.mark.parametrize("conversation_count", [68, 69, 70])
@@ -18,3 +18,12 @@ def test_history_modes_are_balanced_over_two_epochs():
     assert (
         sum(own_history_step(step, count) for step in range(1, 2 * count + 1)) == count
     )
+
+
+def test_e005_phase_boundaries_and_final_context():
+    assert e005_phase(1, 9, 10) == (256, 0)
+    assert e005_phase(2, 0, 10) == (256, 32)
+    assert e005_phase(4, 0, 10)[0] > 256
+    assert e005_phase(5, 9, 10) == (512, 128)
+    with pytest.raises(ValueError):
+        e005_phase(6, 0, 10)

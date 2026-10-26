@@ -26,6 +26,7 @@ from dauys.codec import decode, encode, load_mimi
 from dauys.config import ModelConfig
 from dauys.loss import training_loss
 from dauys.model import DauysHybrid, FrameAttention
+from dauys.schedule import e005_phase
 
 RUN_NAME = "S1-E005-hohere-1m-hybrid-v01"
 EPOCHS = 6
@@ -63,17 +64,6 @@ def make_batches(rows: list[dict[str, Any]], seed: int) -> list[list[dict[str, A
     return batches
 
 
-def phase(epoch: int, step_in_epoch: int, epoch_steps: int) -> tuple[int, int]:
-    progress = epoch + step_in_epoch / epoch_steps
-    if progress < 2:
-        return 256, 0
-    if progress < 4:
-        return 256, 32 + int((progress - 2) * 16)
-    return min(512, 256 + int((progress - 4) * 128)), min(
-        128, 64 + int((progress - 4) * 32)
-    )
-
-
 def set_context(model: DauysHybrid, frames: int) -> None:
     for module in model.modules():
         if isinstance(module, FrameAttention):
@@ -93,6 +83,13 @@ def load_case(root: Path, row: dict[str, Any]) -> dict[str, torch.Tensor]:
     ):
         raise ValueError(f"Token geometry mismatch: {row['id']}")
     return cached
+
+
+def verify_cache(root: Path, rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        path = root / row["split"] / f"{row['id']}.pt"
+        if not path.is_file() or digest(path) != row["sha256"]:
+            raise ValueError(f"Token cache checksum mismatch: {row['id']}")
 
 
 def on_gpu(case: dict[str, torch.Tensor]) -> tuple[torch.Tensor, ...]:
@@ -452,6 +449,7 @@ def main() -> None:
     val = read_manifest(args.tokens / "validation.jsonl", "validation")
     if not args.preflight_only and (len(train), len(val)) != (3139, 372):
         raise ValueError("The complete frozen train and validation splits are required")
+    verify_cache(args.tokens, train + val)
     if {r["scenario_family"] for r in train} & {r["scenario_family"] for r in val}:
         raise ValueError("Scenario family leakage")
     if not args.preflight_only:
@@ -466,12 +464,20 @@ def main() -> None:
             raise ValueError("Incomplete or leaking test metadata")
     if args.output.exists() and not args.preflight_only and args.resume is None:
         raise FileExistsError(args.output)
+    if (
+        not args.preflight_only
+        and subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
+    ):
+        raise RuntimeError("Training must start from a clean Git checkout")
     torch.manual_seed(42)
     torch.cuda.manual_seed_all(42)
     random.seed(42)
     codec = load_mimi(args.mimi_checkpoint, "cuda")
     with torch.inference_mode():
         silence = encode(codec, torch.zeros((1, 1, 1920), device="cuda"))[:, :, 0]
+    torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
+    random.seed(42)
     config = ModelConfig.stage1()
     model = DauysHybrid(config).cuda()
     if model.trainable_parameters() != 60_873_210:
@@ -611,7 +617,7 @@ def main() -> None:
             for index, batch in enumerate(epoch_batches):
                 if epoch == start_epoch and index < start_index:
                     continue
-                context, rollout_length = phase(epoch, index, len(epoch_batches))
+                context, rollout_length = e005_phase(epoch, index, len(epoch_batches))
                 set_context(model, context)
                 total = sum(row["frames"] for row in batch)
                 optimizer.zero_grad(set_to_none=True)
