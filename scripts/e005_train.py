@@ -519,7 +519,8 @@ def main() -> None:
         "planned_epochs": EPOCHS,
         "early_stopping_metric": "validation_nll",
         "early_stopping_patience": 3,
-        "effective_batch_frames": BATCH_FRAMES,
+        "effective_batch_target_frames": BATCH_FRAMES,
+        "effective_batch_actual_frames": "variable by whole conversation",
         "activity_class_weights": activity_weights.tolist(),
         "fixed_validation_ids": [row["id"] for row in fixed_examples(val)],
     }
@@ -734,6 +735,26 @@ def main() -> None:
                         step,
                     )
                     record["free_evaluation"] = free
+                    evaluation_path = args.output / f"evaluation_{step:06d}.json"
+                    evaluation_path.write_text(
+                        json.dumps(
+                            {
+                                "step": step,
+                                "validation": score,
+                                "input_dependency": conditional,
+                                "free_running": free,
+                                "checkpoint_path": str(args.output / "latest.pt"),
+                                "checkpoint_sha256": latest_hash,
+                            },
+                            indent=2,
+                        )
+                        + "\n"
+                    )
+                    results_artifact = wandb.Artifact(
+                        f"S1-E005-evaluation-{step:06d}", type="evaluation"
+                    )
+                    results_artifact.add_file(str(evaluation_path))
+                    wandb_run.log_artifact(results_artifact)
                     wandb_run.log(
                         {
                             "val/nll": score["nll"],
