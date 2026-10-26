@@ -149,7 +149,7 @@ def _rollout(
 
 
 def _nll(losses: Any) -> float:
-    return float(losses.cb0 + 7 * losses.depth + losses.activity)
+    return float((losses.cb0 + 7 * losses.depth + losses.activity).detach())
 
 
 def _evaluate(
@@ -245,12 +245,17 @@ def main() -> None:
     model = DauysHybrid(config).cuda()
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     resume_sha = None
+    resume_step = None
     if args.resume is not None:
         checkpoint = load_research_checkpoint(args.resume)
         if checkpoint["metadata"]["model_config"] != asdict(config):
             raise ValueError("Resume checkpoint has a different model configuration")
         model.load_state_dict(checkpoint["model"], strict=True)
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        for group in optimizer.param_groups:
+            group["lr"] = args.learning_rate
         resume_sha = _sha256(args.resume)
+        resume_step = int(checkpoint["step"])
     metadata = {
         "experiment_id": args.output.name,
         "dataset": DATASET,
@@ -276,6 +281,7 @@ def main() -> None:
         "train_windows": len(train_windows),
         "validation_windows": len(validation_windows),
         "resume_checkpoint_sha256": resume_sha,
+        "resume_source_step": resume_step,
         "environment": {
             "python": platform.python_version(),
             "torch": str(torch.__version__),
