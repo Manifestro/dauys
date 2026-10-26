@@ -1,5 +1,7 @@
 """Architecture and temporal-contract checks for Hybrid v0.1."""
 
+from dataclasses import replace
+
 import pytest
 import torch
 
@@ -7,7 +9,7 @@ pytest.importorskip("mamba_ssm")
 
 from dauys.config import ModelConfig
 from dauys.loss import training_loss
-from dauys.model import DauysHybrid
+from dauys.model import DauysHybrid, FrameAttention
 
 
 @pytest.fixture(scope="module")
@@ -116,6 +118,35 @@ def test_teacher_stream_matches_batched_forward(model):
         rtol=2e-3,
         atol=2e-3,
     )
+
+
+def test_teacher_stream_matches_batched_forward_after_cache_eviction(model):
+    original = model.config
+    attentions = [
+        module for module in model.modules() if isinstance(module, FrameAttention)
+    ]
+    user, output, initial = _codes(frames=7)
+    try:
+        model.config = replace(original, attention_window=3)
+        for attention in attentions:
+            attention.window = 3
+        with torch.inference_mode():
+            batched = model(user, output, initial)
+            state = model.new_stream(initial)
+            steps = []
+            for frame in range(user.shape[-1]):
+                previous = initial if frame == 0 else output[:, :, frame - 1]
+                cb0, _, _ = model.stream_step_teacher(
+                    user[:, :, frame], previous, state
+                )
+                steps.append(cb0)
+        torch.testing.assert_close(
+            torch.stack(steps, dim=1), batched.cb0_logits, rtol=2e-3, atol=2e-3
+        )
+    finally:
+        model.config = original
+        for attention in attentions:
+            attention.window = original.attention_window
 
 
 def test_simultaneous_input_and_output_preserves_session_state(model):
