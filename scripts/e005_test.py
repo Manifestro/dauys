@@ -123,6 +123,18 @@ def main() -> None:
                     > 1e-4
                 )
                 output_activity = predicted_activity[0].bool().cpu().numpy()
+                # Framewise offline proxy; this is not a measured live interruption latency.
+                previous_input = np.r_[False, input_activity[:-1]]
+                previous_output = np.r_[False, output_activity[:-1]]
+                overlap_onsets = np.flatnonzero(
+                    input_activity & ~previous_input & previous_output
+                )
+                cessation_latency_frames = []
+                for onset in overlap_onsets:
+                    stops = np.flatnonzero(~output_activity[onset:])
+                    cessation_latency_frames.append(
+                        int(stops[0]) if len(stops) else None
+                    )
                 item["modes"][mode] = {
                     "fixed_original_history_nll": _nll(loss),
                     "different_frames_vs_original": int(
@@ -136,6 +148,8 @@ def main() -> None:
                     "simultaneous_input_output_frames": int(
                         np.logical_and(input_activity, output_activity).sum()
                     ),
+                    "overlap_onsets": len(overlap_onsets),
+                    "simulated_cessation_latency_frames": cessation_latency_frames,
                 }
             results.append(item)
             print(json.dumps(item), flush=True)
