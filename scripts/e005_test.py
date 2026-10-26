@@ -10,7 +10,14 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 import torch
-from multi_excerpt import _evaluate, _load_windows, _nll, _rollout, _sha256
+from multi_excerpt import (
+    _evaluate,
+    _fixed_audio,
+    _load_windows,
+    _nll,
+    _rollout,
+    _sha256,
+)
 from overfit import DATASET, REVISION
 
 from dauys.checkpoint import load_research_checkpoint
@@ -24,6 +31,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--splits", type=Path, required=True)
+    parser.add_argument("--inventory", type=Path, required=True)
     parser.add_argument("--mimi-checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--frames", type=int, default=128)
@@ -153,6 +161,38 @@ def main() -> None:
                 }
             results.append(item)
             print(json.dumps(item), flush=True)
+        inventory = json.loads(args.inventory.read_text())
+        if (
+            inventory["revision"] != REVISION
+            or inventory["manifest_sha256"] != splits["manifest_sha256"]
+        ):
+            raise ValueError("Dataset inventory mismatch")
+        known_topics = {
+            row["scenario"].split("/", 1)[-1]
+            for split in ("train", "validation")
+            for row in splits["e005"][split]
+        }
+        novel = [
+            {
+                "id": row["id"],
+                "scenario": row["scenario"],
+                "frames": row["duration_samples"] // 1920,
+            }
+            for row in inventory["rows"]
+            if row["split"] == "test"
+            and row["scenario"].split("/", 1)[-1] not in known_topics
+        ]
+        novel_windows = _load_windows(novel, "test", codec, args.frames)
+        novel_metrics = _evaluate(model, novel_windows, silence, config)
+        novel_audio = {}
+        for row in novel:
+            window = max(
+                (w for w in novel_windows if w.conversation_id == row["id"]),
+                key=lambda w: int(w.activity.sum()),
+            )
+            novel_audio[row["id"]] = _fixed_audio(
+                f"novel_{row['id']}", window, model, codec, silence, args.output
+            )
     document = {
         "checkpoint_sha256": _sha256(args.checkpoint),
         "splits_sha256": _sha256(args.splits),
@@ -161,6 +201,9 @@ def main() -> None:
         ).strip(),
         "test_teacher_metrics_all_windows": aggregate,
         "cases": results,
+        "novel_topic_selection": novel,
+        "novel_topic_teacher_metrics_all_windows": novel_metrics,
+        "novel_topic_fixed_audio": novel_audio,
     }
     (args.output / "results.json").write_text(json.dumps(document, indent=2) + "\n")
 
