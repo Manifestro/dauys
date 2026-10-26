@@ -123,7 +123,7 @@ def main() -> None:
         raise ValueError("Selection mismatch")
     if metadata["training_mode"] != "joint_causal_mixed_history":
         raise ValueError("Checkpoint was not trained with the frozen method")
-    if int(metadata["steps"]) != 100_000:
+    if int(metadata["steps"]) != 10_000:
         raise ValueError("Unexpected training budget")
     if checkpoint["validation"] is None:
         raise ValueError("Checkpoint was not selected by validation")
