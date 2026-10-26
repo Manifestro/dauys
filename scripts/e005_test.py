@@ -49,7 +49,7 @@ def main() -> None:
         silence = encode(codec, torch.zeros((1, 1, 1920), device="cuda"))[:, :, 0]
     args.output.mkdir(parents=True)
     selected = splits["e005"]["test"]
-    windows = _load_windows(selected, "test", codec, 256)
+    windows = _load_windows(selected, "test", codec, args.frames)
     with torch.inference_mode():
         aggregate = _evaluate(model, windows, silence, config)
         cases = [
