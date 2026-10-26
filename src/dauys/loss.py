@@ -23,6 +23,7 @@ def training_loss(
     target_activity: torch.Tensor,
     valid_frames: torch.Tensor,
     config: ModelConfig,
+    activity_class_weights: torch.Tensor | None = None,
 ) -> Losses:
     batch, codebooks, frames = target_codes.shape
     if codebooks != 8 or target_activity.shape != (batch, frames):
@@ -47,6 +48,7 @@ def training_loss(
     activity_per_frame = F.cross_entropy(
         output.activity_logits.reshape(-1, 2),
         target_activity.reshape(-1).long(),
+        weight=activity_class_weights,
         reduction="none",
     ).reshape(batch, frames)
     activity = (activity_per_frame * mask).sum() / mask.sum()

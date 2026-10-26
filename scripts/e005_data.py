@@ -146,7 +146,10 @@ def main() -> None:
                 with torch.inference_mode():
                     round_trip = decode(codec, encoded[1]).float()
                 expected = torch.from_numpy(padded[1])[None, None]
-                if round_trip.shape != expected.shape or not torch.isfinite(round_trip).all():
+                if (
+                    round_trip.shape != expected.shape
+                    or not torch.isfinite(round_trip).all()
+                ):
                     raise RuntimeError("Mimi round trip failed")
         if args.limit is None and len(existing) + seen < 1:
             raise RuntimeError("No conversations found")

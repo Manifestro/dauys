@@ -16,9 +16,9 @@ dependencies = [
 
 [project.optional-dependencies]
 codec = ["moshi>=0.2.5"]
-gpu = ["mamba-ssm>=2.2"]
+gpu = ["mamba-ssm>=2.2", "causal-conv1d>=1.4"]
 test = ["pytest>=8.0", "numpy>=1.26"]
-train = ["datasets>=3.0", "soundfile>=0.12", "huggingface-hub>=0.24"]
+train = ["datasets>=3.0", "soundfile>=0.12", "huggingface-hub>=0.24", "wandb>=0.22"]
 
 [dependency-groups]
 dev = ["ruff>=0.7", "mypy>=1.11", "types-PyYAML>=6.0"]
