@@ -47,9 +47,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--persistent-checkpoint", type=Path, required=True)
     parser.add_argument("--persistent-latest-checkpoint", type=Path)
+    parser.add_argument("--persistent-final-checkpoint", type=Path)
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--eval-every", type=int, default=100)
     parser.add_argument("--save-every", type=int, default=0)
+    parser.add_argument("--history-refresh-every", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--resume", type=Path)
@@ -194,14 +196,16 @@ def export_audio(
     codec: Any,
     silence: torch.Tensor,
     output: Path,
-) -> None:
+) -> dict[str, int]:
     model.eval()
     audio = output / "audio"
     audio.mkdir(exist_ok=True)
+    exact_tokens = {}
     with torch.inference_mode():
         for case in cases:
             user, target, _ = on_device(case)
             generated, _ = rollout(model, user, silence)
+            exact_tokens[case.identifier] = int((generated == target).sum())
             wave = decode(codec, generated)[0, 0].float().cpu().numpy()
             reference = decode(codec, target)[0, 0].float().cpu().numpy()
             sf.write(
@@ -217,6 +221,7 @@ def export_audio(
             sf.write(
                 audio / f"{case.identifier}_generated.wav", wave[: case.samples], 24_000
             )
+    return exact_tokens
 
 
 def main() -> None:
@@ -226,6 +231,7 @@ def main() -> None:
         or args.steps < 10
         or args.eval_every < 1
         or args.save_every < 0
+        or args.history_refresh_every < 0
         or (args.save_every and args.persistent_latest_checkpoint is None)
     ):
         raise ValueError("CUDA and a valid training schedule are required")
@@ -277,6 +283,8 @@ def main() -> None:
         args.persistent_checkpoint.parent.mkdir(parents=True, exist_ok=True)
         if args.resume != args.persistent_checkpoint:
             shutil.copyfile(args.resume, args.persistent_checkpoint)
+    if first_step > args.steps:
+        raise ValueError("Resume checkpoint is already at or beyond the final step")
     metadata = {
         "experiment_id": args.output.name,
         "dataset": DATASET,
@@ -298,6 +306,7 @@ def main() -> None:
         "resume_checkpoint_sha256": sha256(args.resume) if args.resume else None,
         "learning_rate": args.learning_rate,
         "save_every": args.save_every,
+        "history_refresh_every": args.history_refresh_every,
         "sample_count": 10,
         "source_samples": sum(case.samples for case in cases),
         "codec_frames": sum(case.frames for case in cases),
@@ -309,17 +318,34 @@ def main() -> None:
     (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     log_path = args.output / "metrics.jsonl"
     last_evaluation = None
+    cached_history: dict[str, torch.Tensor] = {}
     with log_path.open("w") as log:
         for step in range(first_step, args.steps + 1):
             case = cases[(step - 1) % len(cases)]
             user, target, activity = on_device(case)
             listen = step <= metadata["listening_steps"]
             history = None
+            refreshed = False
             if not listen:
-                model.eval()
-                with torch.inference_mode():
-                    history, _ = rollout(model, user, silence)
-                history = history.clone()
+                if args.history_refresh_every:
+                    if (
+                        not cached_history
+                        or (step - listening_steps - 1) % args.history_refresh_every
+                        == 0
+                    ):
+                        model.eval()
+                        for source in cases:
+                            source_user, _, _ = on_device(source)
+                            with torch.inference_mode():
+                                generated, _ = rollout(model, source_user, silence)
+                            cached_history[source.identifier] = generated.clone().cpu()
+                        refreshed = True
+                    history = cached_history[case.identifier].cuda().clone()
+                else:
+                    model.eval()
+                    with torch.inference_mode():
+                        history, _ = rollout(model, user, silence)
+                    history = history.clone()
             model.train()
             optimizer.zero_grad(set_to_none=True)
             prediction = model(
@@ -351,6 +377,8 @@ def main() -> None:
                 "response_depth": float(response.depth.detach()),
                 "elapsed_seconds": round(time.monotonic() - started, 3),
             }
+            if refreshed:
+                record["history_refreshed"] = True
             if step % args.eval_every == 0 or step == args.steps:
                 last_evaluation = evaluate(model, cases, silence)
                 record["evaluation"] = last_evaluation
@@ -394,19 +422,43 @@ def main() -> None:
             log.flush()
             if step == 1 or step % 10 == 0 or "evaluation" in record:
                 print(json.dumps(record), flush=True)
-            if last_evaluation is not None and last_evaluation["all_ten_exact"]:
-                break
+    if last_evaluation is None:
+        raise RuntimeError("Final evaluation was not recorded")
+    final_checkpoint = args.output / "checkpoint_final.pt"
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "metadata": metadata,
+            "step": args.steps,
+            "evaluation": last_evaluation,
+        },
+        final_checkpoint,
+    )
+    if args.persistent_final_checkpoint is not None:
+        args.persistent_final_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(final_checkpoint, args.persistent_final_checkpoint)
+        if sha256(final_checkpoint) != sha256(args.persistent_final_checkpoint):
+            raise RuntimeError("Final checkpoint verification failed")
     best = load_research_checkpoint(args.output / "checkpoint_best.pt")
-    model.load_state_dict(best["model"], strict=True)
-    verification = evaluate(model, cases, silence)
-    if verification != best["evaluation"]:
-        raise RuntimeError("Best checkpoint evaluation changed on reload")
-    export_audio(model, cases, codec, silence, args.output)
+    final = load_research_checkpoint(final_checkpoint)
+    model.load_state_dict(final["model"], strict=True)
+    exported = export_audio(model, cases, codec, silence, args.output)
+    expected = {item["id"]: item["exact_tokens"] for item in last_evaluation["cases"]}
+    if exported != expected:
+        raise RuntimeError("Exported audio codes differ from final evaluation")
     summary = {
         "best_step": best["step"],
-        "evaluation": verification,
-        "checkpoint_sha256": sha256(args.output / "checkpoint_best.pt"),
-        "persistent_checkpoint_sha256": sha256(args.persistent_checkpoint),
+        "best_evaluation": best["evaluation"],
+        "final_step": args.steps,
+        "final_evaluation": last_evaluation,
+        "best_checkpoint_sha256": sha256(args.output / "checkpoint_best.pt"),
+        "final_checkpoint_sha256": sha256(final_checkpoint),
+        "persistent_final_checkpoint_sha256": (
+            sha256(args.persistent_final_checkpoint)
+            if args.persistent_final_checkpoint is not None
+            else None
+        ),
         "duration_seconds": round(time.monotonic() - started, 3),
         "peak_vram_bytes": torch.cuda.max_memory_allocated(),
     }
