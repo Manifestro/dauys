@@ -444,8 +444,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--test-manifest", type=Path)
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--smoke-output", type=Path)
     parser.add_argument("--resume", type=Path)
     args = parser.parse_args()
+    if args.smoke_output is not None and not args.preflight_only:
+        raise ValueError("Smoke output is only valid for preflight")
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         raise RuntimeError("CUDA with BF16 is required")
     train = read_manifest(args.tokens / "train.jsonl", "train")
@@ -510,18 +513,30 @@ def main() -> None:
                 activity_weights,
             ).total
         loss.backward()
-        print(
-            json.dumps(
-                {
-                    "longest_id": longest["id"],
-                    "frames": longest["frames"],
-                    "loss": float(loss.detach()),
-                    "peak_gpu_bytes": torch.cuda.max_memory_allocated(),
-                    "activity_weights": activity_weights.tolist(),
-                }
-            ),
-            flush=True,
-        )
+        result: dict[str, Any] = {
+            "longest_id": longest["id"],
+            "frames": longest["frames"],
+            "loss": float(loss.detach()),
+            "peak_gpu_bytes": torch.cuda.max_memory_allocated(),
+            "activity_weights": activity_weights.tolist(),
+        }
+        if args.smoke_output is not None:
+            if args.smoke_output.exists():
+                raise FileExistsError(args.smoke_output)
+            result["validation"] = validation(
+                model, val[:1], args.tokens, silence, config
+            )
+            free, _ = free_evaluation(
+                model,
+                codec,
+                val[:1],
+                args.tokens,
+                silence,
+                args.smoke_output,
+                0,
+            )
+            result["free_running"] = free
+        print(json.dumps(result), flush=True)
         return
     entity = private_wandb_entity()
     batches = [make_batches(train, 42 + epoch) for epoch in range(EPOCHS)]
