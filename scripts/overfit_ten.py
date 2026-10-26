@@ -46,8 +46,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mimi-checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--persistent-checkpoint", type=Path, required=True)
+    parser.add_argument("--persistent-latest-checkpoint", type=Path)
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--eval-every", type=int, default=100)
+    parser.add_argument("--save-every", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--resume", type=Path)
@@ -219,7 +221,13 @@ def export_audio(
 
 def main() -> None:
     args = parse_args()
-    if not torch.cuda.is_available() or args.steps < 10 or args.eval_every < 1:
+    if (
+        not torch.cuda.is_available()
+        or args.steps < 10
+        or args.eval_every < 1
+        or args.save_every < 0
+        or (args.save_every and args.persistent_latest_checkpoint is None)
+    ):
         raise ValueError("CUDA and a valid training schedule are required")
     if args.output.exists():
         raise FileExistsError(args.output)
@@ -258,7 +266,12 @@ def main() -> None:
         for group in optimizer.param_groups:
             group["lr"] = args.learning_rate
         first_step = int(checkpoint["step"]) + 1
-        best_tokens = int(checkpoint["evaluation"]["exact_tokens"])
+        previous_evaluation = checkpoint.get("evaluation")
+        best_tokens = (
+            int(previous_evaluation["exact_tokens"])
+            if previous_evaluation is not None
+            else -1
+        )
         listening_steps = int(checkpoint["metadata"]["listening_steps"])
         shutil.copyfile(args.resume, args.output / "checkpoint_best.pt")
         args.persistent_checkpoint.parent.mkdir(parents=True, exist_ok=True)
@@ -284,6 +297,7 @@ def main() -> None:
         "listening_steps": listening_steps,
         "resume_checkpoint_sha256": sha256(args.resume) if args.resume else None,
         "learning_rate": args.learning_rate,
+        "save_every": args.save_every,
         "sample_count": 10,
         "source_samples": sum(case.samples for case in cases),
         "codec_frames": sum(case.frames for case in cases),
@@ -356,6 +370,26 @@ def main() -> None:
                     if sha256(local_checkpoint) != sha256(args.persistent_checkpoint):
                         raise RuntimeError("Persistent checkpoint verification failed")
                     record["best_checkpoint"] = True
+            if args.save_every and step % args.save_every == 0 and step < args.steps:
+                assert args.persistent_latest_checkpoint is not None
+                latest = args.output / "checkpoint_latest.pt"
+                torch.save(
+                    {
+                        "model": model.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                        "metadata": metadata,
+                        "step": step,
+                        "evaluation": last_evaluation,
+                    },
+                    latest,
+                )
+                args.persistent_latest_checkpoint.parent.mkdir(
+                    parents=True, exist_ok=True
+                )
+                shutil.copyfile(latest, args.persistent_latest_checkpoint)
+                if sha256(latest) != sha256(args.persistent_latest_checkpoint):
+                    raise RuntimeError("Latest checkpoint verification failed")
+                record["latest_checkpoint"] = True
             log.write(json.dumps(record) + "\n")
             log.flush()
             if step == 1 or step % 10 == 0 or "evaluation" in record:
