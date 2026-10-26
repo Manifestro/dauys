@@ -15,37 +15,56 @@ from dauys.research_split import leakage_free_source_splits
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tokens", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--test-metadata", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--metadata-only", action="store_true")
     args = parser.parse_args()
-    if args.output.exists():
-        raise FileExistsError(args.output)
+    if args.test_metadata.exists():
+        test = read_manifest(args.test_metadata, "test")
+    else:
+        dataset = load_dataset(DATASET, split="test", revision=REVISION, streaming=True)
+        for column in ("channel_a", "channel_b"):
+            if isinstance(dataset.features[column], Audio):
+                dataset = dataset.cast_column(column, Audio(decode=False))
+        test = []
+        for row in dataset:
+            test.append(
+                {
+                    "id": row["id"],
+                    "split": "test",
+                    "dataset": DATASET,
+                    "dataset_revision": REVISION,
+                    "scenario": row["scenario"],
+                    "scenario_family": family(row["scenario"]),
+                    "skill": row["skill"],
+                    "voice_a": row["voice_a"],
+                    "voice_b": row["voice_b"],
+                    "samples": int(row["duration_samples"]),
+                    "frames": math.ceil(int(row["duration_samples"]) / FRAME_SAMPLES),
+                }
+            )
+        args.test_metadata.parent.mkdir(parents=True, exist_ok=True)
+        args.test_metadata.write_text(
+            "".join(json.dumps(row) + "\n" for row in test), encoding="utf-8"
+        )
+    if len(test) != 397:
+        raise ValueError(f"Expected 397 frozen test conversations, got {len(test)}")
+    if args.metadata_only:
+        print(
+            json.dumps(
+                {
+                    "test_count": len(test),
+                    "test_metadata_sha256": digest(args.test_metadata),
+                }
+            )
+        )
+        return
+    if args.output is None or args.output.exists():
+        raise ValueError("A fresh split output directory is required")
     train = read_manifest(args.tokens / "train.jsonl", "train")
     validation = read_manifest(args.tokens / "validation.jsonl", "validation")
     if (len(train), len(validation)) != (3139, 372):
         raise ValueError("Train and validation manifests are incomplete")
-    dataset = load_dataset(DATASET, split="test", revision=REVISION, streaming=True)
-    for column in ("channel_a", "channel_b"):
-        if isinstance(dataset.features[column], Audio):
-            dataset = dataset.cast_column(column, Audio(decode=False))
-    test = []
-    for row in dataset:
-        test.append(
-            {
-                "id": row["id"],
-                "split": "test",
-                "dataset": DATASET,
-                "dataset_revision": REVISION,
-                "scenario": row["scenario"],
-                "scenario_family": family(row["scenario"]),
-                "skill": row["skill"],
-                "voice_a": row["voice_a"],
-                "voice_b": row["voice_b"],
-                "samples": int(row["duration_samples"]),
-                "frames": math.ceil(int(row["duration_samples"]) / FRAME_SAMPLES),
-            }
-        )
-    if len(test) != 397:
-        raise ValueError(f"Expected 397 frozen test conversations, got {len(test)}")
     splits, excluded = leakage_free_source_splits(train, validation, test)
     ids = [{row["id"] for row in rows} for rows in splits.values()]
     families = [{row["scenario_family"] for row in rows} for rows in splits.values()]
@@ -60,6 +79,7 @@ def main() -> None:
         )
     summary = {
         "dataset_revision": REVISION,
+        "source_test_metadata_sha256": digest(args.test_metadata),
         "source_counts": {
             "train": len(train),
             "validation": len(validation),
