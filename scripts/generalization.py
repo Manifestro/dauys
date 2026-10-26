@@ -22,7 +22,7 @@ from overfit_ten import Conversation, on_device, rollout
 from dauys.checkpoint import load_research_checkpoint
 from dauys.codec import decode, encode, load_mimi
 from dauys.config import ModelConfig
-from dauys.loss import listening_loss, training_loss
+from dauys.loss import training_loss
 from dauys.model import DauysHybrid
 
 
@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--persistent", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=100_000)
     parser.add_argument("--history-refresh-every", type=int, default=1_000)
+    parser.add_argument("--rollout-frames", type=int, default=128)
     parser.add_argument("--eval-every", type=int, default=5_000)
     parser.add_argument("--save-every", type=int, default=1_000)
     parser.add_argument("--seed", type=int, default=42)
@@ -55,74 +56,138 @@ def sha256(path: Path) -> str:
 def validate_selection(splits: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     if splits["dataset"] != DATASET or splits["dataset_revision"] != REVISION:
         raise ValueError("Dataset revision mismatch")
-    selection = splits["e005"]
+    if splits.get("grouping_rule") != "scenario topic after the first slash":
+        raise ValueError("Whole-dialogue scenario grouping is required")
+    selection = splits["selection"]
     if set(selection) != {"train", "validation", "test"}:
         raise ValueError("Expected frozen train, validation, and test selections")
     groups: list[set[str]] = []
+    selected_ids: set[tuple[str, str]] = set()
     for split in ("train", "validation", "test"):
         rows = selection[split]
-        if not rows or any(row["source_split"] != split for row in rows):
+        if not rows:
             raise ValueError(f"Invalid {split} selection")
-        ids = [row["id"] for row in rows]
-        if len(ids) != len(set(ids)) or any(int(row["frames"]) < 8 for row in rows):
+        ids = {(row["source_split"], row["id"]) for row in rows}
+        if len(ids) != len(rows) or selected_ids & ids:
             raise ValueError(f"Duplicate or short {split} selection")
-        groups.append({row["scenario"] for row in rows})
+        selected_ids.update(ids)
+        for row in rows:
+            samples = int(row["source_samples"])
+            frames = int(row["codec_frames"])
+            if (
+                row["source_split"] not in {"train", "validation", "test"}
+                or row["scenario"].split("/", 1)[-1] != row["scenario_family"]
+                or frames != math.ceil(samples / 1920)
+                or frames < 8
+            ):
+                raise ValueError(f"Invalid whole conversation: {row['id']}")
+        groups.append({row["scenario_family"] for row in rows})
     if any(groups[i] & groups[j] for i in range(3) for j in range(i + 1, 3)):
         raise ValueError("Scenario leakage across splits")
-    expected = {"train": 75_000, "validation": 7_500, "test": 7_500}
-    for split, frames in expected.items():
-        actual = sum(int(row["frames"]) for row in selection[split])
-        if abs(actual - frames) > 5:
-            raise ValueError(f"Expected {frames} frames for {split}, got {actual}")
+    expected = {"train": 6_000, "validation": 600, "test": 600}
+    for split, seconds in expected.items():
+        actual = sum(int(row["source_samples"]) for row in selection[split]) / 24_000
+        if abs(actual - seconds) > 30:
+            raise ValueError(
+                f"Expected about {seconds} seconds for {split}, got {actual}"
+            )
     return selection
 
 
 def selected_conversations(
-    selected: list[dict[str, Any]], split: str, codec: Any
+    selected: list[dict[str, Any]], codec: Any
 ) -> list[Conversation]:
-    requested = {row["id"]: row for row in selected}
-    dataset = load_dataset(DATASET, split=split, revision=REVISION, streaming=True)
-    for column in ("channel_a", "channel_b"):
-        if isinstance(dataset.features[column], Audio):
-            dataset = dataset.cast_column(column, Audio(decode=False))
+    requested = {(row["source_split"], row["id"]): row for row in selected}
     found: dict[str, Conversation] = {}
-    for row in dataset:
-        identifier = row["id"]
-        if identifier not in requested:
+    for source_split in ("train", "validation", "test"):
+        if not any(key[0] == source_split for key in requested):
             continue
-        frames = int(requested[identifier]["frames"])
-        samples = frames * 1920
-        user_pcm = _pcm(row["channel_a"])
-        target_pcm = _pcm(row["channel_b"])
-        if min(len(user_pcm), len(target_pcm)) < samples:
-            raise ValueError(f"Audio shorter than selection: {identifier}")
-        user_pcm = user_pcm[:samples].copy()
-        target_pcm = target_pcm[:samples].copy()
-        with torch.inference_mode():
-            user = encode(codec, torch.from_numpy(user_pcm)[None, None].cuda())
-            target = encode(codec, torch.from_numpy(target_pcm)[None, None].cuda())
-        if user.shape != (1, 8, frames) or target.shape != user.shape:
-            raise ValueError(f"Codec alignment mismatch: {identifier}")
-        blocks = target_pcm.reshape(frames, 1920)
-        activity = torch.from_numpy(
-            (np.sqrt(np.mean(np.square(blocks), axis=1)) > 1e-4).astype(np.int64)
-        )[None]
-        found[identifier] = Conversation(
-            identifier,
-            user.cpu().clone(),
-            target.cpu().clone(),
-            activity,
-            samples,
-            user_pcm,
-            target_pcm,
+        dataset = load_dataset(
+            DATASET, split=source_split, revision=REVISION, streaming=True
         )
-        if len(found) == len(requested):
-            break
-    if set(found) != set(requested):
-        raise ValueError(
-            f"Missing {split} conversations: {set(requested) - set(found)}"
-        )
+        for column in ("channel_a", "channel_b"):
+            if isinstance(dataset.features[column], Audio):
+                dataset = dataset.cast_column(column, Audio(decode=False))
+        for row in dataset:
+            identifier = row["id"]
+            key = (source_split, identifier)
+            if key not in requested:
+                continue
+            item = requested[key]
+            frames = int(item["codec_frames"])
+            samples = int(item["source_samples"])
+            user_pcm = _pcm(row["channel_a"])
+            target_pcm = _pcm(row["channel_b"])
+            if len(user_pcm) != samples or len(target_pcm) != samples:
+                raise ValueError(f"Audio length mismatch: {identifier}")
+            user_pcm = np.pad(user_pcm, (0, frames * 1920 - samples))
+            target_pcm = np.pad(target_pcm, (0, frames * 1920 - samples))
+            with torch.inference_mode():
+                user = encode(
+                    codec, torch.from_numpy(user_pcm.copy())[None, None].cuda()
+                )
+                target = encode(
+                    codec, torch.from_numpy(target_pcm.copy())[None, None].cuda()
+                )
+            if user.shape != (1, 8, frames) or target.shape != user.shape:
+                raise ValueError(f"Codec alignment mismatch: {identifier}")
+            blocks = target_pcm.reshape(frames, 1920)
+            activity = torch.from_numpy(
+                (np.sqrt(np.mean(np.square(blocks), axis=1)) > 1e-4).astype(np.int64)
+            )[None]
+            found[identifier] = Conversation(
+                identifier,
+                user.cpu().clone(),
+                target.cpu().clone(),
+                activity,
+                samples,
+                user_pcm,
+                target_pcm,
+            )
+            if len(found) == len(requested):
+                break
+    expected_ids = {key[1] for key in requested}
+    if set(found) != expected_ids:
+        raise ValueError(f"Missing conversations: {expected_ids - set(found)}")
     return [found[row["id"]] for row in selected]
+
+
+def own_history_step(step: int, conversation_count: int) -> bool:
+    """Alternate each conversation between target and own history by epoch."""
+    epoch = (step - 1) // conversation_count
+    return (step + epoch) % 2 == 0
+
+
+def partial_history(
+    model: DauysHybrid,
+    case: Conversation,
+    silence: torch.Tensor,
+    seed: int,
+    refresh_bucket: int,
+    rollout_frames: int,
+) -> tuple[torch.Tensor, int, int]:
+    """Generate one causal fragment after a target-conditioned prefix."""
+    user, target, _ = on_device(case)
+    max_start = max(case.frames - rollout_frames, 0)
+    digest = hashlib.sha256(
+        f"{seed}:{refresh_bucket}:{case.identifier}".encode()
+    ).digest()
+    start = int.from_bytes(digest[:8], "big") % (max_start + 1)
+    end = min(start + rollout_frames, case.frames)
+    state = model.new_stream(silence)
+    previous = silence
+    with torch.inference_mode():
+        for frame in range(start):
+            model.stream_step_teacher(user[:, :, frame], previous, state)
+            previous = target[:, :, frame]
+        state.previous_output = previous
+        generated = []
+        for frame in range(start, end):
+            codes, _ = model.generate_step(user[:, :, frame], state)
+            generated.append(codes)
+    history = target.clone()
+    history[:, :, start:end] = torch.stack(generated, dim=-1)
+    return history.cpu(), start, end
 
 
 def evaluate_teacher(
@@ -130,6 +195,7 @@ def evaluate_teacher(
     cases: list[Conversation],
     silence: torch.Tensor,
     config: ModelConfig,
+    silent_input: bool = False,
 ) -> dict[str, float]:
     model.eval()
     weighted_nll = 0.0
@@ -138,6 +204,8 @@ def evaluate_teacher(
     with torch.inference_mode():
         for case in cases:
             user, target, activity = on_device(case)
+            if silent_input:
+                user = silence[:, :, None].expand_as(user)
             output = model(user, target, silence)
             losses = training_loss(
                 output,
@@ -170,8 +238,8 @@ def evaluate_free(
     with torch.inference_mode():
         generated, predicted_activity = rollout(model, user, silence)
         wave = decode(codec, generated)[0, 0].float().cpu().numpy()
-    sf.write(output / f"{label}_user.wav", case.user_pcm, 24_000)
-    sf.write(output / f"{label}_target.wav", case.target_pcm, 24_000)
+    sf.write(output / f"{label}_user.wav", case.user_pcm[: case.samples], 24_000)
+    sf.write(output / f"{label}_target.wav", case.target_pcm[: case.samples], 24_000)
     sf.write(output / f"{label}_generated.wav", wave[: case.samples], 24_000)
     true_positive = int((predicted_activity.bool() & activity.bool()).sum())
     predicted = int(predicted_activity.sum())
@@ -222,23 +290,26 @@ def main() -> None:
     if (
         args.steps < 10
         or min(args.history_refresh_every, args.eval_every, args.save_every) < 1
+        or not 8 <= args.rollout_frames <= 512
     ):
         raise ValueError("Invalid training schedule")
     splits = json.loads(args.splits.read_text(encoding="utf-8"))
     selection = validate_selection(splits)
-    listening_steps = round(args.steps * 0.4)
     if args.prepare_only:
         print(
             json.dumps(
                 {
                     "splits_sha256": sha256(args.splits),
                     "counts": {name: len(rows) for name, rows in selection.items()},
-                    "frames": {
-                        name: sum(row["frames"] for row in rows)
+                    "minutes": {
+                        name: round(
+                            sum(row["source_samples"] for row in rows) / 1_440_000, 3
+                        )
                         for name, rows in selection.items()
                     },
-                    "listening_steps": listening_steps,
-                    "response_steps": args.steps - listening_steps,
+                    "steps": args.steps,
+                    "target_history_fraction": 0.5,
+                    "own_history_fraction": 0.5,
                 }
             )
         )
@@ -257,8 +328,8 @@ def main() -> None:
     args.persistent.mkdir(parents=True, exist_ok=True)
     metadata_path = args.output / "metadata.json"
     codec = load_mimi(args.mimi_checkpoint, "cuda")
-    train = selected_conversations(selection["train"], "train", codec)
-    validation = selected_conversations(selection["validation"], "validation", codec)
+    train = selected_conversations(selection["train"], codec)
+    validation = selected_conversations(selection["validation"], codec)
     with torch.inference_mode():
         silence = encode(codec, torch.zeros((1, 1, 1920), device="cuda"))[:, :, 0]
     config = ModelConfig.stage1()
@@ -280,7 +351,9 @@ def main() -> None:
         "trainable_parameters": model.trainable_parameters(),
         "seed": args.seed,
         "steps": args.steps,
-        "listening_steps": listening_steps,
+        "training_mode": "joint_causal_mixed_history",
+        "own_history_fraction": 0.5,
+        "rollout_frames": args.rollout_frames,
         "learning_rate": args.learning_rate,
         "history_refresh_every": args.history_refresh_every,
         "eval_every": args.eval_every,
@@ -289,7 +362,7 @@ def main() -> None:
         "validation_ids": [x.identifier for x in validation],
         "train_frames": sum(x.frames for x in train),
         "validation_frames": sum(x.frames for x in validation),
-        "test_frames_reserved": sum(row["frames"] for row in selection["test"]),
+        "test_frames_reserved": sum(row["codec_frames"] for row in selection["test"]),
         "environment": {
             "python": platform.python_version(),
             "torch": str(torch.__version__),
@@ -307,7 +380,9 @@ def main() -> None:
             "model_config",
             "seed",
             "steps",
-            "listening_steps",
+            "training_mode",
+            "own_history_fraction",
+            "rollout_frames",
             "history_refresh_every",
         ):
             if old[key] != metadata[key]:
@@ -330,24 +405,26 @@ def main() -> None:
         user, target, activity = on_device(longest)
         mask = torch.ones_like(activity, dtype=torch.bool)
         model.train()
-        prediction = model(user, target, silence, initial_user_codes=silence)
-        listen_loss = training_loss(prediction, target, activity, mask, config).total
-        listen_loss += listening_loss(prediction, user, mask, config)
-        listen_loss.backward()
+        prediction = model(user, target, silence)
+        target_loss = training_loss(prediction, target, activity, mask, config).total
+        target_loss.backward()
         model.zero_grad(set_to_none=True)
         model.eval()
-        with torch.inference_mode():
-            history, _ = rollout(model, user, silence)
+        history, fragment_start, fragment_end = partial_history(
+            model, longest, silence, args.seed, 0, args.rollout_frames
+        )
         model.train()
-        prediction = model(user, target, silence, history_codes=history.clone())
-        response_loss = training_loss(prediction, target, activity, mask, config).total
-        response_loss.backward()
+        prediction = model(user, target, silence, history_codes=history.cuda().clone())
+        own_loss = training_loss(prediction, target, activity, mask, config).total
+        own_loss.backward()
         model.zero_grad(set_to_none=True)
         result = {
             "longest_train_id": longest.identifier,
             "longest_train_frames": longest.frames,
-            "listen_loss": float(listen_loss.detach()),
-            "response_loss": float(response_loss.detach()),
+            "target_history_loss": float(target_loss.detach()),
+            "own_history_loss": float(own_loss.detach()),
+            "rollout_start": fragment_start,
+            "rollout_end": fragment_end,
             "validation": evaluate_teacher(model, validation, silence, config),
             "duration_seconds": round(time.monotonic() - started, 3),
             "peak_vram_bytes": torch.cuda.max_memory_allocated(),
@@ -369,42 +446,41 @@ def main() -> None:
             raise ValueError("Metrics do not reach the resume checkpoint")
         metrics.write_text("".join(json.dumps(record) + "\n" for record in records))
     mode = "a" if args.resume is not None else "w"
-    cache: dict[str, torch.Tensor] = {}
+    cache: dict[str, tuple[torch.Tensor, int, int]] = {}
+    cache_bucket = -1
     with metrics.open(mode, encoding="utf-8") as log:
         for step in range(first_step, args.steps + 1):
             case = train[(step - 1) % len(train)]
             user, target, activity = on_device(case)
-            listen = step <= listening_steps
             history = None
             refreshed = False
-            if not listen:
-                if (
-                    not cache
-                    or (step - listening_steps - 1) % args.history_refresh_every == 0
-                ):
+            own = own_history_step(step, len(train))
+            fragment = None
+            if own:
+                bucket = (step - 1) // args.history_refresh_every
+                if bucket != cache_bucket:
+                    cache.clear()
+                    cache_bucket = bucket
+                if case.identifier not in cache:
                     model.eval()
-                    with torch.inference_mode():
-                        for source in train:
-                            source_user, _, _ = on_device(source)
-                            generated, _ = rollout(model, source_user, silence)
-                            cache[source.identifier] = generated.cpu().clone()
+                    cache[case.identifier] = partial_history(
+                        model,
+                        case,
+                        silence,
+                        args.seed,
+                        bucket,
+                        args.rollout_frames,
+                    )
                     refreshed = True
-                history = cache[case.identifier].cuda()
+                cached, start, end = cache[case.identifier]
+                history = cached.cuda().clone()
+                fragment = [start, end]
             model.train()
             optimizer.zero_grad(set_to_none=True)
-            prediction = model(
-                user,
-                target,
-                silence,
-                initial_user_codes=silence if listen else None,
-                history_codes=history,
-            )
+            prediction = model(user, target, silence, history_codes=history)
             mask = torch.ones_like(activity, dtype=torch.bool)
             response = training_loss(prediction, target, activity, mask, config)
-            user_loss = (
-                listening_loss(prediction, user, mask, config) if listen else None
-            )
-            loss = response.total + (user_loss if user_loss is not None else 0)
+            loss = response.total
             if not bool(torch.isfinite(loss)):
                 raise RuntimeError(f"Non-finite loss at step {step}")
             loss.backward()
@@ -413,7 +489,7 @@ def main() -> None:
             record: dict[str, Any] = {
                 "step": step,
                 "conversation_id": case.identifier,
-                "phase": "listen" if listen else "respond",
+                "history_mode": "own_fragment" if own else "target",
                 "loss": float(loss.detach()),
                 "response_cb0": float(response.cb0.detach()),
                 "response_depth": float(response.depth.detach()),
@@ -421,6 +497,8 @@ def main() -> None:
             }
             if refreshed:
                 record["history_refreshed"] = True
+            if fragment is not None:
+                record["rollout_fragment"] = fragment
             if step % args.eval_every == 0 or step == args.steps:
                 last_validation = evaluate_teacher(model, validation, silence, config)
                 record["validation"] = last_validation
@@ -469,6 +547,9 @@ def main() -> None:
     summary = {
         "best_step": int(best["step"]),
         "best_validation": best["validation"],
+        "best_validation_silent_input": evaluate_teacher(
+            model, validation, silence, config, silent_input=True
+        ),
         "fixed_audio": fixed,
         "best_checkpoint_sha256": sha256(args.persistent / "checkpoint_best.pt"),
         "latest_checkpoint_sha256": sha256(args.persistent / "checkpoint_latest.pt"),

@@ -1,10 +1,116 @@
 """Deterministic, nested dialogue selections for Stage 1 research."""
 
 import hashlib
+from collections import defaultdict
 from typing import Any
 
 FRAME_SAMPLES = 1920
 FRAME_RATE = 12.5
+
+
+def scenario_family(scenario: str) -> str:
+    """Group the same dialogue topic across interaction styles."""
+    parts = scenario.split("/", 1)
+    if len(parts) != 2 or not parts[1]:
+        raise ValueError(f"Invalid scenario: {scenario}")
+    return parts[1]
+
+
+def _whole_groups(
+    groups: dict[str, list[dict[str, Any]]], target_seconds: int, seed: int
+) -> set[str]:
+    """Select complete scenario families nearest a duration target."""
+    order = sorted(groups, key=lambda key: _rank({"id": key}, seed))
+    durations = {
+        key: round(sum(int(row["duration_samples"]) for row in groups[key]) / 24_000)
+        for key in order
+    }
+    largest = max(durations.values())
+    reachable: dict[int, tuple[str, ...]] = {0: ()}
+    for key in order:
+        for seconds, chosen in list(reachable.items()):
+            total = seconds + durations[key]
+            if total <= target_seconds + largest and total not in reachable:
+                reachable[total] = (*chosen, key)
+    candidates = [
+        (seconds, chosen)
+        for seconds, chosen in reachable.items()
+        if chosen and sum(len(groups[key]) for key in chosen) >= 5
+    ]
+    if not candidates:
+        raise ValueError("No whole-family selection has five conversations")
+    _, selected = min(
+        candidates,
+        key=lambda item: (
+            abs(
+                sum(
+                    int(row["duration_samples"])
+                    for key in item[1]
+                    for row in groups[key]
+                )
+                / 24_000
+                - target_seconds
+            ),
+            abs(item[0] - target_seconds),
+            -sum(len(groups[key]) for key in item[1]),
+            item[1],
+        ),
+    )
+    return set(selected)
+
+
+def whole_dialogue_generalization_split(
+    inventory: dict[str, Any],
+    seed: int = 42,
+    prior_exposed_families: set[str] | None = None,
+) -> dict[str, Any]:
+    """Choose 100/10/10 minutes without splitting conversations or topics."""
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in inventory["rows"]:
+        if int(row["sample_rate"]) != 24_000:
+            raise ValueError("Expected 24 kHz source audio")
+        groups[scenario_family(row["scenario"])].append(row)
+    prior = prior_exposed_families or set()
+    available = dict(groups)
+    result: dict[str, list[dict[str, Any]]] = {}
+    for split, seconds in (("test", 600), ("validation", 600), ("train", 6000)):
+        candidates = (
+            {
+                key: value
+                for key, value in available.items()
+                if key not in prior and any(row["split"] == split for row in value)
+            }
+            if split != "train"
+            else available
+        )
+        selected = _whole_groups(candidates, seconds, seed + len(result))
+        result[split] = sorted(
+            (
+                {
+                    "id": row["id"],
+                    "source_split": row["split"],
+                    "scenario": row["scenario"],
+                    "scenario_family": key,
+                    "source_samples": int(row["duration_samples"]),
+                    "codec_frames": (int(row["duration_samples"]) + FRAME_SAMPLES - 1)
+                    // FRAME_SAMPLES,
+                }
+                for key in selected
+                for row in available[key]
+            ),
+            key=lambda row: (row["scenario_family"], row["id"], row["source_split"]),
+        )
+        for key in selected:
+            del available[key]
+    return {
+        "seed": seed,
+        "dataset": inventory["dataset"],
+        "dataset_revision": inventory["revision"],
+        "manifest_sha256": inventory["manifest_sha256"],
+        "grouping_rule": "scenario topic after the first slash",
+        "prior_exposed_families": sorted(prior),
+        "selection": result,
+    }
 
 
 def _rank(row: dict[str, Any], seed: int) -> str:

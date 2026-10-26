@@ -1,6 +1,6 @@
 """Data partition invariants for multi-excerpt research."""
 
-from dauys.research_split import stage1_selections
+from dauys.research_split import stage1_selections, whole_dialogue_generalization_split
 
 
 def test_splits_are_nested_and_scenario_disjoint():
@@ -27,3 +27,34 @@ def test_splits_are_nested_and_scenario_disjoint():
         {item["scenario"] for item in selections["e005"]["train"]}
         & {item["scenario"] for item in selections["e005"]["test"]}
     )
+
+
+def test_generalization_keeps_whole_scenario_families_disjoint():
+    rows = []
+    for topic in range(70):
+        source = "test" if topic < 10 else "validation" if topic < 20 else "train"
+        for style in ("simple_dialogue", "interruption"):
+            rows.append(
+                {
+                    "id": f"{topic}-{style}",
+                    "split": source if style == "simple_dialogue" else "train",
+                    "scenario": f"{style}/topic_{topic}",
+                    "sample_rate": 24_000,
+                    "duration_samples": 90 * 24_000 + topic,
+                }
+            )
+    result = whole_dialogue_generalization_split(
+        {"rows": rows, "dataset": "sample", "revision": "r1", "manifest_sha256": "x"}
+    )["selection"]
+    seen = set()
+    for split in ("train", "validation", "test"):
+        families = {row["scenario_family"] for row in result[split]}
+        assert not seen & families
+        seen.update(families)
+        assert len(result[split]) >= 5
+        assert all(
+            row["source_samples"] == 90 * 24_000 + int(row["scenario_family"][6:])
+            for row in result[split]
+        )
+    assert any(row["source_split"] == "test" for row in result["test"])
+    assert any(row["source_split"] == "validation" for row in result["validation"])
