@@ -1,0 +1,66 @@
+model:
+  name: dauys-hybrid-v0.1
+  max_trainable_parameters: 65000000
+
+codec:
+  name: mimi
+  frozen: true
+  sample_rate: 24000
+  frame_rate: 12.5
+  codebooks: 8
+  vocab_size: 2048
+
+embedding:
+  dimension: 256
+  share_between_streams: true
+
+listening:
+  type: mamba2
+  dimension: 384
+  layers: 4
+  d_state: 64
+  d_conv: 4
+  expand: 2
+  headdim: 64
+  ngroups: 1
+
+dialogue:
+  dimension: 640
+  blocks:
+    - mamba2
+    - mamba2
+    - transformer_cross
+    - mamba2
+    - mamba2
+    - transformer_cross
+    - mamba2
+    - transformer_cross
+    - mamba2
+    - transformer_cross
+  mamba:
+    d_state: 64
+    d_conv: 4
+    expand: 2
+    headdim: 64
+    ngroups: 1
+  attention_heads: 10
+  ffn_dimension: 1728
+
+depth_decoder:
+  type: causal_transformer
+  layers: 2
+  dimension: 384
+  heads: 6
+  codebooks: [1, 2, 3, 4, 5, 6, 7]
+
+streaming:
+  native_full_duplex: true
+  frame_ms: 80
+  attention_window_frames: 512
+  input_delay_frames: 0
+  causal: true
+
+loss:
+  cb0: 1.0
+  depth: 0.5
+  activity: 0.2

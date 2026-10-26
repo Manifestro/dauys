@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+*.egg-info/
+build/
+dist/
+.coverage
+htmlcov/
+
+# Local data and run outputs
+data/
+datasets/
+checkpoints/
+artifacts/
+runs/
+mlruns/
+*.wav
+*.flac
+*.mp3
+*.pt
+*.pth
+*.safetensors
+
+# Local settings
+.env
+.env.*
+!.env.example
+.DS_Store

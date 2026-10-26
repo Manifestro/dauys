@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dauys"
+version = "0.1.0"
+description = "Research code for compact, audio-native full-duplex conversation."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = "Apache-2.0"
+dependencies = [
+  "torch>=2.2",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+codec = ["moshi>=0.2.5"]
+gpu = ["mamba-ssm>=2.2"]
+test = ["pytest>=8.0", "numpy>=1.26"]
+
+[dependency-groups]
+dev = ["ruff>=0.7", "mypy>=1.11", "types-PyYAML>=6.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+dauys = ["configs/*.yaml"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/dauys"]
+check_untyped_defs = true
+ignore_missing_imports = true
