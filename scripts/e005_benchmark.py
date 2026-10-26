@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 import torch
-from e005_train import load_case, on_gpu, read_manifest, set_context
+from e005_train import load_case, on_gpu, own_history, read_manifest, set_context
 
 from dauys.codec import encode, load_mimi
 from dauys.config import ModelConfig
@@ -20,6 +20,7 @@ def main() -> None:
     parser.add_argument("--mimi-checkpoint", type=Path, required=True)
     parser.add_argument("--conversation-id", required=True)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--rollout-frames", type=int, default=32)
     args = parser.parse_args()
     rows = read_manifest(args.tokens / "train.jsonl", "train")
     row = next((item for item in rows if item["id"] == args.conversation_id), None)
@@ -52,6 +53,12 @@ def main() -> None:
         optimizer.step()
         torch.cuda.synchronize()
         durations.append(time.monotonic() - start)
+    rollout_durations = []
+    for index in range(2):
+        start = time.monotonic()
+        own_history(model, user, target, silence, args.rollout_frames, 42 + index)
+        torch.cuda.synchronize()
+        rollout_durations.append(time.monotonic() - start)
     print(
         json.dumps(
             {
@@ -59,6 +66,7 @@ def main() -> None:
                 "frames": row["frames"],
                 "durations_seconds": durations,
                 "steady_state_seconds": sum(durations[1:]) / max(1, len(durations) - 1),
+                "rollout_durations_seconds": rollout_durations,
                 "peak_gpu_bytes": torch.cuda.max_memory_allocated(),
             }
         )
