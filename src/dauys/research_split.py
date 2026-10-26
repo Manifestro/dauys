@@ -8,6 +8,87 @@ FRAME_SAMPLES = 1920
 FRAME_RATE = 12.5
 
 
+def e005_family_splits(
+    train: list[dict[str, Any]],
+    validation: list[dict[str, Any]],
+    source_test: list[dict[str, Any]],
+    seed: int = 42,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[str]]]:
+    """Repartition cached conversations by scenario family before training.
+
+    The source test contributes only to the selected, held-out test families.
+    Its other conversations are not used by this experiment.
+    """
+    cached = train + validation
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in cached:
+        groups[row["scenario_family"]].append(row)
+    test_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in source_test:
+        test_groups[row["scenario_family"]].append(row)
+    if len(groups) < 20 or len(test_groups.keys() & groups.keys()) < 5:
+        raise ValueError("Too few scenario families for held-out evaluation")
+    cached_samples = sum(int(row["samples"]) for row in cached)
+    total_samples = cached_samples + sum(int(row["samples"]) for row in source_test)
+
+    def rank(kind: str, family: str) -> str:
+        return hashlib.sha256(f"{seed}:{kind}:{family}".encode()).hexdigest()
+
+    def take_families(
+        candidates: list[str], kind: str, target_samples: float
+    ) -> set[str]:
+        chosen: set[str] = set()
+        duration = 0
+        for family in sorted(candidates, key=lambda name: rank(kind, name)):
+            if len(chosen) >= 5 and abs(duration - target_samples) <= abs(
+                duration
+                + sum(int(row["samples"]) for row in groups[family])
+                - target_samples
+            ):
+                break
+            chosen.add(family)
+            duration += sum(int(row["samples"]) for row in groups[family])
+        return chosen
+
+    test_families = take_families(
+        sorted(groups.keys() & test_groups.keys()), "test", total_samples * 0.1
+    )
+    validation_families = take_families(
+        sorted(groups.keys() - test_families),
+        "validation",
+        cached_samples * 0.1,
+    )
+    selected = {
+        "train": [
+            {**row, "selected_split": "train"}
+            for row in cached
+            if row["scenario_family"] not in test_families | validation_families
+        ],
+        "validation": [
+            {**row, "selected_split": "validation"}
+            for row in cached
+            if row["scenario_family"] in validation_families
+        ],
+        "test": [
+            {**row, "selected_split": "test"}
+            for row in cached + source_test
+            if row["scenario_family"] in test_families
+        ],
+    }
+    families = [{row["scenario_family"] for row in rows} for rows in selected.values()]
+    ids = [{row["id"] for row in rows} for rows in selected.values()]
+    if any(
+        families[i] & families[j] or ids[i] & ids[j]
+        for i in range(3)
+        for j in range(i + 1, 3)
+    ):
+        raise ValueError("Selected splits still overlap")
+    return selected, {
+        "test": sorted(test_families),
+        "validation": sorted(validation_families),
+    }
+
+
 def leakage_free_source_splits(
     train: list[dict[str, Any]],
     validation: list[dict[str, Any]],

@@ -31,6 +31,7 @@ from e005_train import (
     read_manifest,
     set_context,
     validation,
+    verify_cache,
 )
 from overfit import _pcm
 
@@ -44,8 +45,11 @@ def cache_test(
     frozen: list[dict[str, Any]],
     root: Path,
     codec: Any,
+    output: Path,
 ) -> list[dict[str, Any]]:
-    expected = {row["id"]: row for row in frozen}
+    expected = {row["id"]: row for row in frozen if row["split"] == "test"}
+    previously_cached = [row for row in frozen if row["split"] != "test"]
+    verify_cache(root, previously_cached)
     found: dict[str, dict[str, Any]] = {}
     dataset = load_dataset(DATASET, split="test", revision=REVISION, streaming=True)
     for column in ("channel_a", "channel_b"):
@@ -53,8 +57,10 @@ def cache_test(
             dataset = dataset.cast_column(column, Audio(decode=False))
     for row in dataset:
         identifier = row["id"]
-        if identifier not in expected or identifier in found:
-            raise ValueError(f"Unexpected or duplicate test conversation: {identifier}")
+        if identifier not in expected:
+            continue
+        if identifier in found:
+            raise ValueError(f"Duplicate test conversation: {identifier}")
         frozen_row = expected[identifier]
         samples = int(row["duration_samples"])
         frames = math.ceil(samples / FRAME_SAMPLES)
@@ -96,8 +102,8 @@ def cache_test(
         print(json.dumps({"cached_test_id": identifier}), flush=True)
     if set(found) != set(expected):
         raise ValueError("Test cache is incomplete")
-    selected = [found[row["id"]] for row in frozen]
-    (root / "test.jsonl").write_text(
+    selected = [found[row["id"]] if row["split"] == "test" else row for row in frozen]
+    (output / "test_cached.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in selected), encoding="utf-8"
     )
     return selected
@@ -189,6 +195,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--completed", type=Path, required=True)
     parser.add_argument("--test-manifest", type=Path, required=True)
+    parser.add_argument("--tokens", type=Path, required=True)
     parser.add_argument("--mimi-checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -204,7 +211,7 @@ def main() -> None:
     frozen = read_manifest(args.test_manifest, "test")
     config = ModelConfig.stage1()
     if (
-        len(frozen) != 397
+        not 200 <= len(frozen) <= 1200
         or metadata["dataset_revision"] != REVISION
         or metadata["test_manifest_sha256"] != digest(args.test_manifest)
         or metadata["model_config"] != asdict(config)
@@ -219,8 +226,8 @@ def main() -> None:
     model = DauysHybrid(config).cuda().eval()
     model.load_state_dict(checkpoint["model"], strict=True)
     set_context(model, int(checkpoint["context_frames"]))
-    token_root = args.output / "tokens"
-    test = cache_test(frozen, token_root, codec)
+    token_root = args.tokens
+    test = cache_test(frozen, token_root, codec, args.output)
     score = validation(model, test, token_root, silence, config)
     conditional = conditional_evaluation(model, test, test, token_root, silence, config)
     fixed = fixed_examples(test)

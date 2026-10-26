@@ -1,10 +1,60 @@
 """Data partition invariants for multi-excerpt research."""
 
 from dauys.research_split import (
+    e005_family_splits,
     leakage_free_source_splits,
     stage1_selections,
     whole_dialogue_generalization_split,
 )
+
+
+def test_e005_repartitions_all_cached_sources_without_family_leakage():
+    train = [
+        {
+            "id": f"train-{family}",
+            "split": "train",
+            "scenario_family": f"topic-{family}",
+            "samples": 24_000 * 60,
+        }
+        for family in range(30)
+    ]
+    validation = [
+        {
+            "id": f"validation-{family}",
+            "split": "validation",
+            "scenario_family": f"topic-{family}",
+            "samples": 24_000 * 60,
+        }
+        for family in range(30)
+    ]
+    source_test = [
+        {
+            "id": f"test-{family}",
+            "split": "test",
+            "scenario_family": f"topic-{family}",
+            "samples": 24_000 * 60,
+        }
+        for family in range(15)
+    ]
+    first, families = e005_family_splits(train, validation, source_test)
+    second, _ = e005_family_splits(train, validation, source_test)
+    assert first == second
+    assert (
+        len(first["train"])
+        + len(first["validation"])
+        + sum(row["split"] != "test" for row in first["test"])
+        == 60
+    )
+    assert any(row["split"] == "train" for row in first["validation"])
+    assert any(row["split"] == "test" for row in first["test"])
+    assert all(
+        row["selected_split"] == split for split, rows in first.items() for row in rows
+    )
+    assert not set(families["test"]) & set(families["validation"])
+    assigned = [{row["scenario_family"] for row in rows} for rows in first.values()]
+    assert not assigned[0] & assigned[1]
+    assert not assigned[0] & assigned[2]
+    assert not assigned[1] & assigned[2]
 
 
 def test_leakage_free_selection_keeps_held_out_families():

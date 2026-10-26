@@ -38,10 +38,11 @@ def read_manifest(path: Path, split: str) -> list[dict[str, Any]]:
     if not rows or len({row["id"] for row in rows}) != len(rows):
         raise ValueError(f"Invalid {split} manifest")
     for row in rows:
-        if (row["dataset"], row["dataset_revision"], row["split"]) != (
-            DATASET,
-            REVISION,
-            split,
+        if (
+            row["dataset"] != DATASET
+            or row["dataset_revision"] != REVISION
+            or row["split"] not in ("train", "validation", "test")
+            or row.get("selected_split", row["split"]) != split
         ):
             raise ValueError(f"Dataset identity mismatch: {row['id']}")
     return rows
@@ -462,11 +463,11 @@ def main() -> None:
     train = read_manifest(train_path, "train")
     val = read_manifest(val_path, "validation")
     if not args.preflight_only:
-        if not 3000 <= len(train) <= 3139 or not 300 <= len(val) <= 372:
+        if not 2000 <= len(train) <= 3511 or not 200 <= len(val) <= 1000:
             raise ValueError("Frozen train or validation selection is incomplete")
         verify_cache(args.tokens, train + val)
         test = read_manifest(manifest_root / "test.jsonl", "test")
-        if len(test) != 397 or any(
+        if not 200 <= len(test) <= 1200 or any(
             {row["scenario_family"] for row in test}
             & {row["scenario_family"] for row in rows}
             for rows in (train, val)

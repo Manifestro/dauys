@@ -9,7 +9,7 @@ from datasets import Audio, load_dataset
 from e005_data import DATASET, FRAME_SAMPLES, REVISION, digest, family
 from e005_train import read_manifest
 
-from dauys.research_split import leakage_free_source_splits
+from dauys.research_split import e005_family_splits
 
 
 def main() -> None:
@@ -65,7 +65,7 @@ def main() -> None:
     validation = read_manifest(args.tokens / "validation.jsonl", "validation")
     if (len(train), len(validation)) != (3139, 372):
         raise ValueError("Train and validation manifests are incomplete")
-    splits, excluded = leakage_free_source_splits(train, validation, test)
+    splits, held_out_families = e005_family_splits(train, validation, test)
     ids = [{row["id"] for row in rows} for rows in splits.values()]
     families = [{row["scenario_family"] for row in rows} for rows in splits.values()]
     for i in range(3):
@@ -93,8 +93,12 @@ def main() -> None:
         "selected_families": {
             name: len(group) for name, group in zip(splits, families)
         },
-        "excluded_train_ids": excluded["train"],
-        "excluded_validation_ids": excluded["validation"],
+        "held_out_families": held_out_families,
+        "unused_source_test_ids": [
+            row["id"]
+            for row in test
+            if row["scenario_family"] not in held_out_families["test"]
+        ],
         "manifest_sha256": {
             name: digest(args.output / f"{name}.jsonl") for name in splits
         },
