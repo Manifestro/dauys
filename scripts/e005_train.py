@@ -118,12 +118,7 @@ def own_history(
     end = min(frames, start + length)
     model.eval()
     with torch.inference_mode():
-        state = model.new_stream(silence)
-        previous = silence
-        for index in range(start):
-            model.stream_step_teacher(user[:, :, index], previous, state)
-            previous = target[:, :, index]
-        state.previous_output = previous
+        state = model.prefill_teacher(user[:, :, :start], target[:, :, :start], silence)
         generated = []
         for index in range(start, end):
             codes, _ = model.generate_step(user[:, :, index], state)
@@ -447,7 +442,10 @@ def main() -> None:
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--smoke-output", type=Path)
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--resume-code-migration", type=str)
     args = parser.parse_args()
+    if args.resume_code_migration is not None and args.resume is None:
+        raise ValueError("Code migration requires a saved checkpoint")
     if args.smoke_output is not None and not args.preflight_only:
         raise ValueError("Smoke output is only valid for preflight")
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
@@ -594,7 +592,14 @@ def main() -> None:
     if args.resume is not None:
         saved = load_research_checkpoint(args.resume)
         old = saved["metadata"]
+        previous_git_sha = old["git_sha"]
         for key, value in metadata.items():
+            if (
+                key == "git_sha"
+                and old[key] != value
+                and args.resume_code_migration == previous_git_sha
+            ):
+                continue
             if old[key] != value:
                 raise ValueError(f"Resume mismatch: {key}")
         model.load_state_dict(saved["model"], strict=True)
@@ -609,7 +614,33 @@ def main() -> None:
         seen_frames = int(saved["seen_frames"])
         stale_checks = int(saved["stale_checks"])
         best_nll = float(saved["best_nll"])
-        metadata = old
+        metadata = old.copy()
+        if previous_git_sha != metadata["git_sha"]:
+            raise RuntimeError("Unexpected checkpoint code identity")
+        current_git_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip()
+        if previous_git_sha != current_git_sha:
+            migration_path = args.output / f"code-migration-step-{step:06d}.json"
+            if migration_path.exists():
+                raise FileExistsError(migration_path)
+            migration_path.write_text(
+                json.dumps(
+                    {
+                        "checkpoint_step": step,
+                        "from_git_sha": previous_git_sha,
+                        "to_git_sha": current_git_sha,
+                        "reason": "Equivalent parallel teacher-prefix prefill",
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+            metadata["code_history"] = [
+                *old.get("code_history", [previous_git_sha]),
+                current_git_sha,
+            ]
+            metadata["git_sha"] = current_git_sha
     else:
         (args.output / "config.json").write_text(json.dumps(metadata, indent=2) + "\n")
     wandb_run = wandb.init(

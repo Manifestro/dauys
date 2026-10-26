@@ -2,6 +2,7 @@
 
 import math
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import cast
 
 import torch
@@ -115,7 +116,13 @@ class MambaBlock(nn.Module):
 
         self.norm = nn.RMSNorm(width)
         self.mixer = Mamba2(
-            d_model=width, d_state=64, d_conv=4, expand=2, headdim=64, ngroups=1
+            d_model=width,
+            d_state=64,
+            d_conv=4,
+            expand=2,
+            headdim=64,
+            ngroups=1,
+            layer_idx=0,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -126,6 +133,15 @@ class MambaBlock(nn.Module):
     ) -> torch.Tensor:
         mixed, _, _ = self.mixer.step(self.norm(x), *state)
         return x + mixed
+
+    def prefill(
+        self, x: torch.Tensor, state: tuple[torch.Tensor, torch.Tensor]
+    ) -> torch.Tensor:
+        """Run a teacher-forced prefix in parallel and populate inference state."""
+        params = SimpleNamespace(
+            seqlen_offset=0, key_value_memory_dict={self.mixer.layer_idx: state}
+        )
+        return x + self.mixer(self.norm(x), inference_params=params)
 
     def allocate_state(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self.mixer.allocate_inference_cache(batch_size, max_seqlen=1)
@@ -380,6 +396,68 @@ class DauysHybrid(nn.Module):
             ],
             previous_output=initial_output_codes,
         )
+
+    @torch.inference_mode()
+    def prefill_teacher(
+        self,
+        user_codes: torch.Tensor,
+        output_codes: torch.Tensor,
+        initial_output_codes: torch.Tensor,
+    ) -> StreamingState:
+        """Build the same stream state as sequential teacher steps, in parallel."""
+        if user_codes.shape != output_codes.shape or user_codes.ndim != 3:
+            raise ValueError(
+                "Synchronized prefix codes must have shape [batch, 8, frames]"
+            )
+        batch, codebooks, frames = user_codes.shape
+        if codebooks != 8 or initial_output_codes.shape != (batch, 8):
+            raise ValueError("Invalid prefix code geometry")
+        state = self.new_stream(initial_output_codes)
+        if frames == 0:
+            return state
+        listening = self.listening_projection(self._embed(user_codes, 0))
+        for index, block in enumerate(self.listening):
+            listening = cast(MambaBlock, block).prefill(
+                listening, state.listening_mamba[index]
+            )
+        previous = torch.cat(
+            (initial_output_codes.unsqueeze(-1), output_codes[:, :, :-1]), dim=-1
+        )
+        x = self.dialogue_projection(self._embed(previous, 1))
+        positions = torch.arange(frames, device=x.device)
+        for index, block in enumerate(self.dialogue):
+            if isinstance(block, MambaBlock):
+                cache = state.dialogue_mamba[index]
+                assert cache is not None
+                x = block.prefill(x, cache)
+            else:
+                dialogue_block = cast(DialogueBlock, block)
+                normalized = dialogue_block.self_norm(x)
+                attention = dialogue_block.self_attention
+                keys = _rope(attention._heads(attention.key(normalized)), positions)
+                values = attention._heads(attention.value(normalized))
+                state.dialogue_attention[index] = AttentionCache(
+                    keys[:, :, -attention.window :].contiguous(),
+                    values[:, :, -attention.window :].contiguous(),
+                    None,
+                )
+                x = x + attention(normalized, normalized, positions, positions)
+                x = x + dialogue_block.cross_attention(
+                    dialogue_block.cross_norm(x),
+                    listening,
+                    positions,
+                    positions,
+                    self.config.input_delay_frames,
+                )
+                x = x + dialogue_block.ffn(dialogue_block.ffn_norm(x))
+        history_limit = self.config.attention_window + self.config.input_delay_frames
+        state.listening_history = [
+            listening[:, frame : frame + 1]
+            for frame in range(max(0, frames - history_limit), frames)
+        ]
+        state.frame_index = frames
+        state.previous_output = output_codes[:, :, -1]
+        return state
 
     @torch.inference_mode()
     def stream_step_teacher(

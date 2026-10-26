@@ -120,6 +120,58 @@ def test_teacher_stream_matches_batched_forward(model):
     )
 
 
+@pytest.mark.parametrize("frames", [1, 6, 64])
+def test_parallel_prefill_matches_sequential_stream_state(model, frames):
+    user, output, initial = _codes(frames + 1)
+    with torch.inference_mode():
+        sequential = model.new_stream(initial)
+        for frame in range(frames):
+            previous = initial if frame == 0 else output[:, :, frame - 1]
+            model.stream_step_teacher(user[:, :, frame], previous, sequential)
+        parallel = model.prefill_teacher(
+            user[:, :, :frames], output[:, :, :frames], initial
+        )
+        next_user = user[:, :, frames]
+        next_output = output[:, :, frames - 1]
+        sequential_logits = model.stream_step_teacher(
+            next_user, next_output, sequential
+        )
+        parallel_logits = model.stream_step_teacher(next_user, next_output, parallel)
+    assert parallel.frame_index == sequential.frame_index
+    for expected, actual in zip(sequential_logits, parallel_logits):
+        torch.testing.assert_close(actual, expected, rtol=3e-3, atol=3e-3)
+
+
+def test_parallel_prefill_matches_after_attention_cache_eviction(model):
+    original = model.config
+    attentions = [
+        module for module in model.modules() if isinstance(module, FrameAttention)
+    ]
+    user, output, initial = _codes(frames=9)
+    try:
+        model.config = replace(original, attention_window=3)
+        for attention in attentions:
+            attention.window = 3
+        with torch.inference_mode():
+            sequential = model.new_stream(initial)
+            for frame in range(8):
+                previous = initial if frame == 0 else output[:, :, frame - 1]
+                model.stream_step_teacher(user[:, :, frame], previous, sequential)
+            parallel = model.prefill_teacher(user[:, :, :8], output[:, :, :8], initial)
+            expected = model.stream_step_teacher(
+                user[:, :, 8], output[:, :, 7], sequential
+            )
+            actual = model.stream_step_teacher(user[:, :, 8], output[:, :, 7], parallel)
+        for expected_tensor, actual_tensor in zip(expected, actual):
+            torch.testing.assert_close(
+                actual_tensor, expected_tensor, rtol=3e-3, atol=3e-3
+            )
+    finally:
+        model.config = original
+        for attention in attentions:
+            attention.window = original.attention_window
+
+
 def test_teacher_stream_matches_batched_forward_after_cache_eviction(model):
     original = model.config
     attentions = [
