@@ -21,6 +21,26 @@ def _rms(signal: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(signal.astype(np.float64)))))
 
 
+def _rollout_without_silence_gate(
+    model: DauysHybrid, user: torch.Tensor, silence: torch.Tensor
+) -> torch.Tensor:
+    state = model.new_stream(silence)
+    frames = []
+    for frame in range(user.shape[-1]):
+        assert state.previous_output is not None
+        cb0, _, context = model.stream_step_teacher(
+            user[:, :, frame], state.previous_output, state
+        )
+        codes = [cb0.argmax(dim=-1)]
+        for codebook in range(1, 8):
+            prefix = torch.stack(codes, dim=-1)[:, None]
+            logits = model.depth(prefix, context)[:, 0, -1]
+            codes.append(logits.argmax(dim=-1))
+        state.previous_output = torch.stack(codes, dim=1)
+        frames.append(state.previous_output)
+    return torch.stack(frames, dim=-1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
@@ -50,12 +70,15 @@ def main() -> None:
         target = encode(codec, torch.from_numpy(target_pcm)[None, None].cuda())
         silence = encode(codec, torch.zeros((1, 1, 1920), device="cuda"))[:, :, 0]
         generated, activity_logits = _rollout(model, user, silence)
+        raw_generated = _rollout_without_silence_gate(model, user, silence)
         teacher = model(user, target, silence)
         activity = _activity(target_pcm, frames)
         roundtrip = decode(codec, target)[0, 0].float().cpu().numpy()
         wave = decode(codec, generated)[0, 0].float().cpu().numpy()
+        raw_wave = decode(codec, raw_generated)[0, 0].float().cpu().numpy()
         speech = activity.bool().expand_as(target[:, :1]).expand_as(target)
         equality = generated == target
+        raw_equality = raw_generated == target
         teacher_cb0 = teacher.cb0_logits.argmax(dim=-1)
         assert teacher.depth_logits is not None
         teacher_depth = teacher.depth_logits.argmax(dim=-1)
@@ -69,6 +92,11 @@ def main() -> None:
                 equality[speech].float().mean()
             ),
             "free_running_exact_frames": int(equality.all(dim=1).sum()),
+            "ungated_exact_token_fraction": float(raw_equality.float().mean()),
+            "ungated_exact_speech_token_fraction": float(
+                raw_equality[speech].float().mean()
+            ),
+            "ungated_exact_frames": int(raw_equality.all(dim=1).sum()),
             "free_running_exact_speech_frames": int(
                 equality.all(dim=1)[activity.bool()].sum()
             ),
@@ -94,10 +122,12 @@ def main() -> None:
             "reference_rms": _rms(target_pcm),
             "codec_roundtrip_rms": _rms(roundtrip),
             "generated_rms": _rms(wave),
+            "ungated_generated_rms": _rms(raw_wave),
         }
     sf.write(args.output / "reference.wav", target_pcm, 24_000)
     sf.write(args.output / "codec_roundtrip.wav", roundtrip, 24_000)
     sf.write(args.output / "generated.wav", wave, 24_000)
+    sf.write(args.output / "ungated_generated.wav", raw_wave, 24_000)
     (args.output / "results.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result), flush=True)
 
