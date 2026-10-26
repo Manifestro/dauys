@@ -74,15 +74,12 @@ def whole_dialogue_generalization_split(
     available = dict(groups)
     result: dict[str, list[dict[str, Any]]] = {}
     for split, seconds in (("test", 600), ("validation", 600), ("train", 6000)):
-        candidates = (
-            {
-                key: value
-                for key, value in available.items()
-                if key not in prior and any(row["split"] == split for row in value)
-            }
-            if split != "train"
-            else available
-        )
+        candidates = {
+            key: [row for row in value if row["split"] == split]
+            for key, value in available.items()
+            if split == "train" or key not in prior
+        }
+        candidates = {key: value for key, value in candidates.items() if value}
         selected = _whole_groups(candidates, seconds, seed + len(result))
         result[split] = sorted(
             (
@@ -96,7 +93,7 @@ def whole_dialogue_generalization_split(
                     // FRAME_SAMPLES,
                 }
                 for key in selected
-                for row in available[key]
+                for row in candidates[key]
             ),
             key=lambda row: (row["scenario_family"], row["id"], row["source_split"]),
         )

@@ -24,6 +24,7 @@ from dauys.codec import decode, encode, load_mimi
 from dauys.config import ModelConfig
 from dauys.loss import training_loss
 from dauys.model import DauysHybrid
+from dauys.schedule import own_history_step
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,7 +76,7 @@ def validate_selection(splits: dict[str, Any]) -> dict[str, list[dict[str, Any]]
             samples = int(row["source_samples"])
             frames = int(row["codec_frames"])
             if (
-                row["source_split"] not in {"train", "validation", "test"}
+                row["source_split"] != split
                 or row["scenario"].split("/", 1)[-1] != row["scenario_family"]
                 or frames != math.ceil(samples / 1920)
                 or frames < 8
@@ -150,12 +151,6 @@ def selected_conversations(
     if set(found) != expected_ids:
         raise ValueError(f"Missing conversations: {expected_ids - set(found)}")
     return [found[row["id"]] for row in selected]
-
-
-def own_history_step(step: int, conversation_count: int) -> bool:
-    """Alternate each conversation between target and own history by epoch."""
-    epoch = (step - 1) // conversation_count
-    return (step + epoch) % 2 == 0
 
 
 def partial_history(
