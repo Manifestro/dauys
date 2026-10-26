@@ -138,10 +138,21 @@ class MambaBlock(nn.Module):
         self, x: torch.Tensor, state: tuple[torch.Tensor, torch.Tensor]
     ) -> torch.Tensor:
         """Run a teacher-forced prefix in parallel and populate inference state."""
+        from mamba_ssm.modules import mamba2
+
         params = SimpleNamespace(
             seqlen_offset=0, key_value_memory_dict={self.mixer.layer_idx: state}
         )
-        return x + self.mixer(self.norm(x), inference_params=params)
+        # The fused convolution requires a channel stride divisible by eight;
+        # this model's projection has a different stride. Mamba's PyTorch
+        # convolution path still uses the parallel SSM scan and fills the cache.
+        fused_conv = mamba2.causal_conv1d_fn
+        try:
+            mamba2.causal_conv1d_fn = None
+            mixed = self.mixer(self.norm(x), inference_params=params)
+        finally:
+            mamba2.causal_conv1d_fn = fused_conv
+        return x + mixed
 
     def allocate_state(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self.mixer.allocate_inference_cache(batch_size, max_seqlen=1)
