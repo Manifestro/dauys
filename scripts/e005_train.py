@@ -378,9 +378,8 @@ def free_evaluation(
     for row in rows:
         cached = load_case(root, row)
         user, target, activity = on_gpu(cached)
-        speech = torch.nonzero(activity[0], as_tuple=False).flatten()
-        start = max(0, int(speech[0]) - 32) if speech.numel() else 0
-        end = min(row["frames"], start + 128)
+        start = 0
+        end = min(row["frames"], 256)
         with torch.inference_mode():
             state = model.new_stream(silence)
             previous = silence
