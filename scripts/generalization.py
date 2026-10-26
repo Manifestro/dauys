@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--preflight-only", action="store_true")
     return parser.parse_args()
 
 
@@ -324,6 +325,35 @@ def main() -> None:
             best_nll = float(best["validation"]["teacher_nll_nats_per_frame"])
         last_validation = checkpoint["validation"]
         metadata = old
+    if args.preflight_only:
+        longest = max(train, key=lambda case: case.frames)
+        user, target, activity = on_device(longest)
+        mask = torch.ones_like(activity, dtype=torch.bool)
+        model.train()
+        prediction = model(user, target, silence, initial_user_codes=silence)
+        listen_loss = training_loss(prediction, target, activity, mask, config).total
+        listen_loss += listening_loss(prediction, user, mask, config)
+        listen_loss.backward()
+        model.zero_grad(set_to_none=True)
+        model.eval()
+        with torch.inference_mode():
+            history, _ = rollout(model, user, silence)
+        model.train()
+        prediction = model(user, target, silence, history_codes=history.clone())
+        response_loss = training_loss(prediction, target, activity, mask, config).total
+        response_loss.backward()
+        model.zero_grad(set_to_none=True)
+        result = {
+            "longest_train_id": longest.identifier,
+            "longest_train_frames": longest.frames,
+            "listen_loss": float(listen_loss.detach()),
+            "response_loss": float(response_loss.detach()),
+            "validation": evaluate_teacher(model, validation, silence, config),
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "peak_vram_bytes": torch.cuda.max_memory_allocated(),
+        }
+        print(json.dumps(result), flush=True)
+        return
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     shutil.copyfile(metadata_path, args.persistent / "metadata.json")
     metrics = args.output / "metrics.jsonl"
