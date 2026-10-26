@@ -29,6 +29,10 @@ where = ["src"]
 [tool.setuptools.package-data]
 dauys = ["configs/*.yaml"]
 
+[tool.uv.extra-build-dependencies]
+mamba-ssm = ["torch"]
+causal-conv1d = ["torch"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py311"
