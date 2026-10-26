@@ -83,9 +83,7 @@ def _activity(pcm: np.ndarray, frames: int) -> torch.Tensor:
 
 
 def _git_sha() -> str:
-    return subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], text=True
-    ).strip()
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
 
 def _git_clean() -> bool:
@@ -105,20 +103,22 @@ def _write_loss_plot(path: Path, values: list[float], boundary: int) -> None:
     points = []
     for index, value in enumerate(values):
         x = margin + index * (width - 2 * margin) / max(len(values) - 1, 1)
-        y = height - margin - (value - floor) * (height - 2 * margin) / (
-            ceiling - floor
+        y = (
+            height
+            - margin
+            - (value - floor) * (height - 2 * margin) / (ceiling - floor)
         )
         points.append(f"{x:.1f},{y:.1f}")
     phase_x = margin + boundary * (width - 2 * margin) / max(len(values) - 1, 1)
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
 <rect width="100%" height="100%" fill="white"/>
-<line x1="{margin}" y1="{height-margin}" x2="{width-margin}" y2="{height-margin}" stroke="black"/>
-<line x1="{margin}" y1="{margin}" x2="{margin}" y2="{height-margin}" stroke="black"/>
-<line x1="{phase_x:.1f}" y1="{margin}" x2="{phase_x:.1f}" y2="{height-margin}" stroke="#999" stroke-dasharray="5 5"/>
-<polyline points="{' '.join(points)}" fill="none" stroke="#164b8a" stroke-width="2"/>
+<line x1="{margin}" y1="{height - margin}" x2="{width - margin}" y2="{height - margin}" stroke="black"/>
+<line x1="{margin}" y1="{margin}" x2="{margin}" y2="{height - margin}" stroke="black"/>
+<line x1="{phase_x:.1f}" y1="{margin}" x2="{phase_x:.1f}" y2="{height - margin}" stroke="#999" stroke-dasharray="5 5"/>
+<polyline points="{" ".join(points)}" fill="none" stroke="#164b8a" stroke-width="2"/>
 <text x="{margin}" y="30" font-family="sans-serif" font-size="16">Training loss by optimizer step</text>
-<text x="{margin}" y="{height-12}" font-family="sans-serif" font-size="12">Listen</text>
-<text x="{phase_x+8:.1f}" y="{height-12}" font-family="sans-serif" font-size="12">Respond</text>
+<text x="{margin}" y="{height - 12}" font-family="sans-serif" font-size="12">Listen</text>
+<text x="{phase_x + 8:.1f}" y="{height - 12}" font-family="sans-serif" font-size="12">Respond</text>
 <text x="5" y="{margin}" font-family="sans-serif" font-size="11">{ceiling:.2f}</text>
 </svg>
 """
@@ -172,8 +172,8 @@ def main() -> None:
         "hypothesis": (
             "Self-conditioned response training produces an audible overfit response "
             "from the same dialogue excerpt."
-            if args.self_conditioned_steps else
-            "A single synchronized dialogue excerpt can be memorized with causal two-phase training."
+            if args.self_conditioned_steps
+            else "A single synchronized dialogue excerpt can be memorized with causal two-phase training."
         ),
         "control_run": args.control_run,
         "code_revision": _git_sha(),
@@ -195,7 +195,7 @@ def main() -> None:
         "model_config": asdict(config),
         "environment": {
             "python": platform.python_version(),
-            "torch": torch.__version__,
+            "torch": str(torch.__version__),
             "cuda": torch.version.cuda,
             "gpu": torch.cuda.get_device_name(),
             "device_memory_bytes": torch.cuda.get_device_properties(0).total_memory,
@@ -226,16 +226,21 @@ def main() -> None:
             model.train()
             optimizer.zero_grad(set_to_none=True)
             prediction = model(
-                user, target, silence,
+                user,
+                target,
+                silence,
                 initial_user_codes=silence if phase == "listen" else None,
                 history_codes=history_codes,
             )
             response = training_loss(prediction, target, activity, mask, config)
             user_loss = (
                 listening_loss(prediction, user, mask, config)
-                if phase == "listen" else None
+                if phase == "listen"
+                else None
             )
-            loss = response.total + user_loss if user_loss is not None else response.total
+            loss = (
+                response.total + user_loss if user_loss is not None else response.total
+            )
             if not torch.isfinite(loss):
                 raise RuntimeError(f"Non-finite loss at step {step}")
             phase_first.setdefault(phase, float(loss.detach()))
@@ -253,7 +258,9 @@ def main() -> None:
                 "response_cb0": float(response.cb0.detach()),
                 "response_depth": float(response.depth.detach()),
                 "response_activity": float(response.activity.detach()),
-                "user_loss": float(user_loss.detach()) if user_loss is not None else None,
+                "user_loss": float(user_loss.detach())
+                if user_loss is not None
+                else None,
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 "allocated_vram_bytes": torch.cuda.max_memory_allocated(),
             }
@@ -297,13 +304,24 @@ def main() -> None:
         "target_speech_frames": int(activity.sum()),
         "generated_speech_frames": int(generated_activity_tensor.sum()),
         "free_running_activity_f1": (
-            2 * int((generated_activity_tensor == activity).logical_and(activity.bool()).sum())
+            2
+            * int(
+                (generated_activity_tensor == activity)
+                .logical_and(activity.bool())
+                .sum()
+            )
             / max(int(activity.sum() + generated_activity_tensor.sum()), 1)
         ),
         "gpu_hours": round((time.monotonic() - started) / 3600, 5),
         "output_files": [
-            "metadata.json", "metrics.jsonl", "checkpoint.pt", "user.wav",
-            "target.wav", "generated.wav", "summary.json", "report.md",
+            "metadata.json",
+            "metrics.jsonl",
+            "checkpoint.pt",
+            "user.wav",
+            "target.wav",
+            "generated.wav",
+            "summary.json",
+            "report.md",
             "loss.svg",
         ],
     }
@@ -312,28 +330,28 @@ def main() -> None:
 
 ## Hypothesis
 
-{metadata['hypothesis']}
+{metadata["hypothesis"]}
 
 ## Setup
 
-- Code revision: `{metadata['code_revision']}` (clean: {metadata['code_clean']})
+- Code revision: `{metadata["code_revision"]}` (clean: {metadata["code_clean"]})
 - Dataset revision: `{REVISION}`; manifest SHA-256: `{manifest_sha}`
 - Split and example: `train/{args.conversation_id}`
 - Causal window: {args.frames} frames ({args.frames / 12.5:.2f} seconds)
 - Seed: {args.seed}; learning rate: {args.learning_rate}
 - Listening steps: {listening_steps}; response steps: {args.steps - listening_steps}
 - Self-conditioned response steps: {args.self_conditioned_steps}
-- Control run: {args.control_run or 'none'}
-- GPU: {metadata['environment']['gpu']}; peak VRAM: {summary['peak_vram_bytes']} bytes
-- Compute: {summary['gpu_hours']} GPU-hours
+- Control run: {args.control_run or "none"}
+- GPU: {metadata["environment"]["gpu"]}; peak VRAM: {summary["peak_vram_bytes"]} bytes
+- Compute: {summary["gpu_hours"]} GPU-hours
 
 ## Measured results
 
-- Listening loss: {phase_first['listen']:.4f} to {phase_last['listen']:.4f}
-- Response loss: {phase_first['respond']:.4f} to {phase_last['respond']:.4f}
-- Final teacher-forced response loss: {summary['final_response_loss']:.4f}
-- Free-running speech activity F1: {summary['free_running_activity_f1']:.4f}
-- Target / generated speech frames: {summary['target_speech_frames']} / {summary['generated_speech_frames']}
+- Listening loss: {phase_first["listen"]:.4f} to {phase_last["listen"]:.4f}
+- Response loss: {phase_first["respond"]:.4f} to {phase_last["respond"]:.4f}
+- Final teacher-forced response loss: {summary["final_response_loss"]:.4f}
+- Free-running speech activity F1: {summary["free_running_activity_f1"]:.4f}
+- Target / generated speech frames: {summary["target_speech_frames"]} / {summary["generated_speech_frames"]}
 - Frame-level metrics: `metrics.jsonl`
 - Loss curve: `loss.svg`
 - Fixed audio examples: `user.wav`, `target.wav`, `generated.wav`

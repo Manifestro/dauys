@@ -14,6 +14,7 @@ import soundfile as sf
 import torch
 from overfit import DATASET, REVISION, _activity, _load_conversation
 
+from dauys.checkpoint import load_research_checkpoint
 from dauys.codec import decode, encode, load_mimi
 from dauys.config import ModelConfig
 from dauys.loss import training_loss
@@ -97,7 +98,7 @@ def main() -> None:
         raise RuntimeError("Input dependency evaluation requires CUDA")
     if args.output.exists():
         raise FileExistsError(args.output)
-    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+    checkpoint = load_research_checkpoint(args.checkpoint)
     training_metadata = checkpoint["metadata"]
     if (
         training_metadata["dataset"] != DATASET
