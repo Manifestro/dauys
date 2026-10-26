@@ -8,6 +8,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import soundfile as sf
 import torch
 import wandb
 from e005_data import REVISION, digest
@@ -57,6 +59,7 @@ def render_checkpoint(
             "user_audio",
             "reference_audio",
             "generated_audio",
+            "combined_audio",
             "nll",
             "activity_f1",
             "intelligibility",
@@ -71,6 +74,7 @@ def render_checkpoint(
         frames = row["frames"]
         case_dir = output / "audio" / label
         generated_path = case_dir / f"{row['id']}_generated.wav"
+        combined_path = output / "audio" / "combined" / label / f"{row['id']}.wav"
         user_path = output / "audio" / "reference" / f"{row['id']}_user.wav"
         target_path = output / "audio" / "reference" / f"{row['id']}_target.wav"
         if not user_path.exists():
@@ -91,6 +95,10 @@ def render_checkpoint(
             limit_frames=frames,
         )
         save_wave(generated_path, wave)
+        user_wave, sample_rate = sf.read(user_path, dtype="float32")
+        if sample_rate != 24_000 or len(user_wave) != len(wave):
+            raise ValueError(f"Two streams are not aligned: {row['id']}")
+        save_wave(combined_path, np.column_stack((user_wave, wave)))
         cases.append(
             {
                 "id": row["id"],
@@ -103,6 +111,7 @@ def render_checkpoint(
                 "user_audio": str(user_path.relative_to(output)),
                 "reference_audio": str(target_path.relative_to(output)),
                 "generated_audio": str(generated_path.relative_to(output)),
+                "combined_audio": str(combined_path.relative_to(output)),
             }
         )
         table.add_data(
@@ -113,6 +122,7 @@ def render_checkpoint(
             wandb.Audio(str(user_path), sample_rate=24_000),
             wandb.Audio(str(target_path), sample_rate=24_000),
             wandb.Audio(str(generated_path), sample_rate=24_000),
+            wandb.Audio(str(combined_path), sample_rate=24_000),
             None,
             metrics["activity"]["f1"],
             None,
@@ -193,6 +203,7 @@ def main() -> None:
     parser.add_argument("--mimi-checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--wandb-dir", type=Path, required=True)
+    parser.add_argument("--sample-id")
     args = parser.parse_args()
     if args.output.exists():
         raise FileExistsError(args.output)
@@ -210,13 +221,21 @@ def main() -> None:
     ]
     if len(selected_ids) != 5 or len(set(selected_ids)) != 5:
         raise ValueError("Five distinct validation samples are required")
+    if args.sample_id is not None:
+        if args.sample_id not in selected_ids:
+            raise ValueError("Requested sample is outside the frozen review selection")
+        selected_ids = [args.sample_id]
     validation = {
         row["id"]: row
         for row in read_manifest(args.splits / "validation.jsonl", "validation")
     }
     selected = [validation[identifier] for identifier in selected_ids]
     for manifest_row, row in zip(
-        (item for item in manifest if item["selected_split"] == "validation"),
+        (
+            item
+            for item in manifest
+            if item["selected_split"] == "validation" and item["id"] in selected_ids
+        ),
         selected,
     ):
         if row["sha256"] != manifest_row["token_sha256"]:
@@ -274,6 +293,7 @@ def main() -> None:
                 "user_audio",
                 "reference_audio",
                 "generated_audio",
+                "combined_audio",
                 "intelligibility_0_to_3",
                 "relevance_0_to_3",
                 "notes",
@@ -288,6 +308,7 @@ def main() -> None:
                         case["user_audio"],
                         case["reference_audio"],
                         case["generated_audio"],
+                        case["combined_audio"],
                         "",
                         "",
                         "",
