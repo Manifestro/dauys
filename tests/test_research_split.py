@@ -1,6 +1,28 @@
 """Data partition invariants for multi-excerpt research."""
 
-from dauys.research_split import stage1_selections, whole_dialogue_generalization_split
+from dauys.research_split import (
+    leakage_free_source_splits,
+    stage1_selections,
+    whole_dialogue_generalization_split,
+)
+
+
+def test_leakage_free_selection_keeps_held_out_families():
+    train = [
+        {"id": "t1", "scenario_family": "shared_validation"},
+        {"id": "t2", "scenario_family": "shared_test"},
+        {"id": "t3", "scenario_family": "train_only"},
+    ]
+    validation = [
+        {"id": "v1", "scenario_family": "shared_validation"},
+        {"id": "v2", "scenario_family": "shared_test"},
+    ]
+    test = [{"id": "e1", "scenario_family": "shared_test"}]
+    selected, excluded = leakage_free_source_splits(train, validation, test)
+    assert [row["id"] for row in selected["train"]] == ["t3"]
+    assert [row["id"] for row in selected["validation"]] == ["v1"]
+    assert [row["id"] for row in selected["test"]] == ["e1"]
+    assert excluded == {"train": ["t1", "t2"], "validation": ["v2"]}
 
 
 def test_splits_are_nested_and_scenario_disjoint():

@@ -8,6 +8,46 @@ FRAME_SAMPLES = 1920
 FRAME_RATE = 12.5
 
 
+def leakage_free_source_splits(
+    train: list[dict[str, Any]],
+    validation: list[dict[str, Any]],
+    test: list[dict[str, Any]],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[str]]]:
+    """Keep test and validation families, excluding conflicting earlier rows."""
+    test_families = {row["scenario_family"] for row in test}
+    validation_families = {row["scenario_family"] for row in validation}
+    selected = {
+        "train": [
+            row
+            for row in train
+            if row["scenario_family"] not in test_families | validation_families
+        ],
+        "validation": [
+            row for row in validation if row["scenario_family"] not in test_families
+        ],
+        "test": test,
+    }
+    excluded = {
+        "train": [
+            row["id"]
+            for row in train
+            if row["scenario_family"] in test_families | validation_families
+        ],
+        "validation": [
+            row["id"] for row in validation if row["scenario_family"] in test_families
+        ],
+    }
+    families = [{row["scenario_family"] for row in rows} for rows in selected.values()]
+    ids = [{row["id"] for row in rows} for rows in selected.values()]
+    if any(
+        families[i] & families[j] or ids[i] & ids[j]
+        for i in range(3)
+        for j in range(i + 1, 3)
+    ):
+        raise ValueError("Selected splits still overlap")
+    return selected, excluded
+
+
 def scenario_family(scenario: str) -> str:
     """Group the same dialogue topic across interaction styles."""
     parts = scenario.split("/", 1)

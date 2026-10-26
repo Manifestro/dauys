@@ -442,7 +442,7 @@ def main() -> None:
     parser.add_argument("--tokens", type=Path, required=True)
     parser.add_argument("--mimi-checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--test-manifest", type=Path)
+    parser.add_argument("--splits", type=Path)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--smoke-output", type=Path)
     parser.add_argument("--resume", type=Path)
@@ -451,23 +451,29 @@ def main() -> None:
         raise ValueError("Smoke output is only valid for preflight")
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         raise RuntimeError("CUDA with BF16 is required")
-    train = read_manifest(args.tokens / "train.jsonl", "train")
-    val = read_manifest(args.tokens / "validation.jsonl", "validation")
-    if not args.preflight_only and (len(train), len(val)) != (3139, 372):
-        raise ValueError("The complete frozen train and validation splits are required")
-    verify_cache(args.tokens, train + val)
-    if {r["scenario_family"] for r in train} & {r["scenario_family"] for r in val}:
-        raise ValueError("Scenario family leakage")
+    if args.preflight_only and args.splits is None:
+        manifest_root = args.tokens
+    elif args.splits is not None:
+        manifest_root = args.splits
+    else:
+        raise ValueError("Frozen split selections are required before training")
+    train_path = manifest_root / "train.jsonl"
+    val_path = manifest_root / "validation.jsonl"
+    train = read_manifest(train_path, "train")
+    val = read_manifest(val_path, "validation")
     if not args.preflight_only:
-        if args.test_manifest is None:
-            raise ValueError("Frozen test metadata is required before training")
-        test = read_manifest(args.test_manifest, "test")
+        if not 3000 <= len(train) <= 3139 or not 300 <= len(val) <= 372:
+            raise ValueError("Frozen train or validation selection is incomplete")
+        verify_cache(args.tokens, train + val)
+        test = read_manifest(manifest_root / "test.jsonl", "test")
         if len(test) != 397 or any(
             {row["scenario_family"] for row in test}
             & {row["scenario_family"] for row in rows}
             for rows in (train, val)
         ):
             raise ValueError("Incomplete or leaking test metadata")
+        if {r["scenario_family"] for r in train} & {r["scenario_family"] for r in val}:
+            raise ValueError("Scenario family leakage")
     if args.output.exists() and not args.preflight_only and args.resume is None:
         raise FileExistsError(args.output)
     if (
@@ -558,11 +564,10 @@ def main() -> None:
         "experiment": RUN_NAME,
         "dataset": DATASET,
         "dataset_revision": REVISION,
-        "train_manifest_sha256": digest(args.tokens / "train.jsonl"),
-        "validation_manifest_sha256": digest(args.tokens / "validation.jsonl"),
-        "test_manifest_sha256": (
-            digest(args.test_manifest) if args.test_manifest is not None else None
-        ),
+        "train_manifest_sha256": digest(train_path),
+        "validation_manifest_sha256": digest(val_path),
+        "test_manifest_sha256": digest(manifest_root / "test.jsonl"),
+        "split_audit_sha256": digest(manifest_root / "audit.json"),
         "mimi_sha256": digest(args.mimi_checkpoint),
         "model_config": asdict(config),
         "parameters": model.trainable_parameters(),
@@ -621,10 +626,10 @@ def main() -> None:
     if args.resume is None:
         artifact = wandb.Artifact("S1-E005-protocol", type="protocol")
         artifact.add_file(str(args.output / "config.json"))
-        artifact.add_file(str(args.tokens / "train.jsonl"))
-        artifact.add_file(str(args.tokens / "validation.jsonl"))
-        assert args.test_manifest is not None
-        artifact.add_file(str(args.test_manifest))
+        artifact.add_file(str(train_path))
+        artifact.add_file(str(val_path))
+        artifact.add_file(str(manifest_root / "test.jsonl"))
+        artifact.add_file(str(manifest_root / "audit.json"))
         wandb_run.log_artifact(artifact)
     started = time.monotonic()
     metrics_path = args.output / "metrics.jsonl"
