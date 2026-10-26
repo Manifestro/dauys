@@ -37,6 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--conversation-id", default="conv_000001")
+    parser.add_argument("--self-conditioned-steps", type=int, default=0)
+    parser.add_argument("--control-run", default=None)
     return parser.parse_args()
 
 
@@ -163,9 +165,17 @@ def main() -> None:
     listening_steps = round(args.steps * 0.4)
     if listening_steps < 1 or listening_steps >= args.steps:
         raise ValueError("Both phases need training steps")
+    if not 0 <= args.self_conditioned_steps <= args.steps - listening_steps:
+        raise ValueError("Self-conditioned steps must fit within the response phase")
     metadata = {
         "experiment_id": output.name,
-        "hypothesis": "A single synchronized dialogue excerpt can be memorized with causal two-phase training.",
+        "hypothesis": (
+            "Self-conditioned response training produces an audible overfit response "
+            "from the same dialogue excerpt."
+            if args.self_conditioned_steps else
+            "A single synchronized dialogue excerpt can be memorized with causal two-phase training."
+        ),
+        "control_run": args.control_run,
         "code_revision": _git_sha(),
         "code_clean": _git_clean(),
         "dataset": DATASET,
@@ -178,6 +188,7 @@ def main() -> None:
         "steps": args.steps,
         "listening_steps": listening_steps,
         "response_steps": args.steps - listening_steps,
+        "self_conditioned_steps": args.self_conditioned_steps,
         "learning_rate": args.learning_rate,
         "seed": args.seed,
         "model_parameters": model.trainable_parameters(),
@@ -201,11 +212,23 @@ def main() -> None:
     with (output / "metrics.jsonl").open("w", encoding="utf-8") as log:
         for step in range(args.steps):
             phase = "listen" if step < listening_steps else "respond"
+            history_codes = None
+            if phase == "respond" and step >= args.steps - args.self_conditioned_steps:
+                model.eval()
+                with torch.inference_mode():
+                    stream = model.new_stream(silence)
+                    rollout = [
+                        model.generate_step(user[:, :, frame], stream)[0]
+                        for frame in range(args.frames)
+                    ]
+                    history_codes = torch.stack(rollout, dim=-1)
+                history_codes = history_codes.clone()
             model.train()
             optimizer.zero_grad(set_to_none=True)
             prediction = model(
                 user, target, silence,
                 initial_user_codes=silence if phase == "listen" else None,
+                history_codes=history_codes,
             )
             response = training_loss(prediction, target, activity, mask, config)
             user_loss = (
@@ -225,6 +248,7 @@ def main() -> None:
             record = {
                 "step": step + 1,
                 "phase": phase,
+                "conditioning": "self" if history_codes is not None else "teacher",
                 "total_loss": current_loss,
                 "response_cb0": float(response.cb0.detach()),
                 "response_depth": float(response.depth.detach()),
@@ -253,10 +277,13 @@ def main() -> None:
         final_response = training_loss(prediction, target, activity, mask, config)
         state = model.new_stream(silence)
         generated = []
+        generated_activity = []
         for frame in range(args.frames):
-            codes, _ = model.generate_step(user[:, :, frame], state)
+            codes, logits = model.generate_step(user[:, :, frame], state)
             generated.append(codes)
+            generated_activity.append(logits.argmax(dim=-1))
         generated_codes = torch.stack(generated, dim=-1)
+        generated_activity_tensor = torch.stack(generated_activity, dim=-1)
         generated_pcm = decode(codec, generated_codes)[0, 0].float().cpu().numpy()
     sf.write(output / "generated.wav", generated_pcm, 24_000)
     _write_loss_plot(output / "loss.svg", loss_curve, listening_steps)
@@ -267,6 +294,12 @@ def main() -> None:
         "duration_seconds": round(time.monotonic() - started, 3),
         "peak_vram_bytes": torch.cuda.max_memory_allocated(),
         "generated_frames": args.frames,
+        "target_speech_frames": int(activity.sum()),
+        "generated_speech_frames": int(generated_activity_tensor.sum()),
+        "free_running_activity_f1": (
+            2 * int((generated_activity_tensor == activity).logical_and(activity.bool()).sum())
+            / max(int(activity.sum() + generated_activity_tensor.sum()), 1)
+        ),
         "gpu_hours": round((time.monotonic() - started) / 3600, 5),
         "output_files": [
             "metadata.json", "metrics.jsonl", "checkpoint.pt", "user.wav",
@@ -289,6 +322,8 @@ def main() -> None:
 - Causal window: {args.frames} frames ({args.frames / 12.5:.2f} seconds)
 - Seed: {args.seed}; learning rate: {args.learning_rate}
 - Listening steps: {listening_steps}; response steps: {args.steps - listening_steps}
+- Self-conditioned response steps: {args.self_conditioned_steps}
+- Control run: {args.control_run or 'none'}
 - GPU: {metadata['environment']['gpu']}; peak VRAM: {summary['peak_vram_bytes']} bytes
 - Compute: {summary['gpu_hours']} GPU-hours
 
@@ -297,6 +332,8 @@ def main() -> None:
 - Listening loss: {phase_first['listen']:.4f} to {phase_last['listen']:.4f}
 - Response loss: {phase_first['respond']:.4f} to {phase_last['respond']:.4f}
 - Final teacher-forced response loss: {summary['final_response_loss']:.4f}
+- Free-running speech activity F1: {summary['free_running_activity_f1']:.4f}
+- Target / generated speech frames: {summary['target_speech_frames']} / {summary['generated_speech_frames']}
 - Frame-level metrics: `metrics.jsonl`
 - Loss curve: `loss.svg`
 - Fixed audio examples: `user.wav`, `target.wav`, `generated.wav`

@@ -305,6 +305,7 @@ class DauysHybrid(nn.Module):
         output_codes: torch.Tensor,
         initial_output_codes: torch.Tensor,
         initial_user_codes: torch.Tensor | None = None,
+        history_codes: torch.Tensor | None = None,
     ) -> ModelOutput:
         """Teacher-forced prediction of B_t using A_<=t and B_<t."""
         if user_codes.shape != output_codes.shape:
@@ -312,8 +313,11 @@ class DauysHybrid(nn.Module):
         batch, _, frames = user_codes.shape
         if frames < 1 or initial_output_codes.shape != (batch, 8):
             raise ValueError("An initial valid silence frame is required")
+        if history_codes is not None and history_codes.shape != output_codes.shape:
+            raise ValueError("History codes must match target code shape")
+        history = output_codes if history_codes is None else history_codes
         previous = torch.cat(
-            (initial_output_codes.unsqueeze(-1), output_codes[:, :, :-1]), dim=-1
+            (initial_output_codes.unsqueeze(-1), history[:, :, :-1]), dim=-1
         )
         listening = self.listening_projection(self._embed(user_codes, 0))
         for block in self.listening:

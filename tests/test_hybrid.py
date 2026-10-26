@@ -72,6 +72,21 @@ def test_listening_phase_predicts_future_user_codes(model):
     assert baseline.user_depth_logits.shape == (1, 6, 7, 2048)
 
 
+def test_response_history_can_be_self_conditioned(model):
+    user, output, initial = _codes()
+    with torch.inference_mode():
+        teacher = model(user, output, initial)
+        explicit_teacher = model(user, output, initial, history_codes=output)
+        self_conditioned = model(
+            user, output, initial,
+            history_codes=initial[:, :, None].expand_as(output),
+        )
+    torch.testing.assert_close(teacher.cb0_logits, explicit_teacher.cb0_logits)
+    assert not torch.allclose(
+        teacher.cb0_logits[:, 1:], self_conditioned.cb0_logits[:, 1:]
+    )
+
+
 def test_teacher_stream_matches_batched_forward(model):
     user, output, initial = _codes()
     with torch.inference_mode():
