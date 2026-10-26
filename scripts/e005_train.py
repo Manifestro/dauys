@@ -54,7 +54,11 @@ def make_batches(rows: list[dict[str, Any]], seed: int) -> list[list[dict[str, A
     current: list[dict[str, Any]] = []
     frames = 0
     for row in order:
-        if current and frames + row["frames"] > BATCH_FRAMES:
+        if (
+            current
+            and frames + row["frames"] > BATCH_FRAMES
+            and abs(frames - BATCH_FRAMES) <= abs(frames + row["frames"] - BATCH_FRAMES)
+        ):
             batches.append(current)
             current, frames = [], 0
         current.append(row)
