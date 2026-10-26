@@ -236,6 +236,8 @@ class ModelOutput:
     activity_logits: torch.Tensor
     depth_logits: torch.Tensor | None
     dialogue_states: torch.Tensor
+    user_cb0_logits: torch.Tensor | None = None
+    user_depth_logits: torch.Tensor | None = None
 
 
 @dataclass
@@ -277,6 +279,9 @@ class DauysHybrid(nn.Module):
             for kind in config.dialogue_blocks
         )
         self.final_norm = nn.RMSNorm(config.dialogue_dim)
+        self.user_prediction_projection = nn.Linear(
+            config.listening_dim, config.dialogue_dim
+        )
         self.cb0_head = nn.Linear(config.dialogue_dim, config.vocab_size)
         self.activity_head = nn.Linear(config.dialogue_dim, 2)
         self.depth = DepthDecoder(config, self.embeddings)
@@ -299,6 +304,7 @@ class DauysHybrid(nn.Module):
         user_codes: torch.Tensor,
         output_codes: torch.Tensor,
         initial_output_codes: torch.Tensor,
+        initial_user_codes: torch.Tensor | None = None,
     ) -> ModelOutput:
         """Teacher-forced prediction of B_t using A_<=t and B_<t."""
         if user_codes.shape != output_codes.shape:
@@ -320,11 +326,31 @@ class DauysHybrid(nn.Module):
             else:
                 x = block(x, listening, positions, self.config.input_delay_frames)
         x = self.final_norm(x)
+        user_cb0_logits = None
+        user_depth_logits = None
+        if initial_user_codes is not None:
+            if initial_user_codes.shape != (batch, 8):
+                raise ValueError("Initial user codes must have shape [batch, 8]")
+            previous_user = torch.cat(
+                (initial_user_codes.unsqueeze(-1), user_codes[:, :, :-1]), dim=-1
+            )
+            user_state = self.listening_projection(self._embed(previous_user, 0))
+            for block in self.listening:
+                user_state = block(user_state)
+            user_context = self.final_norm(
+                self.user_prediction_projection(user_state)
+            )
+            user_cb0_logits = self.cb0_head(user_context)
+            user_depth_logits = self.depth(
+                user_codes[:, :7].transpose(1, 2), user_context
+            )
         return ModelOutput(
             cb0_logits=self.cb0_head(x),
             activity_logits=self.activity_head(x),
             depth_logits=self.depth(output_codes[:, :7].transpose(1, 2), x),
             dialogue_states=x,
+            user_cb0_logits=user_cb0_logits,
+            user_depth_logits=user_depth_logits,
         )
 
     def new_stream(self, initial_output_codes: torch.Tensor) -> StreamingState:

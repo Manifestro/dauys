@@ -55,6 +55,23 @@ def test_future_audio_cannot_change_past_logits(model):
     )
 
 
+def test_listening_phase_predicts_future_user_codes(model):
+    user, output, initial = _codes()
+    changed_user = user.clone()
+    changed_user[:, :, 4:] = torch.randint(0, 2048, (1, 8, 2), device="cuda")
+    with torch.inference_mode():
+        baseline = model(user, output, initial, initial_user_codes=initial)
+        changed = model(changed_user, output, initial, initial_user_codes=initial)
+    assert baseline.user_cb0_logits is not None
+    assert baseline.user_depth_logits is not None
+    assert changed.user_cb0_logits is not None
+    torch.testing.assert_close(
+        baseline.user_cb0_logits[:, :4], changed.user_cb0_logits[:, :4],
+        rtol=1e-4, atol=1e-4,
+    )
+    assert baseline.user_depth_logits.shape == (1, 6, 7, 2048)
+
+
 def test_teacher_stream_matches_batched_forward(model):
     user, output, initial = _codes()
     with torch.inference_mode():

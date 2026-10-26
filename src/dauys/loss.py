@@ -56,3 +56,33 @@ def training_loss(
         + config.activity_weight * activity
     )
     return Losses(total, cb0, depth, activity)
+
+
+def listening_loss(
+    output: ModelOutput,
+    user_codes: torch.Tensor,
+    valid_frames: torch.Tensor,
+    config: ModelConfig,
+) -> torch.Tensor:
+    """Causal next-frame objective for the incoming stream."""
+    if output.user_cb0_logits is None or output.user_depth_logits is None:
+        raise ValueError("User prediction logits are required")
+    batch, codebooks, frames = user_codes.shape
+    if codebooks != 8 or valid_frames.shape != (batch, frames):
+        raise ValueError("Invalid listening target shapes")
+    mask = valid_frames.to(output.user_cb0_logits.dtype)
+    if not valid_frames.any():
+        raise ValueError("At least one valid frame is required")
+    cb0 = F.cross_entropy(
+        output.user_cb0_logits.reshape(-1, config.vocab_size),
+        user_codes[:, 0].reshape(-1),
+        reduction="none",
+    ).reshape(batch, frames)
+    depth = F.cross_entropy(
+        output.user_depth_logits.reshape(-1, config.vocab_size),
+        user_codes[:, 1:].transpose(1, 2).reshape(-1),
+        reduction="none",
+    ).reshape(batch, frames, 7)
+    return config.cb0_weight * (cb0 * mask).sum() / mask.sum() + (
+        config.depth_weight * (depth * mask[:, :, None]).sum() / (mask.sum() * 7)
+    )
