@@ -53,7 +53,10 @@ def main() -> None:
             selected = splits["e004"][split][:3]
             windows = _load_windows(selected, split, codec, args.frames)
             cases = [
-                next(w for w in windows if w.conversation_id == row["id"])
+                max(
+                    (w for w in windows if w.conversation_id == row["id"]),
+                    key=lambda w: int(w.activity.sum()),
+                )
                 for row in selected
             ]
             for index, case in enumerate(cases):
@@ -79,6 +82,8 @@ def main() -> None:
                     "conversation_id": case.conversation_id,
                     "alternate_id": alternate.conversation_id,
                     "frames": length,
+                    "start_frame": case.start_frame,
+                    "target_speech_frames": int(activity.sum()),
                     "modes": {},
                 }
                 prefix = f"{split}_{index}"
