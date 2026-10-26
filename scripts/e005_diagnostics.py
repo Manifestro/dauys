@@ -246,8 +246,9 @@ def generate(
     silence: torch.Tensor,
     codec: Any,
     cb0_reference: bool,
+    limit_frames: int = ROLLOUT_FRAMES,
 ) -> tuple[dict[str, Any], np.ndarray, torch.Tensor]:
-    frames = min(ROLLOUT_FRAMES, incoming.shape[-1])
+    frames = min(limit_frames, incoming.shape[-1])
     state = model.new_stream(silence)
     generated = []
     predicted_activity = []
