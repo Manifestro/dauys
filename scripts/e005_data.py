@@ -25,10 +25,12 @@ def family(scenario: str) -> str:
     return parts[1]
 
 
-def activity_from_events(events: list[dict], frames: int) -> np.ndarray:
+def activity_from_events(
+    events: list[dict], frames: int, speaker: str = "B"
+) -> np.ndarray:
     active = np.zeros(frames, dtype=np.int64)
     for event in events:
-        if event["speaker"] != "B":
+        if event["speaker"] != speaker:
             continue
         start = max(0, int(event["start_sample"]) // FRAME_SAMPLES)
         end = min(frames, math.ceil(int(event["end_sample"]) / FRAME_SAMPLES))
@@ -105,6 +107,7 @@ def main() -> None:
             if any(codes.shape != (1, 8, frames) for codes in encoded):
                 raise ValueError(f"Codec alignment mismatch: {identifier}")
             activity = activity_from_events(row["events"], frames)
+            user_activity = activity_from_events(row["events"], frames, "A")
             rms = np.sqrt(
                 np.mean(np.square(padded[1].reshape(frames, FRAME_SAMPLES)), axis=1)
             )
@@ -113,6 +116,7 @@ def main() -> None:
                 "user": encoded[0][0].short().cpu(),
                 "target": encoded[1][0].short().cpu(),
                 "activity": torch.from_numpy(activity.astype(np.uint8)),
+                "user_activity": torch.from_numpy(user_activity.astype(np.uint8)),
             }
             path.parent.mkdir(parents=True, exist_ok=True)
             temp = path.with_suffix(".tmp")
@@ -131,6 +135,7 @@ def main() -> None:
                 "samples": samples,
                 "frames": frames,
                 "active_frames": int(activity.sum()),
+                "user_active_frames": int(user_activity.sum()),
                 "activity_rms_disagreement": discrepancy,
                 "sha256": digest(path),
             }
