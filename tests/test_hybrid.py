@@ -50,8 +50,10 @@ def test_future_audio_cannot_change_past_logits(model):
         baseline.cb0_logits[:, :4], changed.cb0_logits[:, :4], rtol=1e-4, atol=1e-4
     )
     torch.testing.assert_close(
-        baseline.depth_logits[:, :4], changed.depth_logits[:, :4],
-        rtol=1e-4, atol=1e-4,
+        baseline.depth_logits[:, :4],
+        changed.depth_logits[:, :4],
+        rtol=1e-4,
+        atol=1e-4,
     )
 
 
@@ -66,8 +68,10 @@ def test_listening_phase_predicts_future_user_codes(model):
     assert baseline.user_depth_logits is not None
     assert changed.user_cb0_logits is not None
     torch.testing.assert_close(
-        baseline.user_cb0_logits[:, :4], changed.user_cb0_logits[:, :4],
-        rtol=1e-4, atol=1e-4,
+        baseline.user_cb0_logits[:, :4],
+        changed.user_cb0_logits[:, :4],
+        rtol=1e-4,
+        atol=1e-4,
     )
     assert baseline.user_depth_logits.shape == (1, 6, 7, 2048)
 
@@ -78,7 +82,9 @@ def test_response_history_can_be_self_conditioned(model):
         teacher = model(user, output, initial)
         explicit_teacher = model(user, output, initial, history_codes=output)
         self_conditioned = model(
-            user, output, initial,
+            user,
+            output,
+            initial,
             history_codes=initial[:, :, None].expand_as(output),
         )
     torch.testing.assert_close(teacher.cb0_logits, explicit_teacher.cb0_logits)
@@ -105,8 +111,10 @@ def test_teacher_stream_matches_batched_forward(model):
         torch.stack(cb0_steps, dim=1), batched.cb0_logits, rtol=2e-3, atol=2e-3
     )
     torch.testing.assert_close(
-        torch.stack(activity_steps, dim=1), batched.activity_logits,
-        rtol=2e-3, atol=2e-3,
+        torch.stack(activity_steps, dim=1),
+        batched.activity_logits,
+        rtol=2e-3,
+        atol=2e-3,
     )
 
 
@@ -122,13 +130,46 @@ def test_simultaneous_input_and_output_preserves_session_state(model):
         assert len(state.listening_history) == 3
 
 
+def test_silent_activity_does_not_replace_generated_audio_codes(model):
+    initial = torch.full((1, 8), 2047, device="cuda", dtype=torch.long)
+    user = torch.zeros((1, 8), device="cuda", dtype=torch.long)
+    original = (
+        model.activity_head.weight.detach().clone(),
+        model.activity_head.bias.detach().clone(),
+        model.cb0_head.weight.detach().clone(),
+        model.cb0_head.bias.detach().clone(),
+    )
+    try:
+        with torch.no_grad():
+            model.activity_head.weight.zero_()
+            model.activity_head.bias.copy_(torch.tensor([10.0, -10.0], device="cuda"))
+            model.cb0_head.weight.zero_()
+            model.cb0_head.bias.fill_(-10.0)
+            model.cb0_head.bias[17] = 10.0
+        with torch.inference_mode():
+            state = model.new_stream(initial)
+            generated, activity = model.generate_step(user, state)
+        assert int(activity.argmax(dim=-1)) == 0
+        assert int(generated[0, 0]) == 17
+        assert int(state.previous_output[0, 0]) == 17
+    finally:
+        with torch.no_grad():
+            model.activity_head.weight.copy_(original[0])
+            model.activity_head.bias.copy_(original[1])
+            model.cb0_head.weight.copy_(original[2])
+            model.cb0_head.bias.copy_(original[3])
+
+
 def test_training_loss_backpropagates(model):
     user, output, initial = _codes(frames=2)
     model.train()
     result = model(user, output, initial)
     losses = training_loss(
-        result, output, torch.ones(1, 2, device="cuda", dtype=torch.long),
-        torch.ones(1, 2, device="cuda", dtype=torch.bool), model.config,
+        result,
+        output,
+        torch.ones(1, 2, device="cuda", dtype=torch.long),
+        torch.ones(1, 2, device="cuda", dtype=torch.bool),
+        model.config,
     )
     assert torch.isfinite(losses.total)
     losses.total.backward()

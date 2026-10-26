@@ -248,7 +248,6 @@ class StreamingState:
     dialogue_attention: list[AttentionCache | None]
     listening_history: list[torch.Tensor] = field(default_factory=list)
     previous_output: torch.Tensor | None = None
-    silence_codes: torch.Tensor | None = None
 
 
 class DauysHybrid(nn.Module):
@@ -263,9 +262,7 @@ class DauysHybrid(nn.Module):
         self.listening_projection = nn.Linear(
             config.embedding_dim, config.listening_dim
         )
-        self.dialogue_projection = nn.Linear(
-            config.embedding_dim, config.dialogue_dim
-        )
+        self.dialogue_projection = nn.Linear(config.embedding_dim, config.dialogue_dim)
         self.listening = nn.ModuleList(
             MambaBlock(config.listening_dim) for _ in range(config.listening_layers)
         )
@@ -273,7 +270,9 @@ class DauysHybrid(nn.Module):
             MambaBlock(config.dialogue_dim)
             if kind == "mamba2"
             else DialogueBlock(
-                config.dialogue_dim, config.attention_heads, config.ffn_dim,
+                config.dialogue_dim,
+                config.attention_heads,
+                config.ffn_dim,
                 config.attention_window,
             )
             for kind in config.dialogue_blocks
@@ -341,9 +340,7 @@ class DauysHybrid(nn.Module):
             user_state = self.listening_projection(self._embed(previous_user, 0))
             for block in self.listening:
                 user_state = block(user_state)
-            user_context = self.final_norm(
-                self.user_prediction_projection(user_state)
-            )
+            user_context = self.final_norm(self.user_prediction_projection(user_state))
             user_cb0_logits = self.cb0_head(user_context)
             user_depth_logits = self.depth(
                 user_codes[:, :7].transpose(1, 2), user_context
@@ -382,12 +379,14 @@ class DauysHybrid(nn.Module):
                 for block in self.dialogue
             ],
             previous_output=initial_output_codes,
-            silence_codes=initial_output_codes,
         )
 
     @torch.inference_mode()
     def stream_step_teacher(
-        self, user_codes: torch.Tensor, previous_output: torch.Tensor, state: StreamingState
+        self,
+        user_codes: torch.Tensor,
+        previous_output: torch.Tensor,
+        state: StreamingState,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Advance one synchronized frame while preserving both stream states."""
         batch = previous_output.shape[0]
@@ -397,9 +396,7 @@ class DauysHybrid(nn.Module):
         for block, cache in zip(self.listening, state.listening_mamba):
             listening = cast(MambaBlock, block).step(listening, cache)
         state.listening_history.append(listening)
-        history_limit = (
-            self.config.attention_window + self.config.input_delay_frames
-        )
+        history_limit = self.config.attention_window + self.config.input_delay_frames
         if len(state.listening_history) > history_limit:
             state.listening_history.pop(0)
         history = torch.cat(state.listening_history, dim=1)
@@ -417,8 +414,12 @@ class DauysHybrid(nn.Module):
                 attention_cache = state.dialogue_attention[index]
                 assert attention_cache is not None
                 x, updated = cast(DialogueBlock, block).step(
-                    x, history, state.frame_index, listening_positions,
-                    self.config.input_delay_frames, attention_cache,
+                    x,
+                    history,
+                    state.frame_index,
+                    listening_positions,
+                    self.config.input_delay_frames,
+                    attention_cache,
                 )
                 state.dialogue_attention[index] = updated
         state.frame_index += 1
@@ -441,9 +442,5 @@ class DauysHybrid(nn.Module):
             logits = self.depth(prefix, context)[:, 0, -1]
             generated.append(logits.argmax(dim=-1))
         generated_codes = torch.stack(generated, dim=1)
-        speaking = activity.argmax(dim=-1).bool()[:, None]
-        assert state.silence_codes is not None
-        state.previous_output = torch.where(
-            speaking, generated_codes, state.silence_codes
-        )
-        return state.previous_output, activity
+        state.previous_output = generated_codes
+        return generated_codes, activity
