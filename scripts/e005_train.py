@@ -159,6 +159,7 @@ def save_checkpoint(
     metadata: dict[str, Any],
     epoch: int,
     batch_index: int,
+    context_frames: int,
     step: int,
     seen_frames: int,
     best_nll: float,
@@ -171,6 +172,7 @@ def save_checkpoint(
         "metadata": metadata,
         "epoch": epoch,
         "batch_index": batch_index,
+        "context_frames": context_frames,
         "step": step,
         "seen_frames": seen_frames,
         "best_nll": best_nll,
@@ -184,6 +186,25 @@ def save_checkpoint(
     torch.save(payload, temporary)
     temporary.replace(path)
     return digest(path)
+
+
+def write_completion(output: Path, step: int, reason: str) -> None:
+    best = output / "best_nll.pt"
+    latest = output / "latest.pt"
+    if not best.is_file() or not latest.is_file():
+        raise RuntimeError("Training ended without durable checkpoints")
+    (output / "completed.json").write_text(
+        json.dumps(
+            {
+                "step": step,
+                "reason": reason,
+                "best_nll_sha256": digest(best),
+                "latest_sha256": digest(latest),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
 
 def validation(
@@ -421,6 +442,7 @@ def main() -> None:
     parser.add_argument("--tokens", type=Path, required=True)
     parser.add_argument("--mimi-checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--test-manifest", type=Path)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--resume", type=Path)
     args = parser.parse_args()
@@ -432,6 +454,16 @@ def main() -> None:
         raise ValueError("The complete frozen train and validation splits are required")
     if {r["scenario_family"] for r in train} & {r["scenario_family"] for r in val}:
         raise ValueError("Scenario family leakage")
+    if not args.preflight_only:
+        if args.test_manifest is None:
+            raise ValueError("Frozen test metadata is required before training")
+        test = read_manifest(args.test_manifest, "test")
+        if len(test) != 397 or any(
+            {row["scenario_family"] for row in test}
+            & {row["scenario_family"] for row in rows}
+            for rows in (train, val)
+        ):
+            raise ValueError("Incomplete or leaking test metadata")
     if args.output.exists() and not args.preflight_only and args.resume is None:
         raise FileExistsError(args.output)
     torch.manual_seed(42)
@@ -504,6 +536,9 @@ def main() -> None:
         "dataset_revision": REVISION,
         "train_manifest_sha256": digest(args.tokens / "train.jsonl"),
         "validation_manifest_sha256": digest(args.tokens / "validation.jsonl"),
+        "test_manifest_sha256": (
+            digest(args.test_manifest) if args.test_manifest is not None else None
+        ),
         "mimi_sha256": digest(args.mimi_checkpoint),
         "model_config": asdict(config),
         "parameters": model.trainable_parameters(),
@@ -564,6 +599,8 @@ def main() -> None:
         artifact.add_file(str(args.output / "config.json"))
         artifact.add_file(str(args.tokens / "train.jsonl"))
         artifact.add_file(str(args.tokens / "validation.jsonl"))
+        assert args.test_manifest is not None
+        artifact.add_file(str(args.test_manifest))
         wandb_run.log_artifact(artifact)
     started = time.monotonic()
     metrics_path = args.output / "metrics.jsonl"
@@ -705,6 +742,7 @@ def main() -> None:
                         metadata,
                         epoch,
                         index,
+                        context,
                         step,
                         seen_frames,
                         best_nll,
@@ -720,6 +758,7 @@ def main() -> None:
                             metadata,
                             epoch,
                             index,
+                            context,
                             step,
                             seen_frames,
                             best_nll,
@@ -788,8 +827,10 @@ def main() -> None:
                 if checkpoint_due and stale_checks >= 3:
                     print(json.dumps({"early_stopped": True, "step": step}), flush=True)
                     wandb_run.finish()
+                    write_completion(args.output, step, "early_stopping")
                     return
     wandb_run.finish()
+    write_completion(args.output, step, "six_epochs")
 
 
 if __name__ == "__main__":
