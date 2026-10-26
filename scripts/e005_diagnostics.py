@@ -34,18 +34,37 @@ from dauys.config import ModelConfig
 from dauys.model import DauysHybrid, DialogueBlock
 
 SAMPLE_SEED = 42
-ROLLOUT_FRAMES = 128
+ROLLOUT_FRAMES = 256
 WINDOW_FRAMES = 32
+MIN_EARLY_ACTIVE_FRAMES = 16
 MODES = ("original", "silent", "shuffled", "fusion_off", "acoustic")
 
 
-def fixed_rows(rows: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
-    return sorted(
+def fixed_rows(
+    rows: list[dict[str, Any]], count: int, token_root: Path
+) -> list[dict[str, Any]]:
+    ordered = sorted(
         rows,
         key=lambda row: hashlib.sha256(
             f"{SAMPLE_SEED}:{row['id']}".encode()
         ).hexdigest(),
-    )[:count]
+    )
+    selected = []
+    for row in ordered:
+        if row["frames"] < ROLLOUT_FRAMES:
+            continue
+        case = load_case(token_root, row)
+        if (
+            int(case["activity"][:ROLLOUT_FRAMES].sum()) >= MIN_EARLY_ACTIVE_FRAMES
+            and int(case["user_activity"][:ROLLOUT_FRAMES].sum())
+            >= MIN_EARLY_ACTIVE_FRAMES
+        ):
+            selected.append(row)
+        if len(selected) == count:
+            break
+    if len(selected) < count:
+        raise ValueError("Insufficient conversations with early speech on both streams")
+    return selected
 
 
 def matched_alternate(
@@ -723,8 +742,8 @@ def main() -> None:
         row["scenario_family"] for row in validation
     }:
         raise ValueError("Train/validation family leakage")
-    selected = fixed_rows(train, 1 if args.smoke else 10) + fixed_rows(
-        validation, 1 if args.smoke else 20
+    selected = fixed_rows(train, 1 if args.smoke else 10, args.tokens) + fixed_rows(
+        validation, 1 if args.smoke else 20, args.tokens
     )
     pools = {"train": train, "validation": validation}
     selected_ids = {row["id"] for row in selected}
@@ -767,6 +786,7 @@ def main() -> None:
         "sample_seed": SAMPLE_SEED,
         "rollout_frames": ROLLOUT_FRAMES,
         "window_frames": WINDOW_FRAMES,
+        "minimum_active_frames_per_stream_in_rollout": MIN_EARLY_ACTIVE_FRAMES,
         "decoding": "deterministic greedy",
         "mimi_checkpoint_sha256": digest(args.mimi_checkpoint),
         "mimi_package_version": importlib.metadata.version("moshi"),
