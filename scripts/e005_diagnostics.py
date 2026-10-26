@@ -34,7 +34,7 @@ from dauys.config import ModelConfig
 from dauys.model import DauysHybrid, DialogueBlock
 
 SAMPLE_SEED = 42
-ROLLOUT_FRAMES = 256
+ROLLOUT_FRAMES = 160
 WINDOW_FRAMES = 32
 MIN_EARLY_ACTIVE_FRAMES = 16
 MODES = ("original", "silent", "shuffled", "fusion_off", "acoustic")
@@ -725,7 +725,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--train-count", type=int, default=10)
+    parser.add_argument("--validation-count", type=int, default=5)
     args = parser.parse_args()
+    if not (1 <= args.train_count <= 10 and 1 <= args.validation_count <= 20):
+        raise ValueError("Diagnostic sample counts exceed the frozen protocol")
     if args.output.exists() and not args.resume:
         raise FileExistsError(args.output)
     completion = json.loads(
@@ -742,9 +746,9 @@ def main() -> None:
         row["scenario_family"] for row in validation
     }:
         raise ValueError("Train/validation family leakage")
-    selected = fixed_rows(train, 1 if args.smoke else 10, args.tokens) + fixed_rows(
-        validation, 1 if args.smoke else 20, args.tokens
-    )
+    selected = fixed_rows(
+        train, 1 if args.smoke else args.train_count, args.tokens
+    ) + fixed_rows(validation, 1 if args.smoke else args.validation_count, args.tokens)
     pools = {"train": train, "validation": validation}
     selected_ids = {row["id"] for row in selected}
     match_rows = [
@@ -787,6 +791,8 @@ def main() -> None:
         "rollout_frames": ROLLOUT_FRAMES,
         "window_frames": WINDOW_FRAMES,
         "minimum_active_frames_per_stream_in_rollout": MIN_EARLY_ACTIVE_FRAMES,
+        "selected_train_count": 1 if args.smoke else args.train_count,
+        "selected_validation_count": 1 if args.smoke else args.validation_count,
         "decoding": "deterministic greedy",
         "mimi_checkpoint_sha256": digest(args.mimi_checkpoint),
         "mimi_package_version": importlib.metadata.version("moshi"),
