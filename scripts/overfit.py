@@ -292,8 +292,13 @@ def main() -> None:
         generated_codes = torch.stack(generated, dim=-1)
         generated_activity_tensor = torch.stack(generated_activity, dim=-1)
         generated_pcm = decode(codec, generated_codes)[0, 0].float().cpu().numpy()
+        codec_reference_pcm = decode(codec, target)[0, 0].float().cpu().numpy()
     sf.write(output / "generated.wav", generated_pcm, 24_000)
+    sf.write(output / "codec_reference.wav", codec_reference_pcm, 24_000)
     _write_loss_plot(output / "loss.svg", loss_curve, listening_steps)
+    exact_tokens = generated_codes == target
+    exact_frames = exact_tokens.all(dim=1)
+    speech_mask = activity.bool()
     summary = {
         "phase_first_loss": phase_first,
         "phase_last_loss": phase_last,
@@ -303,6 +308,10 @@ def main() -> None:
         "generated_frames": args.frames,
         "target_speech_frames": int(activity.sum()),
         "generated_speech_frames": int(generated_activity_tensor.sum()),
+        "exact_token_fraction": float(exact_tokens.float().mean()),
+        "exact_frames": int(exact_frames.sum()),
+        "exact_speech_frames": int(exact_frames[speech_mask].sum()),
+        "exact_codec_overfit": bool(exact_tokens.all()),
         "free_running_activity_f1": (
             2
             * int(
@@ -320,6 +329,7 @@ def main() -> None:
             "user.wav",
             "target.wav",
             "generated.wav",
+            "codec_reference.wav",
             "summary.json",
             "report.md",
             "loss.svg",
@@ -352,9 +362,13 @@ def main() -> None:
 - Final teacher-forced response loss: {summary["final_response_loss"]:.4f}
 - Free-running speech activity F1: {summary["free_running_activity_f1"]:.4f}
 - Target / generated speech frames: {summary["target_speech_frames"]} / {summary["generated_speech_frames"]}
+- Exact Mimi token fraction: {summary["exact_token_fraction"]:.6f}
+- Exact frames: {summary["exact_frames"]} / {args.frames}
+- Exact speech frames: {summary["exact_speech_frames"]} / {summary["target_speech_frames"]}
+- Exact codec overfit: {summary["exact_codec_overfit"]}
 - Frame-level metrics: `metrics.jsonl`
 - Loss curve: `loss.svg`
-- Fixed audio examples: `user.wav`, `target.wav`, `generated.wav`
+- Fixed audio examples: `user.wav`, `target.wav`, `codec_reference.wav`, `generated.wav`
 - Checkpoint: `checkpoint.pt`
 
 ## Interpretation
