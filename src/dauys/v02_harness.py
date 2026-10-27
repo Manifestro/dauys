@@ -14,9 +14,7 @@ from .v02_evaluation import Suite, bootstrap_mean_ci, crossed_minimal_pair_accur
 class ProbeBackend(Protocol):
     """Hohere-owned suite adapter; text is used only for output evaluation."""
 
-    def e1(
-        self, model: DauysHybrid, item: Mapping[str, Any]
-    ) -> Mapping[str, Any]: ...
+    def e1(self, model: DauysHybrid, item: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
     def e2(
         self, model: DauysHybrid, item: Mapping[str, Any], decoding: DecodingConfig
@@ -70,9 +68,7 @@ class FrozenSuiteHarness:
             self.backend.e2(model, item, self.decoding)
             for item in self.suites["E2"].items
         ]
-        e3_matrices = [
-            self.backend.e3(model, item) for item in self.suites["E3"].items
-        ]
+        e3_matrices = [self.backend.e3(model, item) for item in self.suites["E3"].items]
         matrices = torch.stack(e3_matrices)
         e3 = crossed_minimal_pair_accuracy(matrices)
         e4 = [float(self.backend.e4(model, item)) for item in self.suites["E4"].items]
@@ -126,6 +122,10 @@ class FrozenSuiteHarness:
                 [item["backchannel_rate"] for item in e6]
             ),
         }
+        if all("premature_takeover" in item for item in e6):
+            metrics["eval/timing/e6_premature_takeover"] = self._mean(
+                [item["premature_takeover"] for item in e6]
+            )
         results: dict[str, list[Any]] = {
             "E1": e1,
             "E2": e2,
@@ -166,8 +166,8 @@ class FrozenSuiteHarness:
                     [values[index]["yield_within_500ms"] for index in indices]
                 )
             else:
-                metrics["eval/generalization/e6_unseen_backchannel_rate"] = (
-                    self._mean([values[index]["backchannel_rate"] for index in indices])
+                metrics["eval/generalization/e6_unseen_backchannel_rate"] = self._mean(
+                    [values[index]["backchannel_rate"] for index in indices]
                 )
         for item in self.suites["E4"].items:
             probe = item.get("probe", item)
@@ -197,7 +197,11 @@ class FrozenSuiteHarness:
         ]
         if placement:
             metrics["eval/timing/e6_backchannel_placement"] = self._mean(placement)
-        blocks = model.fusion_block_indices() if hasattr(model, "fusion_block_indices") else ()
+        blocks = (
+            model.fusion_block_indices()
+            if hasattr(model, "fusion_block_indices")
+            else ()
+        )
         if blocks:
             for block in blocks:
                 off_scores = []
@@ -210,9 +214,13 @@ class FrozenSuiteHarness:
                             f"E1 fusion ablation is missing dialogue block {block}"
                         )
                     off_scores.append(
-                        float(ablations[str(block)] if str(block) in ablations else ablations[block])
+                        float(
+                            ablations[str(block)]
+                            if str(block) in ablations
+                            else ablations[block]
+                        )
                     )
-                metrics[f"eval/training/cross_attention/block_{block}_delta_cb0_nll"] = (
-                    self._mean(off_scores) - metrics["eval/codebook/e1_cb0_nll"]
-                )
+                metrics[
+                    f"eval/training/cross_attention/block_{block}_delta_cb0_nll"
+                ] = self._mean(off_scores) - metrics["eval/codebook/e1_cb0_nll"]
         return metrics

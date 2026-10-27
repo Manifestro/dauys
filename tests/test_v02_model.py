@@ -15,6 +15,7 @@ from dauys.decoding import DecodingConfig
 from dauys.model import DauysHybrid
 from dauys.streaming import AudioSession
 from dauys.v02_data import CorpusRecord, sha256
+from dauys.v02_hohere_backend import HohereProbeBackend
 from dauys.v02_runner import (
     TrainingPlan,
     load_initial_weights,
@@ -124,6 +125,21 @@ def test_v02_batched_and_incremental_logits_agree_without_regularizers(model):
     )
 
 
+def test_hohere_e1_scores_real_model_logits(model, tmp_path):
+    model.eval()
+    backend = HohereProbeBackend(tmp_path, {}, object(), torch.zeros(8))
+    backend._token_cache["probe"] = (
+        torch.randint(0, 2048, (8, 3)),
+        torch.randint(0, 2048, (8, 3)),
+    )
+    scores = backend.e1(model, {"id": "probe"})
+    assert math.isfinite(scores["cb0_nll"])
+    assert math.isfinite(scores["depth_nll"])
+    assert set(scores["fusion_off_cb0_nll_by_block"]) == {
+        str(index) for index in model.fusion_block_indices()
+    }
+
+
 def test_source_masks_isolate_gradients(model):
     model.eval()
     toggles = Toggles(
@@ -215,9 +231,7 @@ def test_s0_logs_conditional_delta_without_optimizing_contrast(model):
 
 def test_s0_uses_baseline_decay_and_s1_uses_matrix_only_decay(model):
     baseline = optimizer_groups_for_track(model, toggles_for_track("S0", "dialogue"))
-    regularized = optimizer_groups_for_track(
-        model, toggles_for_track("S1", "dialogue")
-    )
+    regularized = optimizer_groups_for_track(model, toggles_for_track("S1", "dialogue"))
     assert len(baseline) == 1 and baseline[0]["weight_decay"] == 0.01
     assert {group["weight_decay"] for group in regularized} == {0.0, 0.05}
 
@@ -281,8 +295,12 @@ def test_all_greedy_decoding_matches_legacy_generation(model):
 def test_generate_step_returns_threshold_decision(model):
     model.eval()
     batch = _batch("hohere")
-    always_on = replace(DecodingConfig(), activity_mode="hysteresis", theta_on=0.0, theta_off=0.0)
-    always_off = replace(DecodingConfig(), activity_mode="hysteresis", theta_on=1.0, theta_off=1.0)
+    always_on = replace(
+        DecodingConfig(), activity_mode="hysteresis", theta_on=0.0, theta_off=0.0
+    )
+    always_off = replace(
+        DecodingConfig(), activity_mode="hysteresis", theta_on=1.0, theta_off=1.0
+    )
     with torch.no_grad():
         on = model.generate_step(
             batch.user_codes[:, :, 0],
@@ -368,16 +386,22 @@ def test_local_training_step_saves_scored_checkpoint(model, tmp_path):
     saved = torch.load(result, map_location="cpu", weights_only=True)
     assert saved["step"] == 1
     assert saved["evaluation"] == {"eval/step": 1.0}
-    metrics = json.loads((tmp_path / "run" / "metrics.jsonl").read_text().splitlines()[0])
+    metrics = json.loads(
+        (tmp_path / "run" / "metrics.jsonl").read_text().splitlines()[0]
+    )
     groups = [
-        value for key, value in metrics.items() if key.startswith("train/gradient_norm/")
+        value
+        for key, value in metrics.items()
+        if key.startswith("train/gradient_norm/")
     ]
     assert math.sqrt(sum(value * value for value in groups)) == pytest.approx(
         metrics["train/gradient_norm"], rel=1e-4
     )
 
 
-def test_resume_restores_checkpoint_and_removes_uncommitted_metric_rows(model, tmp_path):
+def test_resume_restores_checkpoint_and_removes_uncommitted_metric_rows(
+    model, tmp_path
+):
     records = []
     for index, skill in enumerate(("simple_dialogue", "interruption")):
         batch = _batch("hohere")
@@ -453,7 +477,9 @@ def test_resume_restores_checkpoint_and_removes_uncommitted_metric_rows(model, t
         resume=True,
     )
     assert torch.load(result, weights_only=False)["step"] == 3
-    metrics = [json.loads(line) for line in (output / "metrics.jsonl").read_text().splitlines()]
+    metrics = [
+        json.loads(line) for line in (output / "metrics.jsonl").read_text().splitlines()
+    ]
     assert [row["step"] for row in metrics if "train/total" in row] == [1, 2, 3]
 
     sft_plan = TrainingPlan(
