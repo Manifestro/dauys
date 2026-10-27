@@ -21,8 +21,10 @@ CONFIGS = {
 }
 
 
-def _rows(repo: str, config: str, revision: str):
-    dataset = load_dataset(repo, config, split="test", revision=revision, token=True)
+def _rows(repo: str, config: str, revision: str, *, streaming: bool = False):
+    dataset = load_dataset(
+        repo, config, split="test", revision=revision, token=True, streaming=streaming
+    )
     for name, feature in dataset.features.items():
         if isinstance(feature, Audio):
             dataset = dataset.cast_column(name, Audio(decode=False))
@@ -72,7 +74,7 @@ def main() -> None:
         if name not in args.suites:
             continue
         items = []
-        for row in _rows(args.repo, config, resolved):
+        for row in _rows(args.repo, config, resolved, streaming=args.limit is not None):
             if args.limit is not None and len(items) >= args.limit:
                 break
             item = materialize_bench_row(row, name, root)
