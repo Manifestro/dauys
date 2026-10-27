@@ -17,6 +17,7 @@ from torch.nn import functional as F
 from .codec import decode, encode, load_mimi
 from .decoding import DecodingConfig
 from .model import DauysHybrid, previous_frames
+from .v02_batched_probes import BatchedProbeScorer
 from .v02_data import CorpusDataset, CorpusRecord
 from .v02_evaluation import Suite, word_error_rate
 from .v02_harness import FrozenSuiteHarness
@@ -40,6 +41,7 @@ class HohereProbeBackend:
         asr: Transcript | None = None,
         relevance: Relevance | None = None,
         seeds: int = 3,
+        token_cache: str | Path | None = None,
     ) -> None:
         if silence_codes.shape != (8,) or seeds < 1:
             raise ValueError(
@@ -53,6 +55,46 @@ class HohereProbeBackend:
         self.relevance = relevance
         self.seeds = seeds
         self._token_cache: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+        self.batched: BatchedProbeScorer | None = None
+        self.token_cache_path = Path(token_cache) if token_cache else None
+        self._cached_entries = 0
+        if self.token_cache_path is not None and self.token_cache_path.is_file():
+            payload = torch.load(self.token_cache_path, weights_only=True)
+            if payload["suites"] != self._suite_identity():
+                raise ValueError("Token cache was built for different suites")
+            self._token_cache = {
+                key: (user.long(), output.long())
+                for key, (user, output) in payload["tokens"].items()
+            }
+            self._cached_entries = len(self._token_cache)
+
+    def _suite_identity(self) -> dict[str, str]:
+        return {
+            name: suite.manifest_sha256 for name, suite in sorted(self.suites.items())
+        }
+
+    def save_token_cache(self) -> bool:
+        """Persist Mimi codes of the frozen probes; they never depend on the model."""
+        if (
+            self.token_cache_path is None
+            or len(self._token_cache) == self._cached_entries
+        ):
+            return False
+        self.token_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.token_cache_path.with_suffix(".tmp")
+        torch.save(
+            {
+                "suites": self._suite_identity(),
+                "tokens": {
+                    key: (user.to(torch.int16), output.to(torch.int16))
+                    for key, (user, output) in self._token_cache.items()
+                },
+            },
+            temporary,
+        )
+        temporary.replace(self.token_cache_path)
+        self._cached_entries = len(self._token_cache)
+        return True
 
     def _audio(self, item: Mapping[str, Any], field: str) -> np.ndarray:
         asset = item["audio"][field]
@@ -423,7 +465,14 @@ def create_evaluator(
         asr=_callback(os.environ["DAUYS_ASR_CALLBACK"]),
         relevance=_callback(os.environ["DAUYS_RELEVANCE_CALLBACK"]),
         seeds=int(os.environ.get("DAUYS_PROBE_SEEDS", "3")),
+        token_cache=os.environ.get("DAUYS_TOKEN_CACHE") or None,
     )
+    if os.environ.get("DAUYS_BATCHED_PROBES", "1") != "0":
+        backend.batched = BatchedProbeScorer(
+            backend,
+            _callback(os.environ["DAUYS_ASR_CALLBACK"] + "_batch"),
+            _callback(os.environ["DAUYS_RELEVANCE_CALLBACK"] + "_batch"),
+        )
     training_sample = CorpusDataset(records[: min(16, len(records))], crop_frames=256)
 
     @torch.inference_mode()

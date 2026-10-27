@@ -63,23 +63,34 @@ class FrozenSuiteHarness:
     def __call__(self, model: DauysHybrid, step: int) -> dict[str, float]:
         if step < 0 or model.training:
             raise ValueError("Evaluation requires a nonnegative step and eval mode")
-        e1 = [self.backend.e1(model, item) for item in self.suites["E1"].items]
-        e2 = [
-            self.backend.e2(model, item, self.decoding)
-            for item in self.suites["E2"].items
-        ]
-        e3_matrices = [self.backend.e3(model, item) for item in self.suites["E3"].items]
+        batched = getattr(self.backend, "batched", None)
+        if batched is not None:
+            scored = batched.score_all(model, self.decoding)
+            e1, e2, e3_matrices, e4, e5, e6 = (
+                scored[f"E{index}"] for index in range(1, 7)
+            )
+        else:
+            e1 = [self.backend.e1(model, item) for item in self.suites["E1"].items]
+            e2 = [
+                self.backend.e2(model, item, self.decoding)
+                for item in self.suites["E2"].items
+            ]
+            e3_matrices = [
+                self.backend.e3(model, item) for item in self.suites["E3"].items
+            ]
+            e4 = [
+                float(self.backend.e4(model, item)) for item in self.suites["E4"].items
+            ]
+            e5 = [
+                self.backend.e5(model, item, self.decoding)
+                for item in self.suites["E5"].items
+            ]
+            e6 = [
+                self.backend.e6(model, item, self.decoding)
+                for item in self.suites["E6"].items
+            ]
         matrices = torch.stack(e3_matrices)
         e3 = crossed_minimal_pair_accuracy(matrices)
-        e4 = [float(self.backend.e4(model, item)) for item in self.suites["E4"].items]
-        e5 = [
-            self.backend.e5(model, item, self.decoding)
-            for item in self.suites["E5"].items
-        ]
-        e6 = [
-            self.backend.e6(model, item, self.decoding)
-            for item in self.suites["E6"].items
-        ]
         e1_accuracy = self._mean([item["cb0_accuracy"] for item in e1])
         train_accuracy = (
             self.train_cb0_accuracy(model)

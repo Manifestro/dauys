@@ -45,6 +45,7 @@ def main() -> None:
     started = time.time()
     metrics = harness(model, int(payload.get("step", 0)))
     metrics["eval/seconds"] = time.time() - started
+    harness.backend.save_token_cache()  # type: ignore[attr-defined]
     args.output.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
     print(json.dumps(metrics, sort_keys=True))
 

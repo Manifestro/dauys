@@ -31,8 +31,14 @@ def _whisper() -> WhisperTranscriber:
 
 def whisper_asr(waveform: np.ndarray) -> str:
     """Greedy Whisper transcript; Whisper hallucinations on silence count as empty."""
-    result = _whisper().confident([np.asarray(waveform, dtype=np.float32)])[0]
-    return "" if result["filtered"] else str(result["text"])
+    return whisper_asr_batch([waveform])[0]
+
+
+def whisper_asr_batch(waveforms: list[np.ndarray]) -> list[str]:
+    results = _whisper().confident(
+        [np.asarray(waveform, dtype=np.float32) for waveform in waveforms]
+    )
+    return ["" if result["filtered"] else str(result["text"]) for result in results]
 
 
 @cache
@@ -46,27 +52,50 @@ def _judge() -> tuple[Any, Any]:
     return tokenizer, model.eval()
 
 
-@torch.inference_mode()
 def llm_relevance(user_text: str, transcript: str) -> float:
     """0–3 relevance from a fixed local LLM with greedy decoding."""
-    if len(transcript.split()) == 0:
-        return 0.0
+    return llm_relevance_batch([(user_text, transcript)])[0]
+
+
+@torch.inference_mode()
+def llm_relevance_batch(
+    pairs: list[tuple[str, str]], batch_size: int = 32
+) -> list[float]:
+    """Batched form of llm_relevance; empty transcripts score 0 without the judge."""
+    scores = [0.0] * len(pairs)
+    pending = [i for i, (_, reply) in enumerate(pairs) if reply.split()]
+    if not pending:
+        return scores
     tokenizer, model = _judge()
-    messages = [
-        {
-            "role": "user",
-            "content": RELEVANCE_PROMPT.format(user=user_text, reply=transcript),
-        }
-    ]
-    prompt = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
-    )
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    output = model.generate(**inputs, max_new_tokens=4, do_sample=False)
-    answer = tokenizer.decode(
-        output[0, inputs["input_ids"].shape[1] :], skip_special_tokens=True
-    )
-    match = re.search(r"[0-3]", answer)
-    if match is None:
-        raise ValueError(f"Relevance judge returned no score: {answer!r}")
-    return float(match.group())
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    for start in range(0, len(pending), batch_size):
+        chunk = pending[start : start + batch_size]
+        prompts = [
+            tokenizer.apply_chat_template(
+                [
+                    {
+                        "role": "user",
+                        "content": RELEVANCE_PROMPT.format(
+                            user=pairs[i][0], reply=pairs[i][1]
+                        ),
+                    }
+                ],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            for i in chunk
+        ]
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(model.device)
+        output = model.generate(**inputs, max_new_tokens=4, do_sample=False)
+        answers = tokenizer.batch_decode(
+            output[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True
+        )
+        for index, answer in zip(chunk, answers, strict=True):
+            match = re.search(r"[0-3]", answer)
+            if match is None:
+                raise ValueError(f"Relevance judge returned no score: {answer!r}")
+            scores[index] = float(match.group())
+    return scores
