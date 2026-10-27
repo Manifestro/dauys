@@ -41,8 +41,10 @@ def _judge() -> tuple[Any, Any]:
 
     name = os.environ.get("DAUYS_JUDGE_MODEL", "Qwen/Qwen3-8B")
     tokenizer = AutoTokenizer.from_pretrained(name)
-    model = AutoModelForCausalLM.from_pretrained(name, dtype=torch.bfloat16).to(
-        "cuda" if torch.cuda.is_available() else "cpu"
+    model = AutoModelForCausalLM.from_pretrained(
+        name,
+        dtype=torch.bfloat16,
+        device_map="cuda" if torch.cuda.is_available() else "cpu",
     )
     return tokenizer, model.eval()
 
