@@ -12,6 +12,8 @@ import torch
 
 FRAME_SAMPLES = 1920
 SAMPLE_RATE = 24_000
+EVAL_SEEN_VOICES = frozenset({"af_sarah", "am_michael", "bf_emma", "bm_george"})
+EVAL_UNSEEN_VOICES = frozenset({"af_river", "am_adam", "af_sky", "bf_lily"})
 
 
 def companion_from_label(row: Mapping[str, Any], frames: int) -> dict[str, Any]:
@@ -90,10 +92,16 @@ def bench_item(row: Mapping[str, Any], suite: str) -> dict[str, Any]:
     if suite not in {f"E{number}" for number in range(1, 7)}:
         raise ValueError("Unknown Hohere suite")
     voice = str(row["voice_a"])
+    if "voice_a_seen_in_training" in row:
+        unseen = not bool(row["voice_a_seen_in_training"])
+    elif suite == "E1" and voice in EVAL_SEEN_VOICES | EVAL_UNSEEN_VOICES:
+        unseen = voice in EVAL_UNSEEN_VOICES
+    else:
+        raise ValueError("Hohere benchmark voice provenance is missing")
     item: dict[str, Any] = {
         "id": str(row["id"]),
         "user_voice": voice,
-        "unseen_voice": not bool(row["voice_a_seen_in_training"]),
+        "unseen_voice": unseen,
         "family": str(row.get("scenario") or f"hohere-bench/{suite}/{row['id']}"),
     }
     if suite == "E3":

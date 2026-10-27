@@ -114,3 +114,13 @@ def test_benchmark_rejects_inconsistent_frame_count():
             },
             "E1",
         )
+
+
+def test_e1_legacy_export_voice_flag_uses_published_voice_lists():
+    base = {
+        "id": "e1",
+        "sample_rate": 24_000,
+        "duration_samples": 3840,
+    }
+    assert not bench_item({**base, "voice_a": "af_sarah"}, "E1")["unseen_voice"]
+    assert bench_item({**base, "voice_a": "af_sky"}, "E1")["unseen_voice"]
