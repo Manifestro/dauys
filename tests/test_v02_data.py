@@ -163,6 +163,22 @@ def test_stage_sampler_is_seeded_and_uses_both_sources(tmp_path):
     assert sum(item.source != "hohere" for item in dialogue) == 15
 
 
+def test_proxy_pretraining_accepts_only_single_stream_speech(tmp_path):
+    manifest, companion = _corpus(tmp_path)
+    records = [
+        item
+        for item in load_corpus(tmp_path, manifest, companion)
+        if item.source.startswith("1a_")
+    ]
+    selected = sample_records(
+        records, "pretrain", 0.0, 20, 42, single_stream_only=True
+    )
+    assert len(selected) == 20
+    assert {item.source for item in selected} == {"1a_on_A", "1a_on_B"}
+    with pytest.raises(ValueError, match="configured speech sources"):
+        sample_records(records, "pretrain", 0.0, 1, 42)
+
+
 def test_targeted_posttraining_samples_only_selected_skill(tmp_path):
     manifest, companion = _corpus(tmp_path)
     records = load_corpus(tmp_path, manifest, companion)

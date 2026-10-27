@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import random
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -135,7 +136,7 @@ def load_corpus(
 
 
 def assert_suite_is_disjoint(
-    training: list[CorpusRecord], suite: list[dict[str, Any]]
+    training: list[CorpusRecord], suite: Sequence[Mapping[str, Any]]
 ) -> None:
     train_ids = {record.id for record in training}
     families = {record.family for record in training}
@@ -277,6 +278,7 @@ def sample_records(
     seed: int,
     replay_fraction: float = 0.15,
     replay_offset: int = 0,
+    single_stream_only: bool = False,
 ) -> list[CorpusRecord]:
     if (
         not 0 <= progress <= 1
@@ -289,10 +291,12 @@ def sample_records(
     if stage == "pretrain":
         single = [record for record in records if record.source.startswith("1a_")]
         dialogue = [record for record in records if record.source == "1b"]
-        if not single or not dialogue:
+        if not single or (not single_stream_only and not dialogue):
             raise ValueError(
-                "Pre-training requires both single speech and two-party sources"
+                "Pre-training requires the configured speech sources"
             )
+        if single_stream_only:
+            return [rng.choice(single) for _ in range(count)]
         return [
             rng.choice(single if rng.random() < 0.7 else dialogue) for _ in range(count)
         ]

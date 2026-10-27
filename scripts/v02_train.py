@@ -150,8 +150,11 @@ def main() -> None:
         raise ValueError("Targeted SFT requires a selected Stage 2 checkpoint")
     if args.unscored_smoke and args.steps > 2:
         raise ValueError("An unscored smoke run is limited to two optimizer steps")
-    if not args.unscored_smoke and (not suites or not args.evaluator):
-        raise ValueError("Research training requires E1–E6 and an evaluator")
+    proxy_pretrain = args.track == "P" and args.stage == "pretrain"
+    if not args.unscored_smoke and not args.evaluator:
+        raise ValueError("Research training requires an evaluator")
+    if not args.unscored_smoke and not proxy_pretrain and not suites:
+        raise ValueError("Research training requires E1–E6")
     baseline = (
         json.loads(args.baseline_metrics.read_text())
         if args.baseline_metrics is not None

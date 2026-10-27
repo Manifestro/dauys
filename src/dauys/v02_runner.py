@@ -143,6 +143,7 @@ def _batch_indices(
             plan.seed + step,
             replay_fraction=0.0 if plan.track in ("FT", "SFT") else 0.15,
             replay_offset=step * plan.batch_size,
+            single_stream_only=plan.stage == "pretrain" and plan.track == "P",
         )
         batches.append(
             [
@@ -195,13 +196,14 @@ def _truncate_metrics_to_step(path: Path, step: int) -> None:
     temporary.replace(path)
 
 
-def _validate_evaluation(scores: dict[str, float], stage: Stage) -> None:
+def _validate_evaluation(scores: dict[str, float], stage: Stage, track: Track) -> None:
     if stage == "pretrain":
         required = {
             "eval/pretrain/continuation_wer",
             "eval/codebook/cb0_accuracy_gap",
-            "eval/timing/heldout_1b_activity_f1",
         }
+        if track == "PRE":
+            required.add("eval/timing/heldout_1b_activity_f1")
     else:
         required = {
             "eval/codebook/e1_cb0_nll",
@@ -459,7 +461,7 @@ def train(
                     finally:
                         model.train()
                     if not allow_unscored_smoke:
-                        _validate_evaluation(evaluation, plan.stage)
+                        _validate_evaluation(evaluation, plan.stage, plan.track)
                     metrics_stream.write(
                         json.dumps({"step": step, **evaluation}) + "\n"
                     )

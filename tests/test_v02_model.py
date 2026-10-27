@@ -18,6 +18,7 @@ from dauys.v02_data import CorpusRecord, sha256
 from dauys.v02_hohere_backend import HohereProbeBackend
 from dauys.v02_runner import (
     TrainingPlan,
+    _validate_evaluation,
     load_initial_weights,
     optimizer_groups_for_track,
     toggles_for_track,
@@ -138,6 +139,16 @@ def test_hohere_e1_scores_real_model_logits(model, tmp_path):
     assert set(scores["fusion_off_cb0_nll_by_block"]) == {
         str(index) for index in model.fusion_block_indices()
     }
+
+
+def test_proxy_pretraining_does_not_require_two_party_gate():
+    scores = {
+        "eval/pretrain/continuation_wer": 0.25,
+        "eval/codebook/cb0_accuracy_gap": 0.08,
+    }
+    _validate_evaluation(scores, "pretrain", "P")
+    with pytest.raises(ValueError, match="heldout_1b_activity_f1"):
+        _validate_evaluation(scores, "pretrain", "PRE")
 
 
 def test_source_masks_isolate_gradients(model):
