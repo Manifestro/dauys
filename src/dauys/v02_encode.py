@@ -174,13 +174,14 @@ def encode_conversations(
                 codec, torch.from_numpy(padded.copy())[None, None].to(device)
             )
             if not torch.equal(codes[channel, :, : first.frames], reference[0]):
-                mismatched = int(
-                    (codes[channel, :, : first.frames] != reference[0]).sum()
-                )
+                differences = codes[channel, :, : first.frames] != reference[0]
+                mismatched = int(differences.sum())
+                by_codebook = differences.sum(dim=1).tolist()
                 total = reference[0].numel()
                 raise ValueError(
                     f"Batched Mimi encoding differs from single-item encoding "
-                    f"on channel {channel}: {mismatched}/{total} tokens"
+                    f"on channel {channel}: {mismatched}/{total} tokens, "
+                    f"by codebook {by_codebook}"
                 )
     result = []
     for index, item in enumerate(conversations):
