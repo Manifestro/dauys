@@ -174,8 +174,13 @@ def encode_conversations(
                 codec, torch.from_numpy(padded.copy())[None, None].to(device)
             )
             if not torch.equal(codes[channel, :, : first.frames], reference[0]):
+                mismatched = int(
+                    (codes[channel, :, : first.frames] != reference[0]).sum()
+                )
+                total = reference[0].numel()
                 raise ValueError(
-                    "Batched Mimi encoding differs from single-item encoding"
+                    f"Batched Mimi encoding differs from single-item encoding "
+                    f"on channel {channel}: {mismatched}/{total} tokens"
                 )
     result = []
     for index, item in enumerate(conversations):
@@ -217,7 +222,9 @@ def encode_long_conversation(
             stop = min(conversation.frames, start + chunk_frames)
             codes = encode(
                 codec,
-                pcm_batch[:, :, start * FRAME_SAMPLES : stop * FRAME_SAMPLES].to(device),
+                pcm_batch[:, :, start * FRAME_SAMPLES : stop * FRAME_SAMPLES].to(
+                    device
+                ),
             )
             if codes.shape != (2, 8, stop - start):
                 raise ValueError("Streaming Mimi returned an unexpected token shape")
