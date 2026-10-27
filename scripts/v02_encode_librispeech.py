@@ -96,6 +96,7 @@ def main() -> None:
         "--local-root",
         type=Path,
         help="Extracted OpenSLR SLR12 split (e.g. LibriSpeech/train-clean-360) "
+        "or a downloaded Hugging Face parquet split (e.g. clean/train.360) "
         "instead of streaming from Hugging Face",
     )
     args = parser.parse_args()
@@ -128,7 +129,16 @@ def main() -> None:
     ].cpu()
     _atomic(root / "silence_codes.json", (json.dumps(silence.tolist()) + "\n").encode())
     stream: Any
-    if args.local_root is not None:
+    parquet = sorted(args.local_root.glob("*.parquet")) if args.local_root else []
+    if parquet:
+        args.dataset = DATASET
+        stream = load_dataset(
+            "parquet",
+            data_files=[str(x) for x in parquet],
+            split="train",
+            streaming=True,
+        ).cast_column("audio", Audio(decode=False))
+    elif args.local_root is not None:
         stream = (
             {
                 "id": path.stem,
