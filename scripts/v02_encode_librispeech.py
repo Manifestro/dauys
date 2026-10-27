@@ -189,9 +189,10 @@ def main() -> None:
         print(json.dumps({"encoded": len(pending), "processed": processed}), flush=True)
         pending = []
 
+    rows_iterator = iter(stream)
     with ThreadPoolExecutor(max_workers=args.decode_workers) as executor:
         while True:
-            rows = list(itertools.islice(stream, args.decode_workers * 4))
+            rows = list(itertools.islice(rows_iterator, args.decode_workers * 4))
             if not rows:
                 break
             decoded = executor.map(_audio, rows)
