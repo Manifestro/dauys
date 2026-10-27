@@ -269,11 +269,9 @@ def own_history_rollout(
     was_training = model.training
     model.eval()
     try:
-        with torch.autocast(
-            batch.user_codes.device.type,
-            dtype=torch.bfloat16,
-            enabled=batch.user_codes.device.type == "cuda",
-        ):
+        # Mamba's streaming conv state is float32; a bf16 autocast step input
+        # makes the fused causal-conv update reject the mixed dtypes.
+        with torch.autocast(batch.user_codes.device.type, enabled=False):
             state = model.prefill_teacher(
                 batch.user_codes[:, :, :start],
                 batch.output_codes[:, :, :start],
