@@ -345,6 +345,11 @@ class StreamingState:
     activity_state: ActivityState | None = None
 
 
+def previous_frames(codes: torch.Tensor, initial_codes: torch.Tensor) -> torch.Tensor:
+    """Shift a [batch, 8, frames] stream one frame right behind its initial frame."""
+    return torch.cat((initial_codes.unsqueeze(-1), codes[:, :, :-1]), dim=-1)
+
+
 class DauysHybrid(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
@@ -356,6 +361,20 @@ class DauysHybrid(nn.Module):
         self.roles = nn.Embedding(2, config.embedding_dim)
         self.listening_projection = nn.Linear(
             config.embedding_dim, config.listening_dim
+        )
+        # The ear can also hear the model's own previous frame. "labeled" gives
+        # it a separate input path; "mixed" adds it to the user's sound through
+        # the same path, as one microphone would. Both start silent.
+        self.self_hearing_projection = (
+            nn.Linear(config.embedding_dim, config.listening_dim)
+            if config.self_hearing == "labeled"
+            else None
+        )
+        if self.self_hearing_projection is not None:
+            nn.init.zeros_(self.self_hearing_projection.weight)
+            nn.init.zeros_(self.self_hearing_projection.bias)
+        self.self_hearing_gate = (
+            nn.Parameter(torch.zeros(())) if config.self_hearing == "mixed" else None
         )
         self.frame_dropout = nn.Dropout(config.dropout)
         self.dialogue_projection = nn.Linear(config.embedding_dim, config.dialogue_dim)
@@ -482,21 +501,47 @@ class DauysHybrid(nn.Module):
             x = sum(self.embeddings[q](codes[:, q]) for q in range(8))
         return self.frame_dropout(x / math.sqrt(8) + self.roles.weight[role])
 
+    def ear_input(
+        self,
+        user_embedding: torch.Tensor,
+        own_previous_codes: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Project what the ear hears at frame t: A_t, plus B_(t-1) if enabled.
+
+        The model's own sound always arrives one frame late, so the ear never
+        hears the frame the dialogue tower is predicting.
+        """
+        if self.config.self_hearing == "none":
+            return self.listening_projection(user_embedding)
+        if own_previous_codes is None:
+            raise ValueError("Self-hearing requires the model's previous frames")
+        if self.self_hearing_gate is not None:
+            own = self._embed(own_previous_codes, 0)
+            return self.listening_projection(
+                user_embedding + self.self_hearing_gate * own
+            )
+        assert self.self_hearing_projection is not None
+        return self.listening_projection(user_embedding) + self.self_hearing_projection(
+            self._embed(own_previous_codes, 1)
+        )
+
     def encode_listening(
         self,
         user_codes: torch.Tensor,
         acoustic_dropout: float = 0.0,
         acoustic_dropout_items: torch.Tensor | None = None,
         acoustic_keep_mask: torch.Tensor | None = None,
+        own_previous_codes: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        listening = self.listening_projection(
+        listening = self.ear_input(
             self._embed(
                 user_codes,
                 0,
                 acoustic_dropout,
                 acoustic_dropout_items,
                 acoustic_keep_mask,
-            )
+            ),
+            own_previous_codes,
         )
         for block in self.listening:
             listening = block(listening)
@@ -559,8 +604,16 @@ class DauysHybrid(nn.Module):
         batch, _, frames = user_codes.shape
         if frames < 1 or initial_output_codes.shape != (batch, 8):
             raise ValueError("An initial valid silence frame is required")
+        own_previous = previous_frames(
+            output_codes if history_codes is None else history_codes,
+            initial_output_codes,
+        )
         listening = self.encode_listening(
-            user_codes, acoustic_dropout, acoustic_dropout_items, acoustic_keep_mask
+            user_codes,
+            acoustic_dropout,
+            acoustic_dropout_items,
+            acoustic_keep_mask,
+            own_previous,
         )
         dialogue_listening = listening
         if detach_listening is not None:
@@ -666,14 +719,14 @@ class DauysHybrid(nn.Module):
         state = self.new_stream(initial_output_codes)
         if frames == 0:
             return state
-        listening = self.listening_projection(self._embed(user_codes, 0))
+        previous = torch.cat(
+            (initial_output_codes.unsqueeze(-1), output_codes[:, :, :-1]), dim=-1
+        )
+        listening = self.ear_input(self._embed(user_codes, 0), previous)
         for index, block in enumerate(self.listening):
             listening = cast(MambaBlock, block).prefill(
                 listening, state.listening_mamba[index]
             )
-        previous = torch.cat(
-            (initial_output_codes.unsqueeze(-1), output_codes[:, :, :-1]), dim=-1
-        )
         x = self.dialogue_projection(self._embed(previous, 1))
         positions = torch.arange(frames, device=x.device)
         for index, block in enumerate(self.dialogue):
@@ -721,7 +774,9 @@ class DauysHybrid(nn.Module):
         batch = previous_output.shape[0]
         if user_codes.shape != (batch, 8) or previous_output.shape != (batch, 8):
             raise ValueError("Each stream step requires [batch, 8] codes")
-        listening = self.listening_projection(self._embed(user_codes[:, :, None], 0))
+        listening = self.ear_input(
+            self._embed(user_codes[:, :, None], 0), previous_output[:, :, None]
+        )
         for block, cache in zip(self.listening, state.listening_mamba):
             listening = cast(MambaBlock, block).step(listening, cache)
         state.listening_history.append(listening)

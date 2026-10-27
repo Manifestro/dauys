@@ -16,7 +16,7 @@ from torch.nn import functional as F
 
 from .codec import decode, encode, load_mimi
 from .decoding import DecodingConfig
-from .model import DauysHybrid
+from .model import DauysHybrid, previous_frames
 from .v02_data import CorpusDataset, CorpusRecord
 from .v02_evaluation import Suite, word_error_rate
 from .v02_harness import FrozenSuiteHarness
@@ -150,11 +150,14 @@ class HohereProbeBackend:
     ) -> float:
         device = next(model.parameters()).device
         a, b = user[None].to(device), output[None].to(device)
-        listening = model.encode_listening(a)
+        silence = self.silence_codes[None].to(device)
+        listening = model.encode_listening(
+            a, own_previous_codes=previous_frames(b, silence)
+        )
         states = model.run_dialogue(
             listening,
             b,
-            self.silence_codes[None].to(device),
+            silence,
             fusion_off_blocks=fusion_off,
         )
         logits = model.cb0_head(states)[0]

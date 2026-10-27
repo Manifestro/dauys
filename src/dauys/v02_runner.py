@@ -116,18 +116,21 @@ def load_initial_weights(
     from .checkpoint import load_research_checkpoint
 
     payload = load_research_checkpoint(checkpoint)
-    result = model.load_state_dict(payload["model"], strict=not from_v01)
+    result = model.load_state_dict(payload["model"], strict=False)
+    # Self-hearing inputs are new and start silent, so a checkpoint trained
+    # without them still fits.
+    allowed: tuple[str, ...] = ("self_hearing_",)
     if from_v01:
-        allowed = (
+        allowed += (
             "listening_norm.",
             "listening_cb0_head.",
             "listening_activity_head.",
             "activity_ahead_head.",
         )
-        if result.unexpected_keys or any(
-            not key.startswith(allowed) for key in result.missing_keys
-        ):
-            raise ValueError("R0 checkpoint is incompatible with v0.2 geometry")
+    if result.unexpected_keys or any(
+        not key.startswith(allowed) for key in result.missing_keys
+    ):
+        raise ValueError("Initial checkpoint is incompatible with this geometry")
 
 
 def _batch_indices(

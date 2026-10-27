@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .model import DauysHybrid
+from .model import DauysHybrid, previous_frames
 
 Source = Literal["1a_on_A", "1a_on_B", "1b", "hohere"]
 Stage = Literal["pretrain", "dialogue", "posttrain"]
@@ -242,15 +242,16 @@ def response_onset_mask(
             if event.type != "response_onset" or event.speaker != "B":
                 continue
             start = event.start_frame
-            if start < 0 or start >= frames or any(
-                other.start_frame <= start < other.end_frame for other in excluded
+            if (
+                start < 0
+                or start >= frames
+                or any(
+                    other.start_frame <= start < other.end_frame for other in excluded
+                )
             ):
                 continue
             stop = start
-            while (
-                stop < min(frames, start + 25)
-                and bool(output_activity[item, stop])
-            ):
+            while stop < min(frames, start + 25) and bool(output_activity[item, stop]):
                 stop += 1
             mask[item, start:stop] = True
     return mask
@@ -470,6 +471,7 @@ def objective(
                     weights.acoustic_dropout if toggles.acoustic_dropout else 0.0,
                     flags["acoustic"],
                     acoustic_keep_mask,
+                    previous_frames(history, batch.initial_output_codes),
                 )
                 negative_context = model.run_dialogue(
                     negative_states,

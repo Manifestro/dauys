@@ -39,6 +39,7 @@ class ModelConfig:
     dialogue_d_state: int = 64
     mamba_norm_eps: float | None = None
     zero_init_fusion_outputs: bool = False
+    self_hearing: str = "none"
 
     @classmethod
     def stage1(cls) -> "ModelConfig":
@@ -104,6 +105,7 @@ class ModelConfig:
             zero_init_fusion_outputs=bool(
                 data["model"].get("zero_init_fusion_outputs", False)
             ),
+            self_hearing=str(data["listening"].get("self_hearing", "none")),
         )
         config.validate(data)
         return config
@@ -175,9 +177,13 @@ class ModelConfig:
             raise ValueError("Unexpected parameter cap")
         if self.max_trainable_parameters < 1:
             raise ValueError("Invalid parameter cap")
-        if (self.mamba_norm_eps is not None or self.zero_init_fusion_outputs) and (
-            not self.proxy
-        ):
+        if self.self_hearing not in ("none", "labeled", "mixed"):
+            raise ValueError("Self-hearing must be none, labeled or mixed")
+        if (
+            self.mamba_norm_eps is not None
+            or self.zero_init_fusion_outputs
+            or self.self_hearing != "none"
+        ) and not self.proxy:
             raise ValueError("Initialization changes are limited to proxy configs")
         if self.name == "dauys-hybrid-v0.1" and (
             self.dropout
