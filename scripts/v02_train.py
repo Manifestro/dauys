@@ -64,7 +64,9 @@ def main() -> None:
         choices=("FT", "P", "PRE", "S0", "S1", "S2", "S3", "S4", "S5", "SFT"),
         required=True,
     )
-    parser.add_argument("--stage", choices=("pretrain", "dialogue", "posttrain"), required=True)
+    parser.add_argument(
+        "--stage", choices=("pretrain", "dialogue", "posttrain"), required=True
+    )
     parser.add_argument("--steps", type=int, required=True)
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--context-frames", type=int, default=256)
@@ -112,9 +114,7 @@ def main() -> None:
         raise ValueError("Track P requires the proxy configuration")
     if args.track == "PRE" and config.proxy:
         raise ValueError("Full pre-training requires the full configuration")
-    git_sha = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], text=True
-    ).strip()
+    git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     git_status = subprocess.check_output(
         ["git", "status", "--porcelain", "--untracked-files=all"], text=True
     ).strip()
@@ -150,17 +150,22 @@ def main() -> None:
         raise ValueError("Targeted SFT requires a selected Stage 2 checkpoint")
     if args.unscored_smoke and args.steps > 2:
         raise ValueError("An unscored smoke run is limited to two optimizer steps")
-    proxy_pretrain = args.track == "P" and args.stage == "pretrain"
+    proxy_track = args.track == "P"
     if not args.unscored_smoke and not args.evaluator:
         raise ValueError("Research training requires an evaluator")
-    if not args.unscored_smoke and not proxy_pretrain and not suites:
+    if not args.unscored_smoke and not proxy_track and not suites:
         raise ValueError("Research training requires E1–E6")
     baseline = (
         json.loads(args.baseline_metrics.read_text())
         if args.baseline_metrics is not None
         else None
     )
-    if not args.unscored_smoke and args.stage in ("dialogue", "posttrain") and baseline is None:
+    if (
+        not args.unscored_smoke
+        and not proxy_track
+        and args.stage in ("dialogue", "posttrain")
+        and baseline is None
+    ):
         raise ValueError("Dialogue training requires frozen R0 baseline metrics")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = DauysHybrid(config).to(device)

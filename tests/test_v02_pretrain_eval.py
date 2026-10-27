@@ -12,12 +12,15 @@ from torch import nn
 
 from dauys.config import ModelConfig
 from dauys.model import DauysHybrid
+from dauys.v02_data import CorpusRecord, sha256
 from dauys.v02_pretrain_eval import (
     CONTINUATION_FRAMES,
     FRAME_SAMPLES,
     PretrainEvaluator,
     word_statistics,
 )
+from dauys.v02_proxy_dialogue_eval import HeldoutDialogueEvaluator
+from dauys.v02_runner import _validate_evaluation
 
 
 class _CausalMamba(nn.Module):
@@ -108,3 +111,44 @@ def test_evaluator_reports_required_pretraining_metrics(model, tmp_path):
     assert math.isfinite(scores["eval/codebook/cb0_accuracy_gap"])
     assert len(list((tmp_path / "step-000005").glob("*.wav"))) == 2
     assert np.isfinite(scores["eval/codebook/heldout_cb0_nll"])
+
+
+def _hohere_record(tmp_path, identity, frames=7):
+    path = tmp_path / f"{identity}.pt"
+    activity = torch.tensor([0, 1, 1, 0, 1, 1, 0][:frames], dtype=torch.uint8)
+    torch.save(
+        {
+            "user": torch.randint(0, 2048, (8, frames), dtype=torch.int16),
+            "target": torch.randint(0, 2048, (8, frames), dtype=torch.int16),
+            "user_activity": 1 - activity,
+            "activity": activity,
+        },
+        path,
+    )
+    return CorpusRecord(
+        id=identity,
+        source="hohere",
+        skill="simple_dialogue",
+        family=f"family_{identity}",
+        user_voice="voice",
+        frames=frames,
+        token_path=path,
+        token_sha256=sha256(path),
+        activity_a=tuple((1 - activity).tolist()),
+        activity_b=tuple(activity.tolist()),
+        events=(),
+    )
+
+
+def test_heldout_dialogue_evaluator_reports_proxy_dialogue_metrics(model, tmp_path):
+    heldout = [_hohere_record(tmp_path, f"held_{i}", 5 + i) for i in range(3)]
+    training = [_hohere_record(tmp_path, f"train_{i}") for i in range(2)]
+    evaluator = HeldoutDialogueEvaluator(
+        heldout, training, torch.zeros(8, dtype=torch.long), batch_size=2
+    )
+    scores = evaluator(model, 3)
+    _validate_evaluation(scores, "dialogue", "P")
+    assert all(math.isfinite(value) for value in scores.values())
+    assert 0 <= scores["eval/timing/heldout_activity_f1"] <= 1
+    with pytest.raises(ValueError, match="overlap"):
+        HeldoutDialogueEvaluator(heldout, heldout, torch.zeros(8, dtype=torch.long))

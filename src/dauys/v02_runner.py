@@ -205,6 +205,11 @@ def _validate_evaluation(scores: dict[str, float], stage: Stage, track: Track) -
         }
         if track == "PRE":
             required.add("eval/timing/heldout_1b_activity_f1")
+    elif track == "P":
+        required = {
+            "eval/codebook/heldout_cb0_nll",
+            "eval/codebook/cb0_accuracy_gap",
+        }
     else:
         required = {
             "eval/codebook/e1_cb0_nll",
@@ -226,7 +231,9 @@ def _validate_evaluation(scores: dict[str, float], stage: Stage, track: Track) -
 
 
 def _module_gradient_norms(model: DauysHybrid) -> dict[str, float]:
-    totals = {name: 0.0 for name in ("listening", "dialogue", "depth", "heads", "shared")}
+    totals = {
+        name: 0.0 for name in ("listening", "dialogue", "depth", "heads", "shared")
+    }
     for name, parameter in model.named_parameters():
         if parameter.grad is None:
             continue
@@ -241,7 +248,9 @@ def _module_gradient_norms(model: DauysHybrid) -> dict[str, float]:
         else:
             group = "shared"
         totals[group] += float(parameter.grad.detach().float().square().sum())
-    return {f"train/gradient_norm/{key}": math.sqrt(value) for key, value in totals.items()}
+    return {
+        f"train/gradient_norm/{key}": math.sqrt(value) for key, value in totals.items()
+    }
 
 
 @torch.inference_mode()
@@ -300,6 +309,7 @@ def train(
         raise ValueError("A frozen-suite evaluator is required for a research run")
     if (
         plan.stage in ("dialogue", "posttrain")
+        and plan.track != "P"
         and not allow_unscored_smoke
         and selection_baseline is None
     ):
@@ -471,7 +481,10 @@ def train(
                         log_callback({"step": float(step), **evaluation})
                 improved = False
                 if evaluation is not None and plan.stage in ("dialogue", "posttrain"):
-                    cb0_nll = evaluation.get("eval/codebook/e1_cb0_nll")
+                    cb0_nll = evaluation.get(
+                        "eval/codebook/e1_cb0_nll",
+                        evaluation.get("eval/codebook/heldout_cb0_nll"),
+                    )
                     if cb0_nll is not None and cb0_nll < best_cb0_nll:
                         eligible = selection_baseline is None or (
                             evaluation["eval/timing/e2_onset_latency_ms"]
