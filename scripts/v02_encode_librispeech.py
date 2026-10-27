@@ -141,7 +141,7 @@ def main() -> None:
             active = _activity(audio, frames)
             on_a = hashlib.sha256(identity.encode()).digest()[0] % 2 == 0
             source = "1a_on_A" if on_a else "1a_on_B"
-            real_codes = codes[index, :, :frames]
+            real_codes = codes[index, :, :frames].clone()
             silent_codes = silence[:, None].expand(8, frames).short().clone()
             cache = {
                 "user": real_codes if on_a else silent_codes,
