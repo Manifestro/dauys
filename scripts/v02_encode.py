@@ -86,6 +86,9 @@ def main() -> None:
     )
     parser.add_argument("--allow-derived-labels", action="store_true")
     args = parser.parse_args()
+    # cuDNN TF32 convolutions make batched Mimi codes differ from single-item
+    # codes in about 1% of acoustic tokens; full precision makes them identical.
+    torch.backends.cudnn.allow_tf32 = False
     if not (args.labels_parquet or args.labels_revision or args.allow_derived_labels):
         raise ValueError(
             "Official Hohere labels are required for a research token cache"

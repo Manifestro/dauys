@@ -93,6 +93,9 @@ def main() -> None:
     parser.add_argument("--decode-workers", type=int, default=6)
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
+    # cuDNN TF32 convolutions make batched Mimi codes differ from single-item
+    # codes in about 1% of acoustic tokens; full precision makes them identical.
+    torch.backends.cudnn.allow_tf32 = False
     if not torch.cuda.is_available():
         raise RuntimeError("LibriSpeech Mimi encoding requires CUDA")
     if min(args.batch_items, args.max_padded_frames, args.decode_workers) < 1:
