@@ -31,7 +31,7 @@ The first candidate model is specified in [Dauys Hybrid v0.1](docs/architecture.
 
 ## Repository status
 
-Hybrid v0.1 model code, a frame-synchronous audio interface, and pre-training checks are present. They have not yet been run against a working Mimi checkpoint or the target accelerator. Training runs, checkpoints, benchmarks, and audio demonstrations have not been produced.
+Stage 1 and Hybrid v0.1 are complete as a research baseline. The repository contains the packaged model, frame-synchronous audio interface, and training and evaluation tools used for the experiments. Datasets, checkpoints, generated audio, and run records are stored outside Git.
 
 Use Python 3.11 or 3.12 and uv for the package environment. The local version file selects Python 3.11:
 
