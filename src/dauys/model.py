@@ -10,6 +10,13 @@ from torch import nn
 from torch.nn import functional as F
 
 from .config import ModelConfig
+from .decoding import (
+    ActivityState,
+    DecodingConfig,
+    activity_decision,
+    cb0_decision,
+    sample_logits,
+)
 
 
 def _rope(x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
@@ -26,7 +33,12 @@ def _rope(x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
 
 
 def _attention(
-    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, allowed: torch.Tensor
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    allowed: torch.Tensor,
+    dropout: float = 0.0,
+    training: bool = False,
 ) -> torch.Tensor:
     scores = torch.matmul(q.float(), k.float().transpose(-2, -1))
     scores *= q.shape[-1] ** -0.5
@@ -34,6 +46,7 @@ def _attention(
     weights = scores.softmax(dim=-1)
     weights = weights * allowed[None, None]
     weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-9)
+    weights = F.dropout(weights, p=dropout, training=training)
     return torch.matmul(weights.to(v.dtype), v)
 
 
@@ -45,13 +58,21 @@ class AttentionCache:
 
 
 class FrameAttention(nn.Module):
-    def __init__(self, query_dim: int, context_dim: int, heads: int, window: int):
+    def __init__(
+        self,
+        query_dim: int,
+        context_dim: int,
+        heads: int,
+        window: int,
+        attention_dropout: float = 0.0,
+    ):
         super().__init__()
         if query_dim % heads:
             raise ValueError("Attention width must be divisible by heads")
         self.heads = heads
         self.head_dim = query_dim // heads
         self.window = window
+        self.attention_dropout = attention_dropout
         self.query = nn.Linear(query_dim, query_dim)
         self.key = nn.Linear(context_dim, query_dim)
         self.value = nn.Linear(context_dim, query_dim)
@@ -74,7 +95,7 @@ class FrameAttention(nn.Module):
         v = self._heads(self.value(context))
         distance = query_positions[:, None] - input_delay - context_positions[None, :]
         allowed = (distance >= 0) & (distance < self.window)
-        result = _attention(q, k, v, allowed)
+        result = _attention(q, k, v, allowed, self.attention_dropout, self.training)
         result = result.transpose(1, 2).contiguous().view(query.shape)
         output = self.output(result)
         return output * allowed.any(dim=-1)[None, :, None]
@@ -93,7 +114,7 @@ class FrameAttention(nn.Module):
         k = k[:, :, -self.window :]
         v = v[:, :, -self.window :]
         allowed = torch.ones((1, k.shape[2]), dtype=torch.bool, device=x.device)
-        result = _attention(q, k, v, allowed)
+        result = _attention(q, k, v, allowed, self.attention_dropout, self.training)
         result = result.transpose(1, 2).contiguous().view(x.shape)
         return self.output(result), AttentionCache(k, v, None)
 
@@ -110,11 +131,12 @@ class SwiGLU(nn.Module):
 
 
 class MambaBlock(nn.Module):
-    def __init__(self, width: int):
+    def __init__(self, width: int, dropout: float = 0.0):
         super().__init__()
         from mamba_ssm import Mamba2
 
         self.norm = nn.RMSNorm(width)
+        self.residual_dropout = nn.Dropout(dropout)
         self.mixer = Mamba2(
             d_model=width,
             d_state=64,
@@ -126,13 +148,13 @@ class MambaBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.mixer(self.norm(x))
+        return x + self.residual_dropout(self.mixer(self.norm(x)))
 
     def step(
         self, x: torch.Tensor, state: tuple[torch.Tensor, torch.Tensor]
     ) -> torch.Tensor:
         mixed, _, _ = self.mixer.step(self.norm(x), *state)
-        return x + mixed
+        return x + self.residual_dropout(mixed)
 
     def prefill(
         self, x: torch.Tensor, state: tuple[torch.Tensor, torch.Tensor]
@@ -152,21 +174,35 @@ class MambaBlock(nn.Module):
             mixed = self.mixer(self.norm(x), inference_params=params)
         finally:
             mamba2.causal_conv1d_fn = fused_conv
-        return x + mixed
+        return x + self.residual_dropout(mixed)
 
     def allocate_state(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self.mixer.allocate_inference_cache(batch_size, max_seqlen=1)
 
 
 class DialogueBlock(nn.Module):
-    def __init__(self, width: int, heads: int, ffn_dim: int, window: int):
+    def __init__(
+        self,
+        width: int,
+        listening_dim: int,
+        heads: int,
+        ffn_dim: int,
+        window: int,
+        dropout: float = 0.0,
+        attention_dropout: float = 0.0,
+    ):
         super().__init__()
         self.self_norm = nn.RMSNorm(width)
-        self.self_attention = FrameAttention(width, width, heads, window)
+        self.self_attention = FrameAttention(
+            width, width, heads, window, attention_dropout
+        )
         self.cross_norm = nn.RMSNorm(width)
-        self.cross_attention = FrameAttention(width, 384, heads, window)
+        self.cross_attention = FrameAttention(
+            width, listening_dim, heads, window, attention_dropout
+        )
         self.ffn_norm = nn.RMSNorm(width)
         self.ffn = SwiGLU(width, ffn_dim)
+        self.residual_dropout = nn.Dropout(dropout)
 
     def forward(
         self,
@@ -174,13 +210,19 @@ class DialogueBlock(nn.Module):
         listening: torch.Tensor,
         positions: torch.Tensor,
         delay: int,
+        cross_enabled: bool = True,
     ) -> torch.Tensor:
         normalized = self.self_norm(x)
-        x = x + self.self_attention(normalized, normalized, positions, positions)
-        x = x + self.cross_attention(
-            self.cross_norm(x), listening, positions, positions, delay
+        x = x + self.residual_dropout(
+            self.self_attention(normalized, normalized, positions, positions)
         )
-        return x + self.ffn(self.ffn_norm(x))
+        if cross_enabled:
+            x = x + self.residual_dropout(
+                self.cross_attention(
+                    self.cross_norm(x), listening, positions, positions, delay
+                )
+            )
+        return x + self.residual_dropout(self.ffn(self.ffn_norm(x)))
 
     def step(
         self,
@@ -194,12 +236,18 @@ class DialogueBlock(nn.Module):
         update, cache = self.self_attention.step_self(
             self.self_norm(x), position, cache
         )
-        x = x + update
+        x = x + self.residual_dropout(update)
         query_position = torch.tensor([position], device=x.device)
-        x = x + self.cross_attention(
-            self.cross_norm(x), listening, query_position, listening_positions, delay
+        x = x + self.residual_dropout(
+            self.cross_attention(
+                self.cross_norm(x),
+                listening,
+                query_position,
+                listening_positions,
+                delay,
+            )
         )
-        return x + self.ffn(self.ffn_norm(x)), cache
+        return x + self.residual_dropout(self.ffn(self.ffn_norm(x))), cache
 
 
 class DepthBlock(nn.Module):
@@ -265,6 +313,9 @@ class ModelOutput:
     dialogue_states: torch.Tensor
     user_cb0_logits: torch.Tensor | None = None
     user_depth_logits: torch.Tensor | None = None
+    listening_cb0_logits: torch.Tensor | None = None
+    listening_activity_logits: torch.Tensor | None = None
+    activity_ahead_logits: torch.Tensor | None = None
 
 
 @dataclass
@@ -275,6 +326,7 @@ class StreamingState:
     dialogue_attention: list[AttentionCache | None]
     listening_history: list[torch.Tensor] = field(default_factory=list)
     previous_output: torch.Tensor | None = None
+    activity_state: ActivityState | None = None
 
 
 class DauysHybrid(nn.Module):
@@ -289,18 +341,23 @@ class DauysHybrid(nn.Module):
         self.listening_projection = nn.Linear(
             config.embedding_dim, config.listening_dim
         )
+        self.frame_dropout = nn.Dropout(config.dropout)
         self.dialogue_projection = nn.Linear(config.embedding_dim, config.dialogue_dim)
         self.listening = nn.ModuleList(
-            MambaBlock(config.listening_dim) for _ in range(config.listening_layers)
+            MambaBlock(config.listening_dim, config.dropout)
+            for _ in range(config.listening_layers)
         )
         self.dialogue = nn.ModuleList(
-            MambaBlock(config.dialogue_dim)
+            MambaBlock(config.dialogue_dim, config.dropout)
             if kind == "mamba2"
             else DialogueBlock(
                 config.dialogue_dim,
+                config.listening_dim,
                 config.attention_heads,
                 config.ffn_dim,
                 config.attention_window,
+                config.dropout,
+                config.attention_dropout,
             )
             for kind in config.dialogue_blocks
         )
@@ -310,6 +367,22 @@ class DauysHybrid(nn.Module):
         )
         self.cb0_head = nn.Linear(config.dialogue_dim, config.vocab_size)
         self.activity_head = nn.Linear(config.dialogue_dim, 2)
+        self.listening_norm = (
+            nn.RMSNorm(config.listening_dim) if config.listening_prediction else None
+        )
+        self.listening_cb0_head = (
+            nn.Linear(config.listening_dim, config.vocab_size)
+            if config.listening_prediction
+            else None
+        )
+        self.listening_activity_head = (
+            nn.Linear(config.listening_dim, 2) if config.listening_prediction else None
+        )
+        self.activity_ahead_head = (
+            nn.Linear(config.dialogue_dim, 2 * config.activity_ahead_horizon)
+            if config.activity_ahead_horizon
+            else None
+        )
         self.depth = DepthDecoder(config, self.embeddings)
         if self.trainable_parameters() > config.max_trainable_parameters:
             raise ValueError("Trainable parameter budget exceeded")
@@ -317,13 +390,125 @@ class DauysHybrid(nn.Module):
     def trainable_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-    def _embed(self, codes: torch.Tensor, role: int) -> torch.Tensor:
+    def fusion_block_indices(self) -> tuple[int, ...]:
+        return tuple(
+            index
+            for index, block in enumerate(self.dialogue)
+            if isinstance(block, DialogueBlock)
+        )
+
+    def set_regularization(self, enabled: bool) -> None:
+        """Apply the Stage 2 ablation toggle without changing model geometry."""
+        for module in self.modules():
+            if isinstance(module, nn.Dropout):
+                module.p = self.config.dropout if enabled else 0.0
+            elif isinstance(module, FrameAttention):
+                module.attention_dropout = (
+                    self.config.attention_dropout if enabled else 0.0
+                )
+
+    def _embed(
+        self,
+        codes: torch.Tensor,
+        role: int,
+        acoustic_dropout: float = 0.0,
+        acoustic_dropout_items: torch.Tensor | None = None,
+        acoustic_keep_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if codes.ndim != 3 or codes.shape[1] != self.config.codebooks:
             raise ValueError("Codes must have shape [batch, 8, frames]")
         if codes.dtype not in (torch.int32, torch.int64):
             raise TypeError("Codes must be integer indices")
-        x = sum(self.embeddings[q](codes[:, q]) for q in range(8))
-        return x / math.sqrt(8) + self.roles.weight[role]
+        if acoustic_dropout and self.training and role == 0:
+            if not 0 <= acoustic_dropout < 1:
+                raise ValueError("Invalid acoustic dropout probability")
+            acoustic = torch.stack(
+                [self.embeddings[q](codes[:, q]) for q in range(1, 8)], dim=2
+            )
+            if acoustic_keep_mask is not None:
+                if acoustic_keep_mask.shape != acoustic.shape[:3]:
+                    raise ValueError(
+                        "Acoustic keep mask must have shape [batch, frames, 7]"
+                    )
+                keep = acoustic_keep_mask
+            else:
+                keep = (
+                    torch.rand(acoustic.shape[:3], device=codes.device)
+                    >= acoustic_dropout
+                )
+            if acoustic_dropout_items is not None:
+                if acoustic_dropout_items.shape != (codes.shape[0],):
+                    raise ValueError(
+                        "Acoustic dropout item mask must have shape [batch]"
+                    )
+                keep |= ~acoustic_dropout_items[:, None, None]
+            count = keep.sum(dim=2).clamp_min(1)
+            scale = torch.sqrt(7 / count.to(acoustic.dtype))
+            x = (
+                self.embeddings[0](codes[:, 0])
+                + (acoustic * keep[..., None]).sum(dim=2) * scale[..., None]
+            )
+        else:
+            x = sum(self.embeddings[q](codes[:, q]) for q in range(8))
+        return self.frame_dropout(x / math.sqrt(8) + self.roles.weight[role])
+
+    def encode_listening(
+        self,
+        user_codes: torch.Tensor,
+        acoustic_dropout: float = 0.0,
+        acoustic_dropout_items: torch.Tensor | None = None,
+        acoustic_keep_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        listening = self.listening_projection(
+            self._embed(
+                user_codes,
+                0,
+                acoustic_dropout,
+                acoustic_dropout_items,
+                acoustic_keep_mask,
+            )
+        )
+        for block in self.listening:
+            listening = block(listening)
+        return listening
+
+    def run_dialogue(
+        self,
+        listening: torch.Tensor,
+        output_codes: torch.Tensor,
+        initial_output_codes: torch.Tensor,
+        history_codes: torch.Tensor | None = None,
+        fusion_off_blocks: frozenset[int] = frozenset(),
+    ) -> torch.Tensor:
+        if output_codes.ndim != 3 or output_codes.shape[1] != 8:
+            raise ValueError("Output codes must have shape [batch, 8, frames]")
+        batch, _, frames = output_codes.shape
+        if listening.shape != (batch, frames, self.config.listening_dim):
+            raise ValueError("Listening states must match output frames")
+        if initial_output_codes.shape != (batch, 8):
+            raise ValueError("Initial output codes must have shape [batch, 8]")
+        if history_codes is not None and history_codes.shape != output_codes.shape:
+            raise ValueError("History codes must match target code shape")
+        if not fusion_off_blocks.issubset(self.fusion_block_indices()):
+            raise ValueError("Only dialogue fusion blocks can be ablated")
+        history = output_codes if history_codes is None else history_codes
+        previous = torch.cat(
+            (initial_output_codes.unsqueeze(-1), history[:, :, :-1]), dim=-1
+        )
+        x = self.dialogue_projection(self._embed(previous, 1))
+        positions = torch.arange(frames, device=x.device)
+        for index, block in enumerate(self.dialogue):
+            if isinstance(block, MambaBlock):
+                x = block(x)
+            else:
+                x = block(
+                    x,
+                    listening,
+                    positions,
+                    self.config.input_delay_frames,
+                    cross_enabled=index not in fusion_off_blocks,
+                )
+        return self.final_norm(x)
 
     def forward(
         self,
@@ -332,6 +517,11 @@ class DauysHybrid(nn.Module):
         initial_output_codes: torch.Tensor,
         initial_user_codes: torch.Tensor | None = None,
         history_codes: torch.Tensor | None = None,
+        detach_listening: torch.Tensor | None = None,
+        acoustic_dropout: float = 0.0,
+        acoustic_dropout_items: torch.Tensor | None = None,
+        acoustic_keep_mask: torch.Tensor | None = None,
+        fusion_off_blocks: frozenset[int] = frozenset(),
     ) -> ModelOutput:
         """Teacher-forced prediction of B_t using A_<=t and B_<t."""
         if user_codes.shape != output_codes.shape:
@@ -339,23 +529,25 @@ class DauysHybrid(nn.Module):
         batch, _, frames = user_codes.shape
         if frames < 1 or initial_output_codes.shape != (batch, 8):
             raise ValueError("An initial valid silence frame is required")
-        if history_codes is not None and history_codes.shape != output_codes.shape:
-            raise ValueError("History codes must match target code shape")
-        history = output_codes if history_codes is None else history_codes
-        previous = torch.cat(
-            (initial_output_codes.unsqueeze(-1), history[:, :, :-1]), dim=-1
+        listening = self.encode_listening(
+            user_codes, acoustic_dropout, acoustic_dropout_items, acoustic_keep_mask
         )
-        listening = self.listening_projection(self._embed(user_codes, 0))
-        for block in self.listening:
-            listening = block(listening)
-        x = self.dialogue_projection(self._embed(previous, 1))
-        positions = torch.arange(frames, device=x.device)
-        for block in self.dialogue:
-            if isinstance(block, MambaBlock):
-                x = block(x)
-            else:
-                x = block(x, listening, positions, self.config.input_delay_frames)
-        x = self.final_norm(x)
+        dialogue_listening = listening
+        if detach_listening is not None:
+            if detach_listening.shape != (batch,):
+                raise ValueError("Listening detach mask must have shape [batch]")
+            dialogue_listening = torch.where(
+                detach_listening[:, None, None],
+                listening.detach(),
+                listening,
+            )
+        x = self.run_dialogue(
+            dialogue_listening,
+            output_codes,
+            initial_output_codes,
+            history_codes,
+            fusion_off_blocks,
+        )
         user_cb0_logits = None
         user_depth_logits = None
         if initial_user_codes is not None:
@@ -372,6 +564,21 @@ class DauysHybrid(nn.Module):
             user_depth_logits = self.depth(
                 user_codes[:, :7].transpose(1, 2), user_context
             )
+        listening_cb0_logits = None
+        listening_activity_logits = None
+        if self.listening_norm is not None:
+            assert self.listening_cb0_head is not None
+            assert self.listening_activity_head is not None
+            normalized_listening = self.listening_norm(listening)
+            listening_cb0_logits = self.listening_cb0_head(normalized_listening)
+            listening_activity_logits = self.listening_activity_head(
+                normalized_listening
+            )
+        activity_ahead_logits = None
+        if self.activity_ahead_head is not None:
+            activity_ahead_logits = self.activity_ahead_head(x).reshape(
+                batch, frames, self.config.activity_ahead_horizon, 2
+            )
         return ModelOutput(
             cb0_logits=self.cb0_head(x),
             activity_logits=self.activity_head(x),
@@ -379,6 +586,9 @@ class DauysHybrid(nn.Module):
             dialogue_states=x,
             user_cb0_logits=user_cb0_logits,
             user_depth_logits=user_depth_logits,
+            listening_cb0_logits=listening_cb0_logits,
+            listening_activity_logits=listening_activity_logits,
+            activity_ahead_logits=activity_ahead_logits,
         )
 
     def new_stream(self, initial_output_codes: torch.Tensor) -> StreamingState:
@@ -517,19 +727,42 @@ class DauysHybrid(nn.Module):
 
     @torch.inference_mode()
     def generate_step(
-        self, user_codes: torch.Tensor, state: StreamingState
+        self,
+        user_codes: torch.Tensor,
+        state: StreamingState,
+        decoding: DecodingConfig | None = None,
+        generator: torch.Generator | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Generate one complete Mimi frame while continuing to listen."""
+        """Generate one frame; return logits for legacy calls, else a decision."""
         if state.previous_output is None:
             raise ValueError("Streaming state has no previous output frame")
         cb0, activity, context = self.stream_step_teacher(
             user_codes, state.previous_output, state
         )
-        generated = [cb0.argmax(dim=-1)]
+        if decoding is None:
+            generated = [cb0.argmax(dim=-1)]
+        else:
+            decoding.validate()
+            if state.activity_state is None:
+                state.activity_state = ActivityState.silent(cb0.shape[0], cb0.device)
+            speaking = activity_decision(
+                activity, decoding, state.activity_state, generator
+            )
+            generated = [cb0_decision(cb0, speaking, decoding, generator)]
         for target in range(1, 8):
             prefix = torch.stack(generated, dim=-1)[:, None]
             logits = self.depth(prefix, context)[:, 0, -1]
-            generated.append(logits.argmax(dim=-1))
+            if decoding is not None and decoding.depth_mode == "sample":
+                generated.append(
+                    sample_logits(
+                        logits,
+                        decoding.depth_temperature,
+                        decoding.depth_top_k,
+                        generator,
+                    )
+                )
+            else:
+                generated.append(logits.argmax(dim=-1))
         generated_codes = torch.stack(generated, dim=1)
         state.previous_output = generated_codes
-        return generated_codes, activity
+        return generated_codes, speaking if decoding is not None else activity

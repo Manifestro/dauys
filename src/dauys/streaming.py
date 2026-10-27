@@ -6,22 +6,39 @@ from typing import Self
 import torch
 
 from .codec import validate_codes, validate_pcm
+from .decoding import DecodingConfig, normalize_step_activity
 from .model import DauysHybrid, StreamingState
 
 
 class AudioSession:
-    def __init__(self, model: DauysHybrid, codec, batch_size: int):
+    """One synchronized audio session; step returns PCM and activity decisions."""
+    def __init__(
+        self,
+        model: DauysHybrid,
+        codec,
+        batch_size: int,
+        decoding: DecodingConfig | None = None,
+        generator: torch.Generator | None = None,
+    ):
         if batch_size < 1:
             raise ValueError("Batch size must be positive")
         self.model = model
         self.codec = codec
         self.batch_size = batch_size
+        self.decoding = (
+            DecodingConfig.v02_default()
+            if decoding is None and model.config.name == "dauys-hybrid-v0.2"
+            else decoding
+        )
+        self.generator = generator
         self._stack = ExitStack()
         self.state: StreamingState | None = None
 
     def __enter__(self) -> Self:
         if self.state is not None:
             raise RuntimeError("Session is already active")
+        if self.model.training:
+            raise ValueError("Streaming requires model.eval()")
         device = next(self.model.parameters()).device
         silence = torch.zeros(self.batch_size, 1, 1920, device=device)
         with torch.no_grad():
@@ -48,10 +65,10 @@ class AudioSession:
         validate_codes(user_codes)
         if user_codes.shape != (self.batch_size, 8, 1):
             raise ValueError("Mimi did not return exactly one user frame")
-        output_codes, activity_logits = self.model.generate_step(
-            user_codes[:, :, 0], self.state
+        output_codes, activity = self.model.generate_step(
+            user_codes[:, :, 0], self.state, self.decoding, self.generator
         )
         output_pcm = self.codec.decode(output_codes[:, :, None])
         if output_pcm.shape != (self.batch_size, 1, 1920):
             raise ValueError("Mimi did not decode exactly one output frame")
-        return output_pcm, activity_logits
+        return output_pcm, normalize_step_activity(activity)
