@@ -92,6 +92,12 @@ def main() -> None:
     parser.add_argument("--max-padded-frames", type=int, default=4096)
     parser.add_argument("--decode-workers", type=int, default=6)
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--local-root",
+        type=Path,
+        help="Extracted OpenSLR SLR12 split (e.g. LibriSpeech/train-clean-360) "
+        "instead of streaming from Hugging Face",
+    )
     args = parser.parse_args()
     # cuDNN TF32 convolutions make batched Mimi codes differ from single-item
     # codes in about 1% of acoustic tokens; full precision makes them identical.
@@ -100,7 +106,14 @@ def main() -> None:
         raise RuntimeError("LibriSpeech Mimi encoding requires CUDA")
     if min(args.batch_items, args.max_padded_frames, args.decode_workers) < 1:
         raise ValueError("Batch and worker settings must be positive")
-    revision = HfApi().dataset_info(args.dataset, revision=args.revision).sha
+    if args.local_root is not None:
+        if not args.local_root.is_dir():
+            raise ValueError(f"Local LibriSpeech split is missing: {args.local_root}")
+        args.dataset = "openslr/slr12"
+        args.split = args.local_root.name
+        revision = "local"
+    else:
+        revision = HfApi().dataset_info(args.dataset, revision=args.revision).sha
     if not revision:
         raise ValueError("Could not resolve the LibriSpeech revision")
     root = args.output
@@ -114,11 +127,26 @@ def main() -> None:
         0, :, 0
     ].cpu()
     _atomic(root / "silence_codes.json", (json.dumps(silence.tolist()) + "\n").encode())
-    stream = load_dataset(
-        args.dataset, args.config, split=args.split, revision=revision, streaming=True
-    )
-    if isinstance(stream.features["audio"], Audio):
-        stream = stream.cast_column("audio", Audio(decode=False))
+    stream: Any
+    if args.local_root is not None:
+        stream = (
+            {
+                "id": path.stem,
+                "speaker_id": path.parent.parent.name,
+                "audio": {"path": str(path)},
+            }
+            for path in sorted(args.local_root.glob("*/*/*.flac"))
+        )
+    else:
+        stream = load_dataset(
+            args.dataset,
+            args.config,
+            split=args.split,
+            revision=revision,
+            streaming=True,
+        )
+        if isinstance(stream.features["audio"], Audio):
+            stream = stream.cast_column("audio", Audio(decode=False))
     pending: list[tuple[str, str, np.ndarray]] = []
     seen: set[str] = set()
     processed = 0
