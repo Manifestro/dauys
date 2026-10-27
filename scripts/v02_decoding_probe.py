@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 import torch
 
 from dauys.checkpoint import load_research_checkpoint
@@ -13,7 +14,7 @@ from dauys.config import ModelConfig
 from dauys.decoding import DecodingConfig, sample_logits
 from dauys.model import DauysHybrid
 from dauys.v02_evaluation import load_suite
-from dauys.v02_hohere_backend import HohereProbeBackend
+from dauys.v02_hohere_backend import SAMPLE_RATE, HohereProbeBackend
 from dauys.v02_judges import _whisper
 from dauys.v02_pretrain_eval import english_vocabulary, word_statistics
 
@@ -82,6 +83,10 @@ def main() -> None:
     parser.add_argument("--items", type=int, default=40)
     parser.add_argument("--seed", type=int, default=11)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--audio-dir", type=Path, help="Save each reply (model channel only) as wav"
+    )
+    parser.add_argument("--audio-items", type=int, default=8)
     args = parser.parse_args()
     suite = load_suite(
         args.suites_dir / "E2.json",
@@ -126,6 +131,11 @@ def main() -> None:
         replies["reference_mimi"].append(
             decode(codec, reference)[0, 0].float().cpu().numpy()
         )
+    if args.audio_dir is not None:
+        for name, waves in replies.items():
+            (args.audio_dir / name).mkdir(parents=True, exist_ok=True)
+            for item, wave in zip(items[: args.audio_items], waves):
+                sf.write(args.audio_dir / name / f"{item['id']}.wav", wave, SAMPLE_RATE)
     results = {}
     for name, waves in replies.items():
         transcripts = asr(waves)
