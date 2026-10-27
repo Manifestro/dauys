@@ -45,7 +45,13 @@ def main() -> None:
     parser.add_argument("--repo", default="manifestro/hohere-bench")
     parser.add_argument("--revision", default="v0.2.0")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--suites", nargs="+", choices=tuple(CONFIGS), default=list(CONFIGS)
+    )
+    parser.add_argument("--limit", type=int, help="Small integration check only")
     args = parser.parse_args()
+    if args.limit is not None and args.limit < 1:
+        raise ValueError("Limit must be positive")
     root = args.output
     root.mkdir(parents=True, exist_ok=True)
     resolved = (
@@ -63,8 +69,12 @@ def main() -> None:
     e1_families: dict[str, str] = {}
     summaries = []
     for name, config in CONFIGS.items():
+        if name not in args.suites:
+            continue
         items = []
         for row in _rows(args.repo, config, resolved):
+            if args.limit is not None and len(items) >= args.limit:
+                break
             item = materialize_bench_row(row, name, root)
             if name == "E1":
                 identity = item["id"]
@@ -75,7 +85,7 @@ def main() -> None:
                 if scenario and "/" in scenario:
                     item["family"] = scenario.split("/", 1)[1]
                 e1_families[identity] = item["family"]
-            elif name in ("E2", "E5"):
+            elif name in ("E2", "E5") and "E1" in args.suites:
                 source_id = item.get("analysis", {}).get("source_id")
                 if source_id not in e1_families:
                     raise ValueError(f"Unknown E1 source conversation: {source_id}")
@@ -83,7 +93,11 @@ def main() -> None:
             items.append(item)
         if not items or len({item["id"] for item in items}) != len(items):
             raise ValueError(f"{name} has no items or duplicate IDs")
-        if name == "E1" and set(labels) != {item["id"] for item in items}:
+        if (
+            name == "E1"
+            and args.limit is None
+            and set(labels) != {item["id"] for item in items}
+        ):
             raise ValueError("E1 labels and conversations differ")
         path = root / f"{name}.json"
         digest = _atomic_json(
@@ -93,6 +107,7 @@ def main() -> None:
                 "version": args.revision,
                 "source_repo": args.repo,
                 "source_commit": resolved,
+                "partial": args.limit is not None or set(args.suites) != set(CONFIGS),
                 "items": items,
             },
         )
@@ -105,6 +120,7 @@ def main() -> None:
             "repo": args.repo,
             "revision": args.revision,
             "commit": resolved,
+            "partial": args.limit is not None or set(args.suites) != set(CONFIGS),
             "suites": summaries,
         },
     )

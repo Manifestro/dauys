@@ -27,6 +27,10 @@ def load_suite(path: str | Path, expected_sha256: str) -> Suite:
     if actual_sha256 != expected_sha256:
         raise ValueError("Evaluation suite checksum mismatch")
     data = json.loads(source.read_text(encoding="utf-8"))
+    if data.get("partial", False):
+        raise ValueError(
+            "Partial Hohere benchmark cannot be used for research evaluation"
+        )
     if data["name"] not in {f"E{index}" for index in range(1, 7)}:
         raise ValueError("Unknown evaluation suite")
     items = tuple(data["items"])

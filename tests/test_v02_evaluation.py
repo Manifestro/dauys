@@ -57,3 +57,10 @@ def test_suite_manifest_checksum_and_unique_ids(tmp_path):
     assert suite.name == "E3"
     with pytest.raises(ValueError, match="checksum"):
         load_suite(path, "0" * 64)
+    path.write_text(
+        json.dumps(
+            {"name": "E3", "version": "1", "partial": True, "items": [{"id": "a"}]}
+        )
+    )
+    with pytest.raises(ValueError, match="Partial Hohere benchmark"):
+        load_suite(path, sha256(path))
