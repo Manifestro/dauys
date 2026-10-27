@@ -563,3 +563,17 @@ def test_v01_weights_load_with_only_new_heads_missing(model, tmp_path):
     torch.save({"model": old_model.state_dict()}, path)
     load_initial_weights(model, path, from_v01=True)
     torch.testing.assert_close(model.cb0_head.weight, old_model.cb0_head.weight)
+
+
+def test_durable_link_copies_when_hard_links_are_unsupported(tmp_path, monkeypatch):
+    from dauys import v02_runner
+
+    source = tmp_path / "latest.pt"
+    source.write_bytes(b"weights")
+
+    def refuse(*_args):
+        raise OSError(95, "Operation not supported")
+
+    monkeypatch.setattr(v02_runner.os, "link", refuse)
+    v02_runner._durable_link(source, tmp_path / "best.pt")
+    assert (tmp_path / "best.pt").read_bytes() == b"weights"

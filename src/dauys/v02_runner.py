@@ -4,6 +4,7 @@ import json
 import math
 import os
 import random
+import shutil
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from functools import partial
@@ -171,7 +172,13 @@ def _durable_save(path: Path, payload: dict) -> None:
 def _durable_link(source: Path, target: Path) -> None:
     temporary = target.with_suffix(target.suffix + ".tmp")
     temporary.unlink(missing_ok=True)
-    os.link(source, temporary)
+    try:
+        os.link(source, temporary)
+    except OSError:
+        # Network volumes may not support hard links; fall back to a copy.
+        shutil.copyfile(source, temporary)
+        with temporary.open("rb") as stream:
+            os.fsync(stream.fileno())
     temporary.replace(target)
     descriptor = os.open(target.parent, os.O_RDONLY)
     try:
