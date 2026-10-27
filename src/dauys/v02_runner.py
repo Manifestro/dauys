@@ -199,7 +199,8 @@ def _truncate_metrics_to_step(path: Path, step: int) -> None:
 def _validate_evaluation(scores: dict[str, float], stage: Stage, track: Track) -> None:
     if stage == "pretrain":
         required = {
-            "eval/pretrain/continuation_wer",
+            "eval/pretrain/cont_word_rate",
+            "eval/pretrain/cont_empty_rate",
             "eval/codebook/cb0_accuracy_gap",
         }
         if track == "PRE":

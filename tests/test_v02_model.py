@@ -143,7 +143,8 @@ def test_hohere_e1_scores_real_model_logits(model, tmp_path):
 
 def test_proxy_pretraining_does_not_require_two_party_gate():
     scores = {
-        "eval/pretrain/continuation_wer": 0.25,
+        "eval/pretrain/cont_word_rate": 0.75,
+        "eval/pretrain/cont_empty_rate": 0.1,
         "eval/codebook/cb0_accuracy_gap": 0.08,
     }
     _validate_evaluation(scores, "pretrain", "P")
