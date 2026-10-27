@@ -89,9 +89,10 @@ def main() -> None:
     parser.add_argument("--mimi-checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--batch-items", type=int, default=16)
-    parser.add_argument("--max-padded-frames", type=int, default=4096)
+    parser.add_argument("--max-padded-frames", type=int, default=2048)
     parser.add_argument("--decode-workers", type=int, default=6)
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--max-vram-fraction", type=float, default=0.85)
     parser.add_argument(
         "--local-root",
         type=Path,
@@ -105,6 +106,9 @@ def main() -> None:
     torch.backends.cudnn.allow_tf32 = False
     if not torch.cuda.is_available():
         raise RuntimeError("LibriSpeech Mimi encoding requires CUDA")
+    # Varying batch lengths grow PyTorch's cache to the whole card; on WSL the
+    # driver then pages VRAM into host memory and encoding slows about 7x.
+    torch.cuda.set_per_process_memory_fraction(args.max_vram_fraction)
     if min(args.batch_items, args.max_padded_frames, args.decode_workers) < 1:
         raise ValueError("Batch and worker settings must be positive")
     if args.local_root is not None:
