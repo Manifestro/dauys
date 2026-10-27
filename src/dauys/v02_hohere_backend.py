@@ -419,6 +419,7 @@ def create_evaluator(
         codes,
         asr=_callback(os.environ["DAUYS_ASR_CALLBACK"]),
         relevance=_callback(os.environ["DAUYS_RELEVANCE_CALLBACK"]),
+        seeds=int(os.environ.get("DAUYS_PROBE_SEEDS", "3")),
     )
     training_sample = CorpusDataset(records[: min(16, len(records))], crop_frames=256)
 
