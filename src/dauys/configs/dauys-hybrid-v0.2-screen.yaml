@@ -1,0 +1,79 @@
+model:
+  name: dauys-hybrid-v0.2
+  proxy: true
+  max_trainable_parameters: 120000000
+  # The dialogue Mamba layers match state-spaces/mamba2-130m (width 768,
+  # d_state 128, RMSNorm eps 1e-5), so its backbone layers can be transferred.
+  mamba_norm_eps: 1.0e-5
+  zero_init_fusion_outputs: true
+
+codec:
+  name: mimi
+  frozen: true
+  sample_rate: 24000
+  frame_rate: 12.5
+  codebooks: 8
+  vocab_size: 2048
+
+embedding:
+  dimension: 256
+  share_between_streams: true
+
+listening:
+  type: mamba2
+  dimension: 384
+  layers: 4
+  d_state: 64
+  d_conv: 4
+  expand: 2
+  headdim: 64
+  ngroups: 1
+
+dialogue:
+  dimension: 768
+  blocks:
+    - mamba2
+    - mamba2
+    - transformer_cross
+    - mamba2
+    - mamba2
+    - transformer_cross
+    - mamba2
+    - transformer_cross
+    - mamba2
+    - transformer_cross
+  mamba:
+    d_state: 128
+    d_conv: 4
+    expand: 2
+    headdim: 64
+    ngroups: 1
+  attention_heads: 12
+  ffn_dimension: 2048
+
+depth_decoder:
+  type: causal_transformer
+  layers: 4
+  dimension: 512
+  heads: 8
+  codebooks: [1, 2, 3, 4, 5, 6, 7]
+
+streaming:
+  native_full_duplex: true
+  frame_ms: 80
+  attention_window_frames: 512
+  input_delay_frames: 0
+  causal: true
+
+heads:
+  listening: true
+  activity_ahead: 5
+
+regularization:
+  dropout: 0.1
+  attention_dropout: 0.1
+
+loss:
+  cb0: 1.0
+  depth: 0.5
+  activity: 0.2

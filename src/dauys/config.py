@@ -35,6 +35,10 @@ class ModelConfig:
     listening_prediction: bool = False
     activity_ahead_horizon: int = 0
     proxy: bool = False
+    listening_d_state: int = 64
+    dialogue_d_state: int = 64
+    mamba_norm_eps: float | None = None
+    zero_init_fusion_outputs: bool = False
 
     @classmethod
     def stage1(cls) -> "ModelConfig":
@@ -94,6 +98,12 @@ class ModelConfig:
             listening_prediction=bool(data.get("heads", {}).get("listening", False)),
             activity_ahead_horizon=int(data.get("heads", {}).get("activity_ahead", 0)),
             proxy=bool(data["model"].get("proxy", False)),
+            listening_d_state=int(data["listening"]["d_state"]),
+            dialogue_d_state=int(data["dialogue"]["mamba"]["d_state"]),
+            mamba_norm_eps=data["model"].get("mamba_norm_eps"),
+            zero_init_fusion_outputs=bool(
+                data["model"].get("zero_init_fusion_outputs", False)
+            ),
         )
         config.validate(data)
         return config
@@ -147,9 +157,12 @@ class ModelConfig:
             raise ValueError("Depth decoder must predict codebooks 1 through 7")
         for section in ("listening", "dialogue"):
             layer = data[section] if section == "listening" else data[section]["mamba"]
-            settings = ("d_state", "d_conv", "expand", "headdim", "ngroups")
-            if tuple(layer[key] for key in settings) != (64, 4, 2, 64, 1):
+            settings = ("d_conv", "expand", "headdim", "ngroups")
+            if tuple(layer[key] for key in settings) != (4, 2, 64, 1):
                 raise ValueError(f"Unexpected {section} Mamba-2 settings")
+            allowed_states = (64, 128) if self.proxy else (64,)
+            if layer["d_state"] not in allowed_states:
+                raise ValueError(f"Unexpected {section} Mamba-2 state size")
         if self.attention_window != 512 or self.input_delay_frames < 0:
             raise ValueError("Invalid streaming window or input delay")
         streaming = data["streaming"]
@@ -158,10 +171,14 @@ class ModelConfig:
             or streaming["native_full_duplex"] is not True
         ):
             raise ValueError("Streaming must remain causal and full duplex")
-        if self.max_trainable_parameters != 65_000_000 and (
-            not self.proxy or self.max_trainable_parameters > 65_000_000
-        ):
+        if self.max_trainable_parameters != 65_000_000 and not self.proxy:
             raise ValueError("Unexpected parameter cap")
+        if self.max_trainable_parameters < 1:
+            raise ValueError("Invalid parameter cap")
+        if (self.mamba_norm_eps is not None or self.zero_init_fusion_outputs) and (
+            not self.proxy
+        ):
+            raise ValueError("Initialization changes are limited to proxy configs")
         if self.name == "dauys-hybrid-v0.1" and (
             self.dropout
             or self.attention_dropout

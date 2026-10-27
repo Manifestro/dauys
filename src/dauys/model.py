@@ -131,15 +131,21 @@ class SwiGLU(nn.Module):
 
 
 class MambaBlock(nn.Module):
-    def __init__(self, width: int, dropout: float = 0.0):
+    def __init__(
+        self,
+        width: int,
+        dropout: float = 0.0,
+        d_state: int = 64,
+        norm_eps: float | None = None,
+    ):
         super().__init__()
         from mamba_ssm import Mamba2
 
-        self.norm = nn.RMSNorm(width)
+        self.norm = nn.RMSNorm(width, eps=norm_eps)
         self.residual_dropout = nn.Dropout(dropout)
         self.mixer = Mamba2(
             d_model=width,
-            d_state=64,
+            d_state=d_state,
             d_conv=4,
             expand=2,
             headdim=64,
@@ -203,6 +209,16 @@ class DialogueBlock(nn.Module):
         self.ffn_norm = nn.RMSNorm(width)
         self.ffn = SwiGLU(width, ffn_dim)
         self.residual_dropout = nn.Dropout(dropout)
+
+    def zero_init_outputs(self) -> None:
+        """Make the block an identity map at initialization."""
+        for layer in (
+            self.self_attention.output,
+            self.cross_attention.output,
+            self.ffn.down,
+        ):
+            nn.init.zeros_(layer.weight)
+            nn.init.zeros_(layer.bias)
 
     def forward(
         self,
@@ -344,11 +360,21 @@ class DauysHybrid(nn.Module):
         self.frame_dropout = nn.Dropout(config.dropout)
         self.dialogue_projection = nn.Linear(config.embedding_dim, config.dialogue_dim)
         self.listening = nn.ModuleList(
-            MambaBlock(config.listening_dim, config.dropout)
+            MambaBlock(
+                config.listening_dim,
+                config.dropout,
+                config.listening_d_state,
+                config.mamba_norm_eps,
+            )
             for _ in range(config.listening_layers)
         )
         self.dialogue = nn.ModuleList(
-            MambaBlock(config.dialogue_dim, config.dropout)
+            MambaBlock(
+                config.dialogue_dim,
+                config.dropout,
+                config.dialogue_d_state,
+                config.mamba_norm_eps,
+            )
             if kind == "mamba2"
             else DialogueBlock(
                 config.dialogue_dim,
@@ -384,6 +410,10 @@ class DauysHybrid(nn.Module):
             else None
         )
         self.depth = DepthDecoder(config, self.embeddings)
+        if config.zero_init_fusion_outputs:
+            for block in self.dialogue:
+                if isinstance(block, DialogueBlock):
+                    block.zero_init_outputs()
         if self.trainable_parameters() > config.max_trainable_parameters:
             raise ValueError("Trainable parameter budget exceeded")
 

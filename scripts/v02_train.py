@@ -9,6 +9,7 @@ from typing import Any
 
 import torch
 
+from dauys.backbone_transfer import load_language_model_state, transfer_mamba2_backbone
 from dauys.config import ModelConfig
 from dauys.model import DauysHybrid
 from dauys.v02_data import assert_suite_is_disjoint, load_corpus, sha256
@@ -78,6 +79,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--init-checkpoint", type=Path)
     parser.add_argument(
+        "--init-backbone",
+        help="Hugging Face Mamba-2 language model whose backbone layers seed the "
+        "dialogue Mamba blocks (embeddings and text head are not used)",
+    )
+    parser.add_argument(
         "--evaluator", help="Python module:function returning a suite evaluator"
     )
     parser.add_argument("--baseline-metrics", type=Path)
@@ -124,6 +130,7 @@ def main() -> None:
         "companion_sha256": sha256(args.companion),
         "git_sha": git_sha,
         "git_dirty": str(bool(git_status)).lower(),
+        "init_backbone": args.init_backbone or "none",
         **{f"{name}_sha256": suite.manifest_sha256 for name, suite in suites.items()},
     }
     print(
@@ -167,8 +174,19 @@ def main() -> None:
         and baseline is None
     ):
         raise ValueError("Dialogue training requires frozen R0 baseline metrics")
+    if args.init_backbone and args.init_checkpoint is not None:
+        raise ValueError("Use either a backbone or a checkpoint initialization")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = DauysHybrid(config).to(device)
+    # Seed before construction so runs that differ only in a transferred
+    # backbone share every other initial weight.
+    torch.manual_seed(args.seed)
+    model = DauysHybrid(config)
+    if args.init_backbone and not args.resume:
+        pairs = transfer_mamba2_backbone(
+            model, load_language_model_state(args.init_backbone)
+        )
+        print(json.dumps({"init_backbone": args.init_backbone, "layers": pairs}))
+    model = model.to(device)
     if args.init_checkpoint is not None and not args.resume:
         load_initial_weights(model, args.init_checkpoint, from_v01=args.track == "FT")
     evaluator = (
