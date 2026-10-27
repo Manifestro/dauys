@@ -48,6 +48,9 @@ def main() -> None:
         "--revision", default="2e3880f30e8725ed242d9d2f71e0794d62ed1795"
     )
     parser.add_argument("--heldout-items", type=int, default=200)
+    parser.add_argument(
+        "--cache-root", type=Path, required=True, help="Common root of both caches"
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     silence = torch.tensor(
@@ -60,10 +63,8 @@ def main() -> None:
         raise ValueError("Stage 1 and Hohere caches use different silence codes")
     validation = _split_ids(args.dataset, args.revision, "validation")
     args.output.mkdir(parents=True, exist_ok=True)
-    for name, target in (("ls100", args.ls100_root), ("hohere", args.hohere_root)):
-        link = args.output / name
-        if not link.exists():
-            link.symlink_to(target.resolve(), target_is_directory=True)
+    ls100_prefix = args.ls100_root.resolve().relative_to(args.cache_root.resolve())
+    hohere_prefix = args.hohere_root.resolve().relative_to(args.cache_root.resolve())
     items = [
         json.loads(path.read_text())
         for path in sorted((args.hohere_root / "items").glob("*.json"))
@@ -71,7 +72,8 @@ def main() -> None:
     train_manifest, train_companion, held_manifest, held_companion = [], [], [], []
     for item in items:
         manifest = dict(
-            item["manifest"], tokens_path=f"hohere/{item['manifest']['tokens_path']}"
+            item["manifest"],
+            tokens_path=f"{hohere_prefix}/{item['manifest']['tokens_path']}",
         )
         if manifest["id"] in validation:
             held_manifest.append(manifest)
@@ -84,7 +86,9 @@ def main() -> None:
     if not held_manifest or not train_manifest:
         raise ValueError("Both Hohere training and held-out items are required")
     for row in _jsonl(args.ls100_root / "manifest.jsonl"):
-        train_manifest.append(dict(row, tokens_path=f"ls100/{row['tokens_path']}"))
+        train_manifest.append(
+            dict(row, tokens_path=f"{ls100_prefix}/{row['tokens_path']}")
+        )
     train_companion.extend(_jsonl(args.ls100_root / "companion.jsonl"))
     _write(args.output / "train-manifest.jsonl", train_manifest)
     _write(args.output / "train-companion.jsonl", train_companion)
