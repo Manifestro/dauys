@@ -21,6 +21,7 @@ from dauys.v02_encode import (
     encode_conversations,
     encode_long_conversation,
 )
+from dauys.v02_hohere import cache_with_label, companion_from_label
 
 DEFAULT_DATASET = "manifestro/hohere-1m"
 DEFAULT_REVISION = "2e3880f30e8725ed242d9d2f71e0794d62ed1795"
@@ -78,7 +79,19 @@ def main() -> None:
     parser.add_argument("--max-padded-frames", type=int, default=4096)
     parser.add_argument("--decode-workers", type=int, default=4)
     parser.add_argument("--limit", type=int)
+    labels = parser.add_mutually_exclusive_group()
+    labels.add_argument("--labels-parquet", type=Path)
+    labels.add_argument(
+        "--labels-revision", help="Pinned revision of the Hohere labels dataset"
+    )
+    parser.add_argument("--allow-derived-labels", action="store_true")
     args = parser.parse_args()
+    if not (args.labels_parquet or args.labels_revision or args.allow_derived_labels):
+        raise ValueError(
+            "Official Hohere labels are required for a research token cache"
+        )
+    if args.allow_derived_labels and (args.labels_parquet or args.labels_revision):
+        raise ValueError("Derived and official labels cannot be selected together")
     if not torch.cuda.is_available():
         raise RuntimeError("Batched Mimi preprocessing requires CUDA")
     if min(args.batch_conversations, args.max_padded_frames, args.decode_workers) < 1:
@@ -86,6 +99,29 @@ def main() -> None:
     if args.limit is not None and args.limit < 1:
         raise ValueError("Conversation limit must be positive")
     root = args.output
+    labels_path = args.labels_parquet
+    if args.labels_revision:
+        from huggingface_hub import hf_hub_download
+
+        labels_path = Path(
+            hf_hub_download(
+                repo_id="manifestro/hohere-dialogues",
+                repo_type="dataset",
+                filename="labels/hohere-1m/labels-00000-of-00001.parquet",
+                revision=args.labels_revision,
+                token=True,
+            )
+        )
+    label_rows = None
+    label_digest = None
+    if labels_path is not None:
+        import pyarrow.parquet as pq
+
+        label_digest = sha256(labels_path)
+        rows = pq.read_table(labels_path).to_pylist()
+        label_rows = {str(row["id"]): row for row in rows}
+        if len(label_rows) != len(rows):
+            raise ValueError("Hohere labels contain duplicate conversation IDs")
     items_dir = root / "items"
     tokens_dir = root / "tokens"
     items_dir.mkdir(parents=True, exist_ok=True)
@@ -99,10 +135,20 @@ def main() -> None:
     seen: set[str] = set()
     count = 0
 
-    def save_cache(conversation: AudioConversation, cache: dict[str, torch.Tensor]) -> None:
+    def save_cache(
+        conversation: AudioConversation, cache: dict[str, torch.Tensor]
+    ) -> None:
         token_path = tokens_dir / f"{conversation.id}.pt"
+        if label_rows is not None:
+            if conversation.id not in label_rows:
+                raise ValueError(f"Missing Hohere labels: {conversation.id}")
+            companion = companion_from_label(
+                label_rows[conversation.id], conversation.frames
+            )
+            cache = cache_with_label(cache, companion)
+        else:
+            companion = companion_from_events(conversation)
         _save_tokens(token_path, cache)
-        companion = companion_from_events(conversation)
         manifest = {
             "id": conversation.id,
             "source": "hohere",
@@ -116,9 +162,13 @@ def main() -> None:
             "dataset_revision": args.revision,
             "codec_sha256": codec_sha,
         }
+        if label_digest is not None:
+            manifest["labels_sha256"] = label_digest
         _atomic_bytes(
             items_dir / f"{conversation.id}.json",
-            (json.dumps({"manifest": manifest, "companion": companion}) + "\n").encode(),
+            (
+                json.dumps({"manifest": manifest, "companion": companion}) + "\n"
+            ).encode(),
         )
 
     def flush() -> None:
@@ -163,6 +213,31 @@ def main() -> None:
                         or sha256(root / manifest["tokens_path"]) != manifest["sha256"]
                     ):
                         raise ValueError(f"Resume cache mismatch: {identity}")
+                    if (
+                        label_digest is not None
+                        and manifest.get("labels_sha256") != label_digest
+                    ):
+                        if identity not in label_rows:
+                            raise ValueError(f"Missing Hohere labels: {identity}")
+                        companion = companion_from_label(
+                            label_rows[identity], int(manifest["frames"])
+                        )
+                        token_path = root / manifest["tokens_path"]
+                        cached = torch.load(
+                            token_path, map_location="cpu", weights_only=True
+                        )
+                        _save_tokens(token_path, cache_with_label(cached, companion))
+                        manifest["sha256"] = sha256(token_path)
+                        manifest["labels_sha256"] = label_digest
+                        _atomic_bytes(
+                            item_path,
+                            (
+                                json.dumps(
+                                    {"manifest": manifest, "companion": companion}
+                                )
+                                + "\n"
+                            ).encode(),
+                        )
                     continue
                 fresh.append(row)
             for conversation in _decode_block(fresh, executor):
@@ -195,6 +270,10 @@ def main() -> None:
         item["manifest"]["dataset"] != args.dataset
         or item["manifest"]["dataset_revision"] != args.revision
         or item["manifest"]["codec_sha256"] != codec_sha
+        or (
+            label_digest is not None
+            and item["manifest"].get("labels_sha256") != label_digest
+        )
         for item in items
     ):
         raise ValueError("Output directory contains another dataset or codec revision")

@@ -32,6 +32,13 @@ def load_suite(path: str | Path, expected_sha256: str) -> Suite:
     items = tuple(data["items"])
     if not items or len({item["id"] for item in items}) != len(items):
         raise ValueError("Evaluation suite IDs must be unique")
+    for item in items:
+        for asset in item.get("audio", {}).values():
+            candidate = (source.parent / asset["path"]).resolve()
+            if not candidate.is_relative_to(source.parent.resolve()):
+                raise ValueError("Evaluation audio escapes its suite root")
+            if sha256(candidate) != asset["sha256"]:
+                raise ValueError(f"Evaluation audio checksum mismatch: {item['id']}")
     return Suite(data["name"], data["version"], items, actual_sha256)
 
 
@@ -45,7 +52,7 @@ def crossed_minimal_pair_accuracy(
         raise ValueError("Invalid minimal-pair scores or bootstrap count")
     first = nll[:, 0, 0] < nll[:, 0, 1]
     second = nll[:, 1, 1] < nll[:, 1, 0]
-    correct = (first.float() + second.float()) / 2
+    correct = (nll[:, 0, 0] + nll[:, 1, 1] < nll[:, 0, 1] + nll[:, 1, 0]).float()
     rng = random.Random(seed)
     population = correct.tolist()
     bootstrap = sorted(

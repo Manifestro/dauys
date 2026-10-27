@@ -105,10 +105,28 @@ def test_corpus_load_collate_and_disjointness(tmp_path):
     )
     with pytest.raises(ValueError, match="overlaps"):
         assert_suite_is_disjoint(records, [{"id": "unseen", "family": "family_0"}])
-    with pytest.raises(ValueError, match="training voice"):
+    assert_suite_is_disjoint(
+        records,
+        [
+            {
+                "id": "seen",
+                "family": "new",
+                "user_voice": "voice_0",
+                "unseen_voice": False,
+            }
+        ],
+    )
+    with pytest.raises(ValueError, match="marks a training voice as unseen"):
         assert_suite_is_disjoint(
             records,
-            [{"id": "unseen", "family": "new", "user_voice": "voice_0"}],
+            [
+                {
+                    "id": "unseen",
+                    "family": "new",
+                    "user_voice": "voice_0",
+                    "unseen_voice": True,
+                }
+            ],
         )
 
 

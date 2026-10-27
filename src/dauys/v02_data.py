@@ -145,8 +145,8 @@ def assert_suite_is_disjoint(
             raise ValueError(
                 "Evaluation suite overlaps a training conversation or family"
             )
-        if item["user_voice"] in voices:
-            raise ValueError("Evaluation suite uses a training voice")
+        if item.get("unseen_voice", False) and item["user_voice"] in voices:
+            raise ValueError("Evaluation suite marks a training voice as unseen")
 
 
 class CorpusDataset(Dataset[dict[str, Any]]):

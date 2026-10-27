@@ -25,15 +25,15 @@ def test_crossed_pairs_require_both_directions():
         ]
     )
     result = crossed_minimal_pair_accuracy(scores, bootstrap_samples=100)
-    assert result["accuracy"] == 0.75
+    assert result["accuracy"] == 0.5
     assert result["both_directions_accuracy"] == 0.5
     assert result["ci95_low"] <= result["accuracy"] <= result["ci95_high"]
 
 
-def test_minimal_pair_accuracy_has_fifty_percent_chance_reference():
+def test_minimal_pair_tie_is_not_counted_as_correct():
     scores = torch.tensor([[[0.1, 0.2], [0.1, 0.2]]])
     result = crossed_minimal_pair_accuracy(scores, bootstrap_samples=10)
-    assert result["accuracy"] == 0.5
+    assert result["accuracy"] == 0.0
     assert result["both_directions_accuracy"] == 0.0
 
 
