@@ -84,6 +84,63 @@ class WhisperTranscriber:
             texts.extend(self.normalize(text) for text in decoded)
         return texts
 
+    @torch.inference_mode()
+    def confident(
+        self,
+        waves: list[np.ndarray],
+        no_speech_threshold: float = 0.6,
+        logprob_threshold: float = -1.0,
+    ) -> list[dict[str, Any]]:
+        """Transcripts with Whisper's no-speech and log-probability hallucination test."""
+        from scipy.signal import resample_poly
+
+        tokenizer = self.processor.tokenizer  # type: ignore[attr-defined]
+        start_token = tokenizer.convert_tokens_to_ids("<|startoftranscript|>")
+        no_speech_token = tokenizer.convert_tokens_to_ids("<|nospeech|>")
+        results: list[dict[str, Any]] = []
+        for start in range(0, len(waves), self.batch_size):
+            chunk = [
+                resample_poly(wave, 2, 3).astype(np.float32)
+                for wave in waves[start : start + self.batch_size]
+            ]
+            features = self.processor(
+                chunk, sampling_rate=16_000, return_tensors="pt"
+            ).input_features.to(self.device, torch.float16)
+            prompt = torch.full(
+                (len(chunk), 1), start_token, dtype=torch.long, device=self.device
+            )
+            first = self.model(input_features=features, decoder_input_ids=prompt)
+            no_speech = first.logits[:, 0].float().softmax(-1)[:, no_speech_token]
+            generated = self.model.generate(
+                features,
+                language="en",
+                task="transcribe",
+                do_sample=False,
+                return_dict_in_generate=True,
+                output_scores=True,
+            )
+            steps = torch.stack(generated.scores, dim=1).float().log_softmax(-1)
+            chosen = generated.sequences[:, -steps.shape[1] :]
+            logprobs = steps.gather(-1, chosen[..., None])[..., 0]
+            content = chosen < tokenizer.eos_token_id
+            average = (logprobs * content).sum(-1) / content.sum(-1).clamp(min=1)
+            decoded = self.processor.batch_decode(
+                generated.sequences, skip_special_tokens=True
+            )
+            for text, silent, mean in zip(
+                decoded, no_speech.tolist(), average.tolist()
+            ):
+                hallucinated = silent > no_speech_threshold and mean < logprob_threshold
+                results.append(
+                    {
+                        "text": self.normalize(text),
+                        "no_speech_prob": silent,
+                        "avg_logprob": mean,
+                        "filtered": hallucinated,
+                    }
+                )
+        return results
+
 
 def load_pretrain_suite(directory: str | Path) -> dict[str, Any]:
     root = Path(directory)
