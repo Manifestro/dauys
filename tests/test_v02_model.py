@@ -179,6 +179,22 @@ def test_source_masks_isolate_gradients(model):
             assert dialogue_grad.abs().sum() > 0
 
 
+def test_shared_acoustic_keep_mask_survives_a_second_pass(model):
+    model.train()
+    try:
+        codes = torch.randint(0, 2048, (2, 8, 5))
+        keep = torch.rand(2, 5, 7) >= 0.5
+        original = keep.clone()
+        items = torch.tensor([True, False])
+        first = model.encode_listening(codes, 0.5, items, keep)
+        second = model.encode_listening(codes, 0.5, items, keep)
+        (first.sum() + second.sum()).backward()
+        assert torch.equal(keep, original)
+    finally:
+        model.zero_grad(set_to_none=True)
+        model.eval()
+
+
 def test_b_only_detach_preserves_silence_context_logits(model):
     model.eval()
     batch = _batch("1a_on_B")

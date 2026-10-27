@@ -441,7 +441,7 @@ class DauysHybrid(nn.Module):
                     raise ValueError(
                         "Acoustic dropout item mask must have shape [batch]"
                     )
-                keep |= ~acoustic_dropout_items[:, None, None]
+                keep = keep | ~acoustic_dropout_items[:, None, None]
             count = keep.sum(dim=2).clamp_min(1)
             scale = torch.sqrt(7 / count.to(acoustic.dtype))
             x = (
