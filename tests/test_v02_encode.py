@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from dataclasses import replace
 
 import numpy as np
+import pytest
 import torch
 
 from dauys.v02_encode import (
@@ -25,6 +26,14 @@ class _Codec:
         means = pcm.reshape(batch, frames, 1920).mean(dim=-1)
         coarse = (means * 100).round().long().clamp(0, 2040)
         return torch.stack([coarse + index for index in range(8)], dim=1)
+
+
+class _BatchJitterCodec(_Codec):
+    def encode(self, pcm):
+        codes = super().encode(pcm)
+        if pcm.shape[0] > 1:
+            codes[0, 0, 0] += 1
+        return codes
 
 
 def _conversation(identity, frames):
@@ -68,6 +77,23 @@ def test_batched_encoding_matches_single_item_and_keeps_frame_lengths():
     torch.testing.assert_close(batched[1]["target"], single[0]["target"])
 
 
+def test_batch_check_allows_small_quantization_differences_but_rejects_large_ones():
+    with pytest.warns(RuntimeWarning, match="1/3200 tokens"):
+        encode_conversations(
+            _BatchJitterCodec(),
+            [_conversation("long", 400)],
+            torch.device("cpu"),
+            check_first_against_single=True,
+        )
+    with pytest.raises(ValueError, match="1/800 tokens"):
+        encode_conversations(
+            _BatchJitterCodec(),
+            [_conversation("short", 100)],
+            torch.device("cpu"),
+            check_first_against_single=True,
+        )
+
+
 def test_companion_activity_and_response_onset_align_to_audio():
     companion = companion_from_events(_conversation("example", 8))
     assert companion["activity_a"][:4] == [1, 1, 0, 0]
@@ -91,6 +117,7 @@ def test_long_conversation_encodes_in_bounded_streaming_chunks():
 
 def test_event_companion_marks_only_real_overlapping_responses():
     item = _conversation("overlap", 50)
+
     def speech(kind, speaker, start, end):
         return {
             "event_type": kind,
@@ -109,5 +136,7 @@ def test_event_companion_marks_only_real_overlapping_responses():
         ),
     )
     events = companion_from_events(item)["event_frames"]
-    onsets = [event["start_frame"] for event in events if event["type"] == "response_onset"]
+    onsets = [
+        event["start_frame"] for event in events if event["type"] == "response_onset"
+    ]
     assert onsets == [18]

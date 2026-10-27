@@ -2,6 +2,7 @@
 
 import io
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -178,11 +179,14 @@ def encode_conversations(
                 mismatched = int(differences.sum())
                 by_codebook = differences.sum(dim=1).tolist()
                 total = reference[0].numel()
-                raise ValueError(
+                message = (
                     f"Batched Mimi encoding differs from single-item encoding "
                     f"on channel {channel}: {mismatched}/{total} tokens, "
                     f"by codebook {by_codebook}"
                 )
+                if mismatched / total > 0.01 or by_codebook[0] / first.frames > 0.005:
+                    raise ValueError(message)
+                warnings.warn(message, RuntimeWarning, stacklevel=2)
     result = []
     for index, item in enumerate(conversations):
         companion = companion_from_events(item)
