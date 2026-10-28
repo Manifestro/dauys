@@ -254,6 +254,18 @@ def main() -> None:
         default=1,
         help="C1 predicts the A CB0 code this many frames ahead",
     )
+    parser.add_argument(
+        "--listening-scale",
+        type=float,
+        default=1.0,
+        help="Multiplies the C1 weight schedule (spec M4 fix: 0.5)",
+    )
+    parser.add_argument(
+        "--acoustic-dropout",
+        type=float,
+        default=0.5,
+        help="Acoustic dropout on A (spec M4 fix: 0.3)",
+    )
     parser.add_argument("--run-name", default="")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--wandb", action="store_true")
@@ -375,6 +387,8 @@ def main() -> None:
             "history_dropout": args.history_dropout,
             "intent_weight": args.intent_weight,
             "listening_horizon": args.listening_horizon,
+            "listening_scale": args.listening_scale,
+            "acoustic_dropout": args.acoustic_dropout,
         },
         "model": asdict(config),
         "intent": asdict(intent_config),
@@ -399,8 +413,11 @@ def main() -> None:
             for step, batch in enumerate(loader, start_step + 1):
                 batch = batch.to(device)
                 progress = (step - 1) / max(1, args.steps - 1)
+                base = stage1_weights(progress)
                 weights = dataclasses.replace(
-                    stage1_weights(progress),
+                    base,
+                    listening=base.listening * args.listening_scale,
+                    acoustic_dropout=args.acoustic_dropout,
                     intent=args.intent_weight,
                     history_dropout=args.history_dropout,
                     listening_horizon=args.listening_horizon,
