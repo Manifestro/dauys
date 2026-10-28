@@ -15,6 +15,13 @@ several lags, HuBERT base being self-supervised on audio only). Every cell is
 then scored with the ear probe of ``v02_ear_hubert_probe.py``: the same probe
 utterances, units and linear probes, so its numbers compare directly with the
 earlier rows (CB0 buffer, ear fix1).
+
+A cell is ``inputs:objective[:horizon[:width]]``: ``cb0`` or ``all8``;
+``c1``, ``c1mem`` or ``c1memhist`` (memory plus the unit histogram of the last
+two seconds); the memory horizon in frames (8 by default); the ear width
+(512 by default). Two probes test what no cell is trained on: the units of
+frames t+12 and t+25 (``unit@-12``, ``unit@-25``, the next 1–2 s), and the
+unit histogram of the last two seconds (``hist2s_r2``, ridge R²).
 """
 
 import argparse
@@ -35,42 +42,53 @@ from dauys.model import MambaBlock
 
 sys.path.insert(0, str(Path(__file__).parent))
 from v02_ear_hubert_probe import (
-    _pairs,
     assign_units,
     hubert_frames,
     kmeans,
     load_utterances,
+    ridge_r2,
     unit_probe,
 )
 
-MEMORY_LAGS = (0, 1, 2, 3, 4, 6, 8)
+LAG_GRID = (0, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32)
+HISTOGRAM_FRAMES = 25
+
+
+def memory_lags(horizon: int) -> tuple[int, ...]:
+    return tuple(lag for lag in LAG_GRID if lag <= horizon)
 
 
 class Ear(nn.Module):
-    def __init__(self, config: ModelConfig, codebooks: int, clusters: int, memory):
+    def __init__(
+        self,
+        config: ModelConfig,
+        codebooks: int,
+        clusters: int,
+        lags: tuple[int, ...],
+        width: int,
+        histogram: bool = False,
+    ):
         super().__init__()
         self.codebooks = codebooks
         self.embeddings = nn.ModuleList(
             nn.Embedding(config.vocab_size, config.embedding_dim)
             for _ in range(codebooks)
         )
-        self.projection = nn.Linear(config.embedding_dim, config.listening_dim)
+        self.projection = nn.Linear(config.embedding_dim, width)
         self.blocks = nn.ModuleList(
             MambaBlock(
-                config.listening_dim,
+                width,
                 config.dropout,
                 config.listening_d_state,
                 config.mamba_norm_eps,
             )
             for _ in range(config.listening_layers)
         )
-        self.norm = nn.RMSNorm(config.listening_dim)
-        self.next_head = nn.Linear(config.listening_dim, config.vocab_size)
-        self.memory_head = (
-            nn.Linear(config.listening_dim, clusters * len(MEMORY_LAGS))
-            if memory
-            else None
-        )
+        self.norm = nn.RMSNorm(width)
+        self.next_head = nn.Linear(width, config.vocab_size)
+        self.lags = lags
+        self.memory_head = nn.Linear(width, clusters * len(lags)) if lags else None
+        self.histogram_head = nn.Linear(width, clusters) if histogram else None
         self.clusters = clusters
 
     def forward(self, codes: torch.Tensor) -> torch.Tensor:
@@ -98,6 +116,19 @@ def _masked(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return (values * mask).sum() / mask.sum().clamp_min(1)
 
 
+def unit_histograms(units, speech, clusters: int):
+    """[batch, frames, clusters] share of each unit among the speech frames of
+    the last HISTOGRAM_FRAMES frames, and where it is defined."""
+    onehot = F.one_hot(units, clusters).float() * speech[..., None]
+    total = F.pad(onehot.cumsum(1), (0, 0, 1, 0))
+    end = torch.arange(1, units.shape[1] + 1, device=units.device)
+    start = (end - HISTOGRAM_FRAMES).clamp_min(0)
+    counts = total[:, end] - total[:, start]
+    mass = counts.sum(-1, keepdim=True)
+    valid = (mass[..., 0] > 0) & (end >= HISTOGRAM_FRAMES)[None]
+    return counts / mass.clamp_min(1), valid
+
+
 def losses(ear: Ear, codes, units, speech):
     states = ear(codes)
     normed = ear.norm(states)
@@ -114,10 +145,10 @@ def losses(ear: Ear, codes, units, speech):
     memory = torch.zeros((), device=codes.device)
     if ear.memory_head is not None:
         logits = ear.memory_head(normed).reshape(
-            batch, frames, len(MEMORY_LAGS), ear.clusters
+            batch, frames, len(ear.lags), ear.clusters
         )
         terms = []
-        for index, lag in enumerate(MEMORY_LAGS):
+        for index, lag in enumerate(ear.lags):
             view = logits[:, lag:, index]
             terms.append(
                 _masked(
@@ -130,13 +161,45 @@ def losses(ear: Ear, codes, units, speech):
                 )
             )
         memory = torch.stack(terms).mean()
+    if ear.histogram_head is not None:
+        target, valid = unit_histograms(units, speech, ear.clusters)
+        predicted = F.log_softmax(ear.histogram_head(normed).float(), -1)
+        memory = memory + _masked(-(target * predicted).sum(-1), valid)
     return c1, memory
 
 
-def train_cell(config, codebooks, memory, train, silence, args, log):
+def parse_cell(cell: str) -> dict:
+    parts = cell.split(":")
+    inputs, objective = parts[0], parts[1]
+    horizon = int(parts[2]) if len(parts) > 2 else 8
+    width = int(parts[3]) if len(parts) > 3 else 512
+    if inputs not in ("cb0", "all8") or objective not in ("c1", "c1mem", "c1memhist"):
+        raise ValueError(f"Unknown cell {cell}")
+    return {
+        "name": f"ear_{inputs}_{objective}_h{horizon}_w{width}",
+        "codebooks": 1 if inputs == "cb0" else 8,
+        "lags": memory_lags(horizon) if objective != "c1" else (),
+        "histogram": objective == "c1memhist",
+        "width": width,
+    }
+
+
+def train_cell(config, cell, train, silence, args, log):
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
-    ear = Ear(config, codebooks, args.clusters, memory).cuda().train()
+    ear = (
+        Ear(
+            config,
+            cell["codebooks"],
+            args.clusters,
+            cell["lags"],
+            cell["width"],
+            cell["histogram"],
+        )
+        .cuda()
+        .train()
+    )
+    log({"cell": cell["name"], "parameters": sum(p.numel() for p in ear.parameters())})
     optimiser = torch.optim.AdamW(ear.parameters(), lr=args.lr, weight_decay=0.01)
     schedule = torch.optim.lr_scheduler.LambdaLR(
         optimiser,
@@ -146,7 +209,7 @@ def train_cell(config, codebooks, memory, train, silence, args, log):
             * (1 + math.cos(math.pi * min(step, args.steps) / args.steps))
         ),
     )
-    name = f"ear_{'cb0' if codebooks == 1 else 'all8'}_{'c1mem' if memory else 'c1'}"
+    name = cell["name"]
     for step in range(1, args.steps + 1):
         codes, units, speech = _batch(rng.sample(train, args.batch), silence)
         with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -180,6 +243,38 @@ def heldout_c1(ear: Ear, items, silence) -> float:
         total += c1.item() * weight
         count += weight
     return total / count
+
+
+def lag_pairs(utterances, name: str, lag: int):
+    """Feature at t and the unit of frame t − lag; a negative lag is the future."""
+    xs, ys = [], []
+    for item in utterances:
+        x, units, speech = item["features"][name], item["units"], item["activity"]
+        frames, shift = len(units), abs(lag)
+        if shift >= frames:
+            continue
+        if lag >= 0:
+            feature, target, keep = (
+                x[lag:],
+                units[: frames - lag],
+                speech[: frames - lag],
+            )
+        else:
+            feature, target, keep = x[: frames - shift], units[shift:], speech[shift:]
+        xs.append(feature[keep])
+        ys.append(target[keep])
+    return torch.cat(xs).float().cuda(), torch.cat(ys).cuda()
+
+
+def histogram_pairs(utterances, name: str, clusters: int):
+    xs, ys = [], []
+    for item in utterances:
+        target, valid = unit_histograms(
+            item["units"][None], item["activity"][None].bool(), clusters
+        )
+        xs.append(item["features"][name][valid[0]])
+        ys.append(target[0][valid[0]])
+    return torch.cat(xs).float().cuda(), torch.cat(ys).float().cuda()
 
 
 @torch.no_grad()
@@ -253,7 +348,9 @@ def main() -> None:
     parser.add_argument("--clusters", type=int, default=200)
     parser.add_argument("--hubert", default="facebook/hubert-base-ls960")
     parser.add_argument("--layer", type=int, default=9)
-    parser.add_argument("--lags", type=int, nargs="+", default=[0, 1, 2, 4, 8])
+    parser.add_argument(
+        "--lags", type=int, nargs="+", default=[-25, -12, 0, 2, 4, 8, 12, 16, 24, 32]
+    )
     parser.add_argument(
         "--buffer",
         type=int,
@@ -294,16 +391,7 @@ def main() -> None:
     config = ModelConfig.from_yaml(args.config)
     rows = []
     for cell in args.cells:
-        inputs, objective = cell.split(":")
-        name, ear = train_cell(
-            config,
-            1 if inputs == "cb0" else 8,
-            objective == "c1mem",
-            train,
-            silence,
-            args,
-            log,
-        )
+        name, ear = train_cell(config, parse_cell(cell), train, silence, args, log)
         if args.save_dir:
             args.save_dir.mkdir(parents=True, exist_ok=True)
             torch.save(ear.state_dict(), args.save_dir / f"{name}.pt")
@@ -316,12 +404,19 @@ def main() -> None:
             for lag in args.lags:
                 row[f"unit@{lag}"] = round(
                     unit_probe(
-                        *_pairs(probe, feature, lag),
-                        *_pairs(test, feature, lag),
+                        *lag_pairs(probe, feature, lag),
+                        *lag_pairs(test, feature, lag),
                         args.clusters,
                     ),
                     4,
                 )
+            row["hist2s_r2"] = round(
+                ridge_r2(
+                    *histogram_pairs(probe, feature, args.clusters),
+                    *histogram_pairs(test, feature, args.clusters),
+                ),
+                4,
+            )
             log(row)
             rows.append(row)
         del ear
@@ -332,7 +427,7 @@ def main() -> None:
         "clusters": args.clusters,
         "steps": args.steps,
         "train_utterances": len(train),
-        "memory_lags": list(MEMORY_LAGS),
+        "lag_grid": list(LAG_GRID),
         "seconds": round(time.time() - started),
         "cells": rows,
     }
