@@ -511,7 +511,9 @@ def early_abort(step: int, metrics: dict[str, float]) -> str | None:
     for value in metrics.values():
         if isinstance(value, float) and not math.isfinite(value):
             return "non_finite_metric"
-    if "intent_spread" in metrics and metrics["intent_spread"] < 0.05:
+    # Before the intent head has learned anything its outputs share one
+    # direction, so a low spread early is the starting point, not a collapse.
+    if step >= 2000 and metrics.get("intent_spread", 1.0) < 0.05:
         return "intent_collapse"
     if step >= 4000 and metrics.get("m1_minus_m2", 0.0) >= 0.0:
         return "m1_not_below_bigram"

@@ -104,9 +104,10 @@ def test_early_abort_rules_fire_at_the_pre_registered_steps():
     assert early_abort(6000, {"m1_minus_m2": -0.6, "m3": 0.8, "m4": 0.0}) is None
     assert early_abort(1, {"m1_minus_m2": float("nan")}) == "non_finite_metric"
     assert (
-        early_abort(1, {"m1_minus_m2": -0.6, "intent_spread": 0.01})
+        early_abort(2000, {"m1_minus_m2": -0.6, "intent_spread": 0.01})
         == "intent_collapse"
     )
+    assert early_abort(50, {"m1_minus_m2": -0.6, "intent_spread": 0.01}) is None
 
 
 def test_bigram_prefers_a_seen_transition_over_an_unseen_one():
