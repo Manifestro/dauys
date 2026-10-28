@@ -7,7 +7,9 @@ in training. ``encode`` turns the recordings into a split in the format of
 from ``test_voice``), which ``v02_word_meaning_eval.py --splits live`` scores.
 
 Recordings: ``<recordings>/<speaker>/<topic>-<word>.wav`` (any rate, mono or
-stereo; WAV, FLAC or OGG).
+stereo; WAV, FLAC or OGG). ``--all-words`` takes every word in its held-out
+frame (for synthetic stand-ins such as ``v02_word_meaning_piper.py``), and
+``--split-name`` names the output split.
 """
 
 import argparse
@@ -19,14 +21,15 @@ from pathlib import Path
 WORDS_PER_TOPIC = 4
 
 
-def chosen():
+def chosen(all_words: bool = False):
     sys.path.insert(0, str(Path(__file__).parent))
     from v02_word_meaning_text import TOPICS
 
     for topic, spec in TOPICS.items():
         frames = spec["frames"]
         words = list(spec["words"])
-        for index in range(0, len(words), 3)[:WORDS_PER_TOPIC]:
+        picks = range(len(words)) if all_words else range(0, len(words), 3)
+        for index in picks[: None if all_words else WORDS_PER_TOPIC]:
             # The frame the text plan held out for this word.
             yield (
                 topic,
@@ -56,11 +59,11 @@ def encode_live(args) -> None:
     for line in (args.data / "test_voice" / "manifest.jsonl").read_text().splitlines():
         row = json.loads(line)
         replies[(row["topic"], row["word"])] = row["b_clip"]
-    out = args.data / "live"
+    out = args.data / args.split_name
     (out / "clips").mkdir(parents=True, exist_ok=True)
     rows = []
     for speaker_dir in sorted(p for p in args.recordings.iterdir() if p.is_dir()):
-        for topic, word, _ in chosen():
+        for topic, word, _ in chosen(args.all_words):
             matches = [
                 p
                 for p in speaker_dir.glob(f"{topic}-{word}.*")
@@ -78,7 +81,7 @@ def encode_live(args) -> None:
             with torch.no_grad():
                 codes = encode(codec, torch.from_numpy(pcm)[None, None].cuda())[0]
             rms = np.sqrt((pcm.reshape(frames, 1920) ** 2).mean(1))
-            name = f"clips/live-{speaker_dir.name}-{topic}-{word}.pt"
+            name = f"clips/{args.split_name}-{speaker_dir.name}-{topic}-{word}.pt"
             torch.save(
                 {
                     "codes": codes.short().cpu(),
@@ -93,7 +96,7 @@ def encode_live(args) -> None:
                 shutil.copy(args.data / "test_voice" / b_clip, out / b_clip)
             rows.append(
                 {
-                    "id": f"live-{speaker_dir.name}-{topic}-{word}",
+                    "id": f"{args.split_name}-{speaker_dir.name}-{topic}-{word}",
                     "speaker": speaker_dir.name,
                     "topic": topic,
                     "word": word,
@@ -102,7 +105,7 @@ def encode_live(args) -> None:
                 }
             )
     (out / "manifest.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-    print(json.dumps({"live_items": len(rows)}))
+    print(json.dumps({args.split_name: len(rows)}))
 
 
 def main() -> None:
@@ -114,6 +117,8 @@ def main() -> None:
     encoding.add_argument("--recordings", type=Path, required=True)
     encoding.add_argument("--data", type=Path, required=True, help="encode output dir")
     encoding.add_argument("--mimi-checkpoint", type=Path, required=True)
+    encoding.add_argument("--split-name", default="live")
+    encoding.add_argument("--all-words", action="store_true")
     args = parser.parse_args()
     if args.command == "list":
         write_list(args.output)
