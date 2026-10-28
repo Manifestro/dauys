@@ -289,6 +289,15 @@ def test_stage1_objective_trains_dialogue_and_intent_heads():
     assert intent.head.net[0].weight.grad is not None
     assert model.dialogue_projection.weight.grad is not None
     assert all(parameter.grad is None for parameter in intent.target.parameters())
+    model.zero_grad()
+    far = stage1_objective(
+        model,
+        batch,
+        Stage1Weights(acoustic_dropout=0.0, listening_horizon=4, history_dropout=1.0),
+        intent,
+    )
+    assert torch.isfinite(far.total)
+    assert not torch.isclose(far.listening_cb0, losses.listening_cb0)
 
 
 def test_find_cut_can_skip_a_long_pause():

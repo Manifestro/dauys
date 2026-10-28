@@ -546,6 +546,7 @@ class Stage1Weights:
     acoustic_dropout: float = 0.5
     label_smoothing: float = 0.05
     history_dropout: float = 0.0
+    listening_horizon: int = 1
 
 
 def _interpolate(progress: float, values: tuple[float, float, float, float]) -> float:
@@ -682,14 +683,24 @@ def stage1_objective(
     zero = output.cb0_logits.sum() * 0
     listening_cb0 = zero
     listening_activity = zero
-    if output.listening_cb0_logits is not None and frames > 1:
+    horizon = weights.listening_horizon
+    if horizon < 1:
+        raise ValueError("The listening horizon must be at least one frame")
+    if output.listening_cb0_logits is not None and frames > horizon:
+        # A horizon beyond the next frame cannot be met from local acoustics,
+        # so the ear has to carry syllables and words forward.
+        ahead = (
+            batch.valid_frames[:, :-horizon]
+            & batch.valid_frames[:, horizon:]
+            & batch.user_activity[:, horizon:].bool()
+        )
         listening_cb0 = masked_mean(
             F.cross_entropy(
-                output.listening_cb0_logits[:, :-1].reshape(-1, vocab),
-                batch.user_codes[:, 0, 1:].reshape(-1),
+                output.listening_cb0_logits[:, :-horizon].reshape(-1, vocab),
+                batch.user_codes[:, 0, horizon:].reshape(-1),
                 reduction="none",
-            ).reshape(batch_size, frames - 1),
-            masks.listening,
+            ).reshape(batch_size, frames - horizon),
+            ahead,
         )
         if output.listening_activity_logits is not None:
             listening_activity = masked_mean(

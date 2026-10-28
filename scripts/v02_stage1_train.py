@@ -248,6 +248,12 @@ def main() -> None:
         help="Share of items whose B input after the cut is replaced by silence",
     )
     parser.add_argument("--intent-weight", type=float, default=0.5)
+    parser.add_argument(
+        "--listening-horizon",
+        type=int,
+        default=1,
+        help="C1 predicts the A CB0 code this many frames ahead",
+    )
     parser.add_argument("--run-name", default="")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--wandb", action="store_true")
@@ -368,6 +374,7 @@ def main() -> None:
             "seed": args.seed,
             "history_dropout": args.history_dropout,
             "intent_weight": args.intent_weight,
+            "listening_horizon": args.listening_horizon,
         },
         "model": asdict(config),
         "intent": asdict(intent_config),
@@ -396,6 +403,7 @@ def main() -> None:
                     stage1_weights(progress),
                     intent=args.intent_weight,
                     history_dropout=args.history_dropout,
+                    listening_horizon=args.listening_horizon,
                 )
                 optimizer.zero_grad(set_to_none=True)
                 with torch.autocast(
