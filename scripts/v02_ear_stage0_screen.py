@@ -189,37 +189,8 @@ def attach_features(name: str, ear: Ear, items) -> None:
         item.setdefault("features", {})[name] = ear(codes)[0].float().half().cpu()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--mimi-checkpoint", type=Path, required=True)
-    parser.add_argument("--train-roots", type=Path, nargs="+", required=True)
-    parser.add_argument("--eval-roots", type=Path, nargs="+", required=True)
-    parser.add_argument("--silence-codes", type=Path, required=True)
-    parser.add_argument("--train-items", type=int, default=20000)
-    parser.add_argument("--probe-items", type=int, default=1500)
-    parser.add_argument("--eval-items", type=int, default=500)
-    parser.add_argument("--steps", type=int, default=4000)
-    parser.add_argument("--batch", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--clusters", type=int, default=200)
-    parser.add_argument("--hubert", default="facebook/hubert-base-ls960")
-    parser.add_argument("--layer", type=int, default=9)
-    parser.add_argument("--lags", type=int, nargs="+", default=[0, 1, 2, 4, 8])
-    parser.add_argument(
-        "--cells", nargs="+", default=["cb0:c1", "cb0:c1mem", "all8:c1", "all8:c1mem"]
-    )
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    if "ft" in args.hubert.split("/")[-1]:
-        raise ValueError("Use a self-supervised HuBERT, not a text-finetuned one")
-    started = time.time()
-
-    def log(row):
-        print(json.dumps({**row, "seconds": round(time.time() - started)}), flush=True)
-
-    silence = torch.tensor(json.loads(args.silence_codes.read_text()), dtype=torch.long)
+def _units(args, log):
+    """Probe, eval and train utterances with HuBERT units attached."""
     # The probe split is drawn exactly as v02_ear_hubert_probe.py draws it.
     probe = load_utterances(args.train_roots, args.probe_items, 240, args.seed)
     test = load_utterances(args.eval_roots, args.eval_items, 240, args.seed)
@@ -255,6 +226,55 @@ def main() -> None:
     del codec, hubert
     torch.cuda.empty_cache()
     log({"units": "done"})
+    return probe, test, train
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--mimi-checkpoint", type=Path, required=True)
+    parser.add_argument("--train-roots", type=Path, nargs="+", required=True)
+    parser.add_argument("--eval-roots", type=Path, nargs="+", required=True)
+    parser.add_argument("--silence-codes", type=Path, required=True)
+    parser.add_argument("--train-items", type=int, default=20000)
+    parser.add_argument("--probe-items", type=int, default=1500)
+    parser.add_argument("--eval-items", type=int, default=500)
+    parser.add_argument("--steps", type=int, default=4000)
+    parser.add_argument("--batch", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--clusters", type=int, default=200)
+    parser.add_argument("--hubert", default="facebook/hubert-base-ls960")
+    parser.add_argument("--layer", type=int, default=9)
+    parser.add_argument("--lags", type=int, nargs="+", default=[0, 1, 2, 4, 8])
+    parser.add_argument(
+        "--cells", nargs="*", default=["cb0:c1", "cb0:c1mem", "all8:c1", "all8:c1mem"]
+    )
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--units-cache",
+        type=Path,
+        help="Save the utterances with units here, or load them if present, so "
+        "cells can run as parallel processes",
+    )
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    if "ft" in args.hubert.split("/")[-1]:
+        raise ValueError("Use a self-supervised HuBERT, not a text-finetuned one")
+    started = time.time()
+
+    def log(row):
+        print(json.dumps({**row, "seconds": round(time.time() - started)}), flush=True)
+
+    silence = torch.tensor(json.loads(args.silence_codes.read_text()), dtype=torch.long)
+    if args.units_cache and args.units_cache.exists():
+        probe, test, train = torch.load(args.units_cache, weights_only=False)
+        log({"cache": "loaded", "train": len(train)})
+    else:
+        probe, test, train = _units(args, log)
+        if args.units_cache:
+            torch.save((probe, test, train), args.units_cache)
+    if not args.cells:
+        return
 
     config = ModelConfig.from_yaml(args.config)
     rows = []
