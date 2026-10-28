@@ -12,6 +12,11 @@ Reported per split, with a 95% bootstrap interval over pairs:
 - ``test_voice``: voices never trained.
 - ``control``: nonsense words in place of the real ones; the "matched" side
   is arbitrary, so it must stay at chance.
+
+``by_length_gap`` splits each real split's accuracy by how many Mimi frames the
+two phrases differ in. If the model read the word's length rather than the
+word, pairs of equal length would fall towards chance. Any other directory in
+the same format (``--splits``, e.g. live recordings) is scored the same way.
 """
 
 import argparse
@@ -28,6 +33,7 @@ from dauys.config import ModelConfig
 from dauys.model import DauysHybrid
 
 PAUSE = 6
+LENGTH_BINS = ((0, 0), (1, 1), (2, 3), (4, 999))
 
 
 def _clip(root: Path, name: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -73,6 +79,17 @@ def pair_accuracy(model, silence, quads) -> list[float]:
         flat += [(a_w, b_w), (a_v, b_v), (a_w, b_v), (a_v, b_w)]
     nll = reply_nll(model, silence, flat).reshape(-1, 4)
     return ((nll[:, 0] + nll[:, 1]) < (nll[:, 2] + nll[:, 3])).float().tolist()
+
+
+def by_length_gap(scores, quads) -> dict:
+    gaps = [abs(q[0][0].shape[-1] - q[1][0].shape[-1]) for q in quads]
+    out = {}
+    for low, high in LENGTH_BINS:
+        chosen = [s for s, g in zip(scores, gaps) if low <= g <= high]
+        if chosen:
+            label = f"{low}" if low == high else f"{low}-{high}"
+            out[label] = {"pairs": len(chosen), "accuracy": summarize(chosen)}
+    return out
 
 
 def summarize(scores: list[float], resamples: int = 2000) -> list[float]:
@@ -158,22 +175,25 @@ def main() -> None:
     parser.add_argument("--silence-codes", type=Path, required=True)
     parser.add_argument("--checkpoints", nargs="+", required=True, help="name=path")
     parser.add_argument("--control-per-group", type=int, default=60)
+    parser.add_argument("--splits", nargs="+", default=["test_combo", "test_voice"])
+    parser.add_argument("--no-control", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     silence = torch.tensor(json.loads(args.silence_codes.read_text()), dtype=torch.long)
     splits = {}
-    for split in ("test_combo", "test_voice"):
+    for split in args.splits:
         splits[split] = real_quads(args.data / split)
-    splits["control"] = (
-        control_quads(
-            args.data / "control",
-            args.data / "test_voice",
-            splits["test_voice"][1],
-            args.control_per_group,
-            seed=0,
-        ),
-        None,
-    )
+    if not args.no_control:
+        splits["control"] = (
+            control_quads(
+                args.data / "control",
+                args.data / "test_voice",
+                real_quads(args.data / "test_voice")[1],
+                args.control_per_group,
+                seed=0,
+            ),
+            None,
+        )
     config = ModelConfig.from_yaml(args.config)
     rows = []
     for spec in args.checkpoints:
@@ -183,9 +203,11 @@ def main() -> None:
         model.load_state_dict(payload["model"])
         model = model.cuda().eval()
         row = {"checkpoint": name, "step": int(payload.get("step", 0))}
-        for split, (quads, _) in splits.items():
+        for split, (quads, groups) in splits.items():
             scores = pair_accuracy(model, silence, quads)
             row[split] = {"pairs": len(scores), "accuracy": summarize(scores)}
+            if groups is not None:
+                row[split]["by_length_gap"] = by_length_gap(scores, quads)
         print(json.dumps(row), flush=True)
         rows.append(row)
     args.output.write_text(json.dumps(rows, indent=2) + "\n")
