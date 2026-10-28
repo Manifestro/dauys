@@ -16,11 +16,17 @@ Reported per checkpoint, each with a 95% bootstrap interval over items:
 - ``swap_noise``: swap2 − swap. Two equally wrong phrases; the content gain
   must stand clear of it.
 - ``m4``: fusion off − true, and per fusion block.
+- ``meaning``: shuffle − true. A keeps its last second untouched; everything
+  before it is cut into 1 s chunks whose order is shuffled. Voice, room,
+  sounds, words and the ending stay; only the order, the phrase, is gone.
+  ``shuffle_noise`` (shuffle2 − shuffle, another order) bounds it. Only items
+  with at least two chunks to shuffle count.
 """
 
 import argparse
 import importlib.util
 import json
+import random
 from pathlib import Path
 
 import torch
@@ -33,6 +39,28 @@ from dauys.v02_stage1 import load_stage1_corpus
 from dauys.v02_stage1_eval import record_tensors
 
 ONSET_FRAMES = 12
+CHUNK_FRAMES = 12
+
+
+def shuffled_user(item, seed: int) -> torch.Tensor | None:
+    """A with its last second kept and the 1 s chunks before it reordered;
+    None when fewer than two whole chunks precede the last second."""
+    tail = item.cut_local - CHUNK_FRAMES
+    chunks = tail // CHUNK_FRAMES
+    if chunks < 2:
+        return None
+    head = tail - chunks * CHUNK_FRAMES
+    order = list(range(chunks))
+    rng = random.Random(seed)
+    while order == sorted(order):
+        rng.shuffle(order)
+    user = item.user.clone()
+    pieces = [
+        item.user[:, head + k * CHUNK_FRAMES : head + (k + 1) * CHUNK_FRAMES]
+        for k in order
+    ]
+    user[:, head:tail] = torch.cat(pieces, dim=1)
+    return user
 
 
 def _loopholes():
@@ -60,10 +88,14 @@ def item_scores(model, items, partner, silence, mode, *, off=frozenset(), batch=
         for row, index in enumerate(chunk):
             item = items[index]
             length = item.frames
-            variant = "swap" if mode == "swap2" else mode
-            user[row, :, :length] = loopholes._user_variant(
-                item, items[partner[index]], variant, silence
-            )
+            if mode in ("shuffle", "shuffle2"):
+                shuffled = shuffled_user(item, 2 * index + (mode == "shuffle2"))
+                user[row, :, :length] = item.user if shuffled is None else shuffled
+            else:
+                variant = "swap" if mode == "swap2" else mode
+                user[row, :, :length] = loopholes._user_variant(
+                    item, items[partner[index]], variant, silence
+                )
             target[row, :, :length] = item.target
             active = item.target_activity.bool()
             speech[row, :length] = active
@@ -149,6 +181,11 @@ def main() -> None:
     parser.add_argument("--silence-codes", type=Path, required=True)
     parser.add_argument("--checkpoints", nargs="+", required=True, help="name=path")
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument(
+        "--meaning-only",
+        action="store_true",
+        help="Score only true and shuffled A (the meaning contrast)",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     silence = torch.tensor(json.loads(args.silence_codes.read_text()), dtype=torch.long)
@@ -165,6 +202,26 @@ def main() -> None:
         model = DauysHybrid(config)
         model.load_state_dict(payload["model"])
         model = model.cuda().eval()
+        shuffled = torch.tensor(
+            [shuffled_user(item, 0) is not None for item in items], dtype=torch.bool
+        )
+        meaning = {
+            mode: item_scores(
+                model, items, partner, silence, mode, batch=args.batch_size
+            )[shuffled]
+            for mode in ("true", "shuffle", "shuffle2")
+        }
+        meaning_row = {
+            "checkpoint": name,
+            "step": int(payload["step"]),
+            "shuffled_items": int(shuffled.sum()),
+            "meaning": contrast(meaning["shuffle"], meaning["true"]),
+            "shuffle_noise": contrast(meaning["shuffle2"], meaning["shuffle"]),
+        }
+        if args.meaning_only:
+            print(json.dumps(meaning_row), flush=True)
+            rows.append(meaning_row)
+            continue
         run = {
             mode: item_scores(
                 model,
@@ -199,6 +256,7 @@ def main() -> None:
             "swap_noise": contrast(run["swap2"], run["swap"]),
             "m4": contrast(off_all, run["true"]),
             "m4_per_block": {},
+            **{k: v for k, v in meaning_row.items() if k not in ("checkpoint", "step")},
         }
         for block in blocks:
             off_one = item_scores(
