@@ -119,10 +119,11 @@ def real_quads(root: Path):
         groups.setdefault((row["topic"], row["speaker"]), {}).setdefault(
             row["word"], row
         )
-    quads = []
-    for words in groups.values():
+    quads, families = [], []
+    for (topic, _), words in groups.items():
         for w, v in itertools.combinations(sorted(words), 2):
             a_w, a_v = words[w], words[v]
+            families.append(topic.split("-")[0])
             quads.append(
                 tuple(
                     _clip(root, name)
@@ -134,7 +135,7 @@ def real_quads(root: Path):
                     )
                 )
             )
-    return quads, groups
+    return quads, (groups, families)
 
 
 def control_quads(control_root: Path, reply_root: Path, groups, limit: int, seed: int):
@@ -188,7 +189,7 @@ def main() -> None:
             control_quads(
                 args.data / "control",
                 args.data / "test_voice",
-                real_quads(args.data / "test_voice")[1],
+                real_quads(args.data / "test_voice")[1][0],
                 args.control_per_group,
                 seed=0,
             ),
@@ -208,6 +209,17 @@ def main() -> None:
             row[split] = {"pairs": len(scores), "accuracy": summarize(scores)}
             if groups is not None:
                 row[split]["by_length_gap"] = by_length_gap(scores, quads)
+                families = groups[1]
+                if len(set(families)) > 1:
+                    row[split]["by_family"] = {
+                        family: {
+                            "pairs": families.count(family),
+                            "accuracy": summarize(
+                                [s for s, f in zip(scores, families) if f == family]
+                            ),
+                        }
+                        for family in sorted(set(families))
+                    }
         print(json.dumps(row), flush=True)
         rows.append(row)
     args.output.write_text(json.dumps(rows, indent=2) + "\n")

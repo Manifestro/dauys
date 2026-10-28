@@ -796,9 +796,9 @@ def spread_score(prediction: torch.Tensor) -> float:
 class Stage1BatchSource(torch.utils.data.Dataset[Stage1Batch]):
     """Lazily builds one same-speaker batch per index for the training loop.
 
-    With ``mix_records`` and ``mix_speakers``, that many of the batch's
-    speaker groups come from the second corpus and the rest from the first,
-    so a small targeted set can be trained on without forgetting the main one.
+    Each ``(records, speakers)`` pair in ``mix`` supplies that many of the
+    batch's speaker groups from its own corpus; the main corpus fills the rest.
+    Small targeted sets can so be trained on without forgetting the main one.
     """
 
     def __init__(
@@ -815,13 +815,18 @@ class Stage1BatchSource(torch.utils.data.Dataset[Stage1Batch]):
         start: int = 0,
         min_before: int = math.ceil(SECONDS_BEFORE * FRAME_RATE),
         min_after: int = math.ceil(SECONDS_AFTER * FRAME_RATE),
-        mix_records: Sequence[Stage1Record] = (),
-        mix_speakers: int = 0,
+        mix: Sequence[tuple[Sequence[Stage1Record], int]] = (),
     ) -> None:
         if steps < 1:
             raise ValueError("A Stage 1 source needs at least one step")
-        if not 0 <= mix_speakers < speakers or (mix_speakers > 0) != bool(mix_records):
-            raise ValueError("Mixed batches need a second corpus and 0 < k < speakers")
+        mixed_speakers = sum(k for _, k in mix)
+        if (
+            any(k < 1 or not corpus for corpus, k in mix)
+            or mixed_speakers >= speakers
+        ):
+            raise ValueError(
+                "Each mixed corpus needs records and 0 < k; the sum < speakers"
+            )
         if not 0 <= start <= steps:
             raise ValueError("The Stage 1 start step must lie inside the plan")
         self.records = list(records)
@@ -836,8 +841,11 @@ class Stage1BatchSource(torch.utils.data.Dataset[Stage1Batch]):
         self.min_before = min_before
         self.min_after = min_after
         self.main_count = len(self.records)
-        self.mix_speakers = mix_speakers
-        self.records += list(mix_records)
+        self.mixed_speakers = mixed_speakers
+        self.mix_spans = []
+        for corpus, k in mix:
+            self.mix_spans.append((len(self.records), len(corpus), k))
+            self.records += list(corpus)
 
     def __len__(self) -> int:
         return self.steps - self.start
@@ -848,20 +856,19 @@ class Stage1BatchSource(torch.utils.data.Dataset[Stage1Batch]):
             self.records[: self.main_count],
             step,
             seed=self.seed,
-            speakers=self.speakers - self.mix_speakers,
+            speakers=self.speakers - self.mixed_speakers,
             anchors=self.anchors,
             pool=self.pool,
         )
-        if self.mix_speakers:
+        for number, (offset, count, k) in enumerate(self.mix_spans, start=1):
             mixed = make_batch_spec(
-                self.records[self.main_count :],
+                self.records[offset : offset + count],
                 step,
-                seed=self.seed + 1,
-                speakers=self.mix_speakers,
+                seed=self.seed + number,
+                speakers=k,
                 anchors=self.anchors,
                 pool=self.pool,
             )
-            offset = self.main_count
             spec += [
                 (tuple(i + offset for i in pool), anchors) for pool, anchors in mixed
             ]

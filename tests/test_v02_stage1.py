@@ -449,8 +449,7 @@ def test_batch_source_mixes_speakers_from_a_second_corpus(tmp_path):
         anchors=1,
         pool=4,
         crop_frames=64,
-        mix_records=extra,
-        mix_speakers=1,
+        mix=[(extra, 1)],
     )
     for index in range(3):
         batch = source[index]

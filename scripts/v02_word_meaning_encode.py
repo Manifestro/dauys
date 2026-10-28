@@ -88,7 +88,7 @@ def main() -> None:
         row = {
             "id": item["id"],
             "speaker": item["voice"],
-            "chapter": f"{item['topic']}-f{item['frame']}",
+            "chapter": item.get("chapter") or f"{item['topic']}-f{item['frame']}",
             "topic": item["topic"],
             "word": item["word"],
             "frame": item["frame"],

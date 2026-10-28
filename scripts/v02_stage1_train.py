@@ -273,14 +273,19 @@ def main() -> None:
         help="Early-abort reasons this run deliberately overrides; recorded in metadata",
     )
     parser.add_argument(
-        "--mix-root", type=Path, help="Second training corpus mixed into each batch"
+        "--mix-root",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="Further training corpora mixed into each batch",
     )
-    parser.add_argument("--mix-manifest", type=Path)
+    parser.add_argument("--mix-manifest", type=Path, nargs="*", default=[])
     parser.add_argument(
         "--mix-speakers",
         type=int,
-        default=0,
-        help="Speaker groups per batch drawn from the second corpus",
+        nargs="*",
+        default=[],
+        help="Speaker groups per batch drawn from each further corpus",
     )
     parser.add_argument("--run-name", default="")
     parser.add_argument("--resume", action="store_true")
@@ -301,12 +306,14 @@ def main() -> None:
     assert_speakers_disjoint(records, heldout)
     assert_stage1_pools(records, speakers=args.speakers, pool=args.pool)
     assert_stage1_pools(heldout, speakers=4, pool=args.pool, chapter_only=True)
-    mix_records = (
-        load_stage1_corpus(args.mix_root, args.mix_manifest) if args.mix_root else []
-    )
-    if mix_records:
+    if not len(args.mix_root) == len(args.mix_manifest) == len(args.mix_speakers):
+        raise ValueError("Give one manifest and one speaker count per mixed corpus")
+    mix = []
+    for root, manifest, k in zip(args.mix_root, args.mix_manifest, args.mix_speakers):
+        mix_records = load_stage1_corpus(root, manifest)
         assert_speakers_disjoint(mix_records, heldout)
-        assert_stage1_pools(mix_records, speakers=args.mix_speakers, pool=args.pool)
+        assert_stage1_pools(mix_records, speakers=k, pool=args.pool)
+        mix.append((mix_records, k))
     silence = _silence(args.silence_codes)
     git_sha, dirty = _git()
     if dirty and args.require_clean and not args.smoke:
@@ -377,8 +384,7 @@ def main() -> None:
         pool=args.pool,
         crop_frames=args.crop_frames,
         start=start_step,
-        mix_records=mix_records,
-        mix_speakers=args.mix_speakers,
+        mix=mix,
     )
     loader = DataLoader(
         source,
@@ -406,7 +412,7 @@ def main() -> None:
             "anchors": args.anchors,
             "pool": args.pool,
             "crop_frames": args.crop_frames,
-            "mix_manifest": str(args.mix_manifest or "none"),
+            "mix_manifests": [str(m) for m in args.mix_manifest],
             "mix_speakers": args.mix_speakers,
             "learning_rate": args.learning_rate,
             "seed": args.seed,
