@@ -42,7 +42,9 @@ def _clip(root: Path, name: str) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 @torch.inference_mode()
-def reply_nll(model, silence, pairs, *, batch: int = 32) -> torch.Tensor:
+def reply_nll(
+    model, silence, pairs, *, batch: int = 32, onset: int = 0
+) -> torch.Tensor:
     """Mean CB0 + depth NLL over B's speech frames for each (A, B) clip pair."""
     out = []
     for start in range(0, len(pairs), batch):
@@ -55,7 +57,11 @@ def reply_nll(model, silence, pairs, *, batch: int = 32) -> torch.Tensor:
             user[row, :, : a.shape[-1]] = a
             begin = a.shape[-1] + PAUSE
             target[row, :, begin : begin + b.shape[-1]] = b
-            speech[row, begin : begin + b.shape[-1]] = b_active
+            active = b_active.clone()
+            if onset:
+                # Only the first ``onset`` speech frames: how the reply starts.
+                active[active.cumsum(0) > onset] = False
+            speech[row, begin : begin + b.shape[-1]] = active
         initial = silence[None].expand(len(chunk), 8).clone()
         output = model(user.cuda(), target.cuda(), initial.cuda())
         target, speech = target.cuda(), speech.cuda()
@@ -72,12 +78,12 @@ def reply_nll(model, silence, pairs, *, batch: int = 32) -> torch.Tensor:
     return torch.cat(out)
 
 
-def pair_accuracy(model, silence, quads) -> list[float]:
+def pair_accuracy(model, silence, quads, onset: int = 0) -> list[float]:
     """quads: (Aw, Av, Bw, Bv) clips; returns 1.0/0.0 per quad."""
     flat = []
     for a_w, a_v, b_w, b_v in quads:
         flat += [(a_w, b_w), (a_v, b_v), (a_w, b_v), (a_v, b_w)]
-    nll = reply_nll(model, silence, flat).reshape(-1, 4)
+    nll = reply_nll(model, silence, flat, onset=onset).reshape(-1, 4)
     return ((nll[:, 0] + nll[:, 1]) < (nll[:, 2] + nll[:, 3])).float().tolist()
 
 
@@ -178,6 +184,12 @@ def main() -> None:
     parser.add_argument("--control-per-group", type=int, default=60)
     parser.add_argument("--splits", nargs="+", default=["test_combo", "test_voice"])
     parser.add_argument("--no-control", action="store_true")
+    parser.add_argument(
+        "--onset-frames",
+        type=int,
+        default=0,
+        help="Score only the first N speech frames of each reply",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     silence = torch.tensor(json.loads(args.silence_codes.read_text()), dtype=torch.long)
@@ -205,7 +217,7 @@ def main() -> None:
         model = model.cuda().eval()
         row = {"checkpoint": name, "step": int(payload.get("step", 0))}
         for split, (quads, groups) in splits.items():
-            scores = pair_accuracy(model, silence, quads)
+            scores = pair_accuracy(model, silence, quads, args.onset_frames)
             row[split] = {"pairs": len(scores), "accuracy": summarize(scores)}
             if groups is not None:
                 row[split]["by_length_gap"] = by_length_gap(scores, quads)
