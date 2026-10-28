@@ -272,6 +272,16 @@ def main() -> None:
         default=[],
         help="Early-abort reasons this run deliberately overrides; recorded in metadata",
     )
+    parser.add_argument(
+        "--mix-root", type=Path, help="Second training corpus mixed into each batch"
+    )
+    parser.add_argument("--mix-manifest", type=Path)
+    parser.add_argument(
+        "--mix-speakers",
+        type=int,
+        default=0,
+        help="Speaker groups per batch drawn from the second corpus",
+    )
     parser.add_argument("--run-name", default="")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--wandb", action="store_true")
@@ -291,6 +301,12 @@ def main() -> None:
     assert_speakers_disjoint(records, heldout)
     assert_stage1_pools(records, speakers=args.speakers, pool=args.pool)
     assert_stage1_pools(heldout, speakers=4, pool=args.pool, chapter_only=True)
+    mix_records = (
+        load_stage1_corpus(args.mix_root, args.mix_manifest) if args.mix_root else []
+    )
+    if mix_records:
+        assert_speakers_disjoint(mix_records, heldout)
+        assert_stage1_pools(mix_records, speakers=args.mix_speakers, pool=args.pool)
     silence = _silence(args.silence_codes)
     git_sha, dirty = _git()
     if dirty and args.require_clean and not args.smoke:
@@ -361,6 +377,8 @@ def main() -> None:
         pool=args.pool,
         crop_frames=args.crop_frames,
         start=start_step,
+        mix_records=mix_records,
+        mix_speakers=args.mix_speakers,
     )
     loader = DataLoader(
         source,
@@ -388,6 +406,8 @@ def main() -> None:
             "anchors": args.anchors,
             "pool": args.pool,
             "crop_frames": args.crop_frames,
+            "mix_manifest": str(args.mix_manifest or "none"),
+            "mix_speakers": args.mix_speakers,
             "learning_rate": args.learning_rate,
             "seed": args.seed,
             "history_dropout": args.history_dropout,

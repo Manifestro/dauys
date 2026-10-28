@@ -429,6 +429,37 @@ def test_batch_source_start_offset_skips_early_steps(tmp_path):
     assert batch.user_codes.shape[0] == 2
 
 
+def test_batch_source_mixes_speakers_from_a_second_corpus(tmp_path):
+    main = [
+        _record(tmp_path, f"{speaker}-{index}", speaker, 128, 64)
+        for speaker in ("s1", "s2", "s3")
+        for index in range(8)
+    ]
+    extra = [
+        _record(tmp_path, f"{speaker}-{index}", speaker, 128, 64)
+        for speaker in ("w1", "w2")
+        for index in range(8)
+    ]
+    source = Stage1BatchSource(
+        main,
+        torch.zeros(8, dtype=torch.long),
+        steps=3,
+        seed=0,
+        speakers=3,
+        anchors=1,
+        pool=4,
+        crop_frames=64,
+        mix_records=extra,
+        mix_speakers=1,
+    )
+    for index in range(3):
+        batch = source[index]
+        batch.validate()
+        speakers = list(batch.speakers)
+        assert sum(s.startswith("w") for s in speakers) == 1
+        assert sum(s.startswith("s") for s in speakers) == 2
+
+
 def test_hidden_history_silences_only_b_after_the_cut(tmp_path):
     torch.manual_seed(0)
     records = []
