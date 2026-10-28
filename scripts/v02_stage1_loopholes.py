@@ -173,7 +173,7 @@ def probe(checkpoint: Path, args, heldout, silence, codec) -> dict:
     step = int(payload["step"])
     out: dict = {"step": step}
     variants = {
-        m: continuation_scores(model, heldout, silence, m)
+        m: continuation_scores(model, heldout, silence, m, batch_size=args.batch_size)
         for m in ("true", "swap", "silent", "tail")
     }
     for mode, scores in variants.items():
@@ -210,6 +210,7 @@ def main() -> None:
     parser.add_argument("--checkpoints", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--items", type=int, default=24)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--watch", action="store_true")
     parser.add_argument("--stop-file", type=Path)
     args = parser.parse_args()
