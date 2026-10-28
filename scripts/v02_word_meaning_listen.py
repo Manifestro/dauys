@@ -87,7 +87,7 @@ def main() -> None:
         for index, row in enumerate(pick(args.data / split, speaker, int(per_topic))):
             clip = torch.load(args.data / split / row["a_clip"], weights_only=True)
             wave = reply(model, codec, silence, clip["codes"], args.frames, index)
-            name = f"{split}-{row['topic']}-{row['word']}.wav"
+            name = f"{speaker}-{row['topic']}-{row['word']}.wav"
             soundfile.write(args.output / name, wave, 24_000)
             expected = plan.get((row["topic"], row["word"]), "")
             lines.append(f'{name},{speaker},{row["word"]},"{expected}"')
