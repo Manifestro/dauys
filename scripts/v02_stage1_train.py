@@ -266,6 +266,12 @@ def main() -> None:
         default=0.5,
         help="Acoustic dropout on A (spec M4 fix: 0.3)",
     )
+    parser.add_argument(
+        "--ignore-abort",
+        nargs="*",
+        default=[],
+        help="Early-abort reasons this run deliberately overrides; recorded in metadata",
+    )
     parser.add_argument("--run-name", default="")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--wandb", action="store_true")
@@ -389,6 +395,7 @@ def main() -> None:
             "listening_horizon": args.listening_horizon,
             "listening_scale": args.listening_scale,
             "acoustic_dropout": args.acoustic_dropout,
+            "ignore_abort": list(args.ignore_abort),
         },
         "model": asdict(config),
         "intent": asdict(intent_config),
@@ -461,7 +468,12 @@ def main() -> None:
                         )
                     model.train()
                     log.update(metrics)
-                    aborted = aborted or early_abort(step, metrics)
+                    reason = early_abort(step, metrics)
+                    if reason in args.ignore_abort:
+                        log["overridden_abort"] = 1.0
+                        print(json.dumps({"step": step, "overridden_abort": reason}))
+                        reason = None
+                    aborted = aborted or reason
                     if metrics["m1_cb0_nll"] < best:
                         best = metrics["m1_cb0_nll"]
                         best_step = step
