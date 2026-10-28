@@ -16,6 +16,7 @@ datasets/
 checkpoints/
 artifacts/
 runs/
+reports/
 mlruns/
 *.wav
 *.flac

@@ -56,6 +56,15 @@ class ModelConfig:
         return cls._from_mapping(data)
 
     @classmethod
+    def v02_stage1(cls) -> "ModelConfig":
+        resource = files("dauys").joinpath(
+            "configs/dauys-hybrid-v0.2-stage1.yaml"
+        )
+        with resource.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+        return cls._from_mapping(data)
+
+    @classmethod
     def v02_proxy(cls) -> "ModelConfig":
         resource = files("dauys").joinpath("configs/dauys-hybrid-v0.2-proxy.yaml")
         with resource.open("r", encoding="utf-8") as handle:
