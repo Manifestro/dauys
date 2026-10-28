@@ -183,10 +183,18 @@ def heldout_c1(ear: Ear, items, silence) -> float:
 
 
 @torch.no_grad()
-def attach_features(name: str, ear: Ear, items) -> None:
+def attach_features(name: str, ear: Ear, items, buffer: int = 0) -> None:
+    """The ear's states, and with ``buffer`` the cell's own input embeddings of
+    the last ``buffer`` frames: a delay line the ear has to beat."""
     for item in items:
         codes = item["codes"][None].cuda()
-        item.setdefault("features", {})[name] = ear(codes)[0].float().half().cpu()
+        features = item.setdefault("features", {})
+        features[name] = ear(codes)[0].float().half().cpu()
+        if buffer:
+            x = sum(ear.embeddings[q](codes[:, q]) for q in range(ear.codebooks))[0]
+            padded = torch.cat((x[:1].expand(buffer - 1, -1), x))
+            window = torch.cat([padded[k : k + len(x)] for k in range(buffer)], -1)
+            features[f"{name}_buffer{buffer}"] = window.float().half().cpu()
 
 
 def _units(args, log):
@@ -247,6 +255,13 @@ def main() -> None:
     parser.add_argument("--layer", type=int, default=9)
     parser.add_argument("--lags", type=int, nargs="+", default=[0, 1, 2, 4, 8])
     parser.add_argument(
+        "--buffer",
+        type=int,
+        default=0,
+        help="Also probe a delay line of this many input frames per cell",
+    )
+    parser.add_argument("--save-dir", type=Path, help="Save each trained ear here")
+    parser.add_argument(
         "--cells", nargs="*", default=["cb0:c1", "cb0:c1mem", "all8:c1", "all8:c1mem"]
     )
     parser.add_argument("--seed", type=int, default=0)
@@ -289,17 +304,26 @@ def main() -> None:
             args,
             log,
         )
-        attach_features(name, ear, probe + test)
-        row = {"features": name, "heldout_c1": round(heldout_c1(ear, test, silence), 4)}
-        for lag in args.lags:
-            row[f"unit@{lag}"] = round(
-                unit_probe(
-                    *_pairs(probe, name, lag), *_pairs(test, name, lag), args.clusters
-                ),
-                4,
-            )
-        log(row)
-        rows.append(row)
+        if args.save_dir:
+            args.save_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(ear.state_dict(), args.save_dir / f"{name}.pt")
+        attach_features(name, ear, probe + test, args.buffer)
+        names = [name] + ([f"{name}_buffer{args.buffer}"] if args.buffer else [])
+        for feature in names:
+            row = {"features": feature}
+            if feature == name:
+                row["heldout_c1"] = round(heldout_c1(ear, test, silence), 4)
+            for lag in args.lags:
+                row[f"unit@{lag}"] = round(
+                    unit_probe(
+                        *_pairs(probe, feature, lag),
+                        *_pairs(test, feature, lag),
+                        args.clusters,
+                    ),
+                    4,
+                )
+            log(row)
+            rows.append(row)
         del ear
         torch.cuda.empty_cache()
     summary = {
