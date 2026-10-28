@@ -545,6 +545,7 @@ class Stage1Weights:
     listening_activity: float = 0.2
     acoustic_dropout: float = 0.5
     label_smoothing: float = 0.05
+    history_dropout: float = 0.0
 
 
 def _interpolate(progress: float, values: tuple[float, float, float, float]) -> float:
@@ -612,6 +613,29 @@ class Stage1Loss:
     intent_accuracy: torch.Tensor
 
 
+def _hide_history(
+    batch: Stage1Batch, probability: float
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Replace B after the cut with silence on the input side for some items.
+
+    Labels stay the true B, so those frames can only be predicted from A.
+    Teacher forcing otherwise lets B's own past explain almost every frame and
+    the tower learns to ignore what it heard.
+    """
+    batch_size, _, frames = batch.output_codes.shape
+    device = batch.output_codes.device
+    if probability <= 0:
+        return batch.output_codes, torch.zeros(
+            batch_size, dtype=torch.bool, device=device
+        )
+    hidden = torch.rand(batch_size, device=device) < probability
+    cut = batch.intent_frames + 1
+    after = torch.arange(frames, device=device)[None] >= cut[:, None]
+    blank = (hidden[:, None] & after)[:, None, :]
+    silence = batch.initial_output_codes[:, :, None].to(batch.output_codes.dtype)
+    return torch.where(blank, silence, batch.output_codes), hidden
+
+
 def stage1_objective(
     model: DauysHybrid,
     batch: Stage1Batch,
@@ -622,9 +646,12 @@ def stage1_objective(
     if model.config.name != "dauys-hybrid-v0.2":
         raise ValueError("Stage 1 requires a v0.2 model")
     batch.validate()
+    inputs, hidden = _hide_history(
+        batch, weights.history_dropout if model.training else 0.0
+    )
     output = model(
         batch.user_codes,
-        batch.output_codes,
+        inputs,
         batch.initial_output_codes,
         acoustic_dropout=weights.acoustic_dropout if model.training else 0.0,
     )
@@ -644,7 +671,8 @@ def stage1_objective(
         batch.output_codes[:, 1:].transpose(1, 2).reshape(-1),
         reduction="none",
     ).reshape(batch_size, frames, 7)
-    depth = masked_mean(depth_values.mean(dim=-1), masks.cb0)
+    # Depth reads the frame's own CB0 from the input, which is silence when hidden.
+    depth = masked_mean(depth_values.mean(dim=-1), masks.cb0 & ~hidden[:, None])
     activity_values = F.cross_entropy(
         output.activity_logits.reshape(-1, 2),
         batch.output_activity.reshape(-1).long(),

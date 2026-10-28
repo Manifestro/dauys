@@ -7,6 +7,7 @@ STOP outcome live in ``dauys.v02_stage1_eval``.
 """
 
 import argparse
+import dataclasses
 import json
 import math
 import random
@@ -240,6 +241,14 @@ def main() -> None:
     parser.add_argument("--eval-items", type=int, default=100)
     parser.add_argument("--listen-dir", type=Path)
     parser.add_argument("--m8-words", type=int)
+    parser.add_argument(
+        "--history-dropout",
+        type=float,
+        default=0.0,
+        help="Share of items whose B input after the cut is replaced by silence",
+    )
+    parser.add_argument("--intent-weight", type=float, default=0.5)
+    parser.add_argument("--run-name", default="")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--smoke", action="store_true")
@@ -275,8 +284,12 @@ def main() -> None:
         load_initial_weights(model, args.init_checkpoint, from_v01=False)
     model = model.to(device)
     print(json.dumps({"trainable_parameters": model.trainable_parameters()}))
-    intent_config = IntentConfig(horizon=12, weight=0.5)
+    intent_config = IntentConfig(horizon=12, weight=args.intent_weight)
     intent = IntentModule(model, intent_config).to(device)
+    if args.init_checkpoint and not args.resume:
+        initial = load_research_checkpoint(args.init_checkpoint)
+        if "intent" in initial:
+            intent.load_state_dict(initial["intent"])
     groups = optimizer_groups(model, args.weight_decay)
     groups.append(
         {"params": list(intent.head.parameters()), "weight_decay": args.weight_decay}
@@ -353,6 +366,8 @@ def main() -> None:
             "crop_frames": args.crop_frames,
             "learning_rate": args.learning_rate,
             "seed": args.seed,
+            "history_dropout": args.history_dropout,
+            "intent_weight": args.intent_weight,
         },
         "model": asdict(config),
         "intent": asdict(intent_config),
@@ -363,7 +378,9 @@ def main() -> None:
     if not args.resume:
         (root / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     run = (
-        start_private_run("dauys", f"v02-stage1-s{args.seed}", provenance)
+        start_private_run(
+            "dauys", f"v02-stage1{args.run_name}-s{args.seed}", provenance
+        )
         if args.wandb and not args.smoke
         else None
     )
@@ -375,7 +392,11 @@ def main() -> None:
             for step, batch in enumerate(loader, start_step + 1):
                 batch = batch.to(device)
                 progress = (step - 1) / max(1, args.steps - 1)
-                weights = stage1_weights(progress)
+                weights = dataclasses.replace(
+                    stage1_weights(progress),
+                    intent=args.intent_weight,
+                    history_dropout=args.history_dropout,
+                )
                 optimizer.zero_grad(set_to_none=True)
                 with torch.autocast(
                     device.type,

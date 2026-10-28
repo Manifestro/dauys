@@ -19,6 +19,7 @@ from dauys.v02_stage1 import (
     Stage1BatchSource,
     Stage1Record,
     Stage1Weights,
+    _hide_history,
     _load_tokens,
     ab_layout,
     assert_stage1_pools,
@@ -417,3 +418,22 @@ def test_batch_source_start_offset_skips_early_steps(tmp_path):
     batch = source[0]
     batch.validate()
     assert batch.user_codes.shape[0] == 2
+
+
+def test_hidden_history_silences_only_b_after_the_cut(tmp_path):
+    torch.manual_seed(0)
+    records = []
+    for speaker in ("s1", "s2"):
+        for index in range(8):
+            records.append(_record(tmp_path, f"{speaker}-{index}", speaker, 128, 64))
+    spec = make_batch_spec(records, 0, seed=3, speakers=2, anchors=2, pool=4)
+    silence = torch.full((8,), 7, dtype=torch.long)
+    batch = load_batch(records, spec, silence, crop_frames=64)
+    kept, none_hidden = _hide_history(batch, 0.0)
+    assert kept is batch.output_codes and not none_hidden.any()
+    inputs, hidden = _hide_history(batch, 1.0)
+    assert hidden.all()
+    for row in range(inputs.shape[0]):
+        cut = int(batch.intent_frames[row]) + 1
+        assert torch.equal(inputs[row, :, :cut], batch.output_codes[row, :, :cut])
+        assert bool((inputs[row, :, cut:] == 7).all())
