@@ -15,7 +15,9 @@ held-out speakers, then read two targets from several feature sets:
   held over time, not just the sound of the current frame.
 
 Feature sets: Mimi code embeddings of frame t alone (``codes_now``), of the
-last four frames (``codes_window``, a local 320 ms baseline), and the ear
+last four frames (``codes_window``, a local 320 ms baseline), the same for
+CB0 alone (``cb0_now``, ``cb0_window``) and for CB1–7 alone
+(``acoustic_now``), and the ear
 output of each checkpoint, plus a randomly initialised ear. If the ear beats
 the local window on ``segment_r2``, it already integrates content and the
 problem lies after the ear; if it does not, an ear distillation target is the
@@ -134,6 +136,15 @@ def feature_sets(utterances, models: dict[str, DauysHybrid], embedder: DauysHybr
         padded = torch.cat((now[:1].expand(WINDOW_FRAMES - 1, -1), now))
         sets["codes_window"] = torch.cat(
             [padded[k : k + len(now)] for k in range(WINDOW_FRAMES)], dim=-1
+        )
+        cb0 = embedder.embeddings[0](codes[:, 0])[0].float()
+        sets["cb0_now"] = cb0
+        padded = torch.cat((cb0[:1].expand(WINDOW_FRAMES - 1, -1), cb0))
+        sets["cb0_window"] = torch.cat(
+            [padded[k : k + len(cb0)] for k in range(WINDOW_FRAMES)], dim=-1
+        )
+        sets["acoustic_now"] = sum(
+            embedder.embeddings[q](codes[:, q])[0].float() for q in range(1, 8)
         )
         for name, model in models.items():
             sets[name] = model.encode_listening(codes)[0].float()

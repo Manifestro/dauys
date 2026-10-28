@@ -15,6 +15,8 @@ Variants (same phrases, same A frames):
   How much content the codes carry.
 - ``causal``: as ``codes``, but A is read causally at its last frame, as the
   ear and intent head do. What reading without the future costs.
+- ``cb0`` / ``cb0_causal``: as ``codes`` / ``causal`` with CB0 only on both
+  sides. Whether the semantic codebook alone carries the content.
 
 Each variant reports accuracy on all held-out chapter pools, on the exact M3
 pools (seed 7, 32 groups), and with A cut to its last 12 frames (the L1 tail).
@@ -126,13 +128,17 @@ def add_hubert(data, codec, hubert, layer: int, batch: int = 32) -> None:
 
 
 class Encoder(nn.Module):
-    def __init__(self, features: str, width: int, layers: int, causal: bool):
+    def __init__(
+        self, features: str, width: int, layers: int, causal: bool, codebooks: int
+    ):
         super().__init__()
-        self.features, self.causal = features, causal
+        self.features, self.causal, self.codebooks = features, causal, codebooks
         if features == "hubert":
             self.input = nn.Linear(768, width)
         else:
-            self.input = nn.ModuleList(nn.Embedding(2048, width) for _ in range(8))
+            self.input = nn.ModuleList(
+                nn.Embedding(2048, width) for _ in range(codebooks)
+            )
         self.position = nn.Embedding(512, width)
         layer = nn.TransformerEncoderLayer(
             width, 4, 4 * width, dropout=0.1, batch_first=True, norm_first=True
@@ -144,7 +150,9 @@ class Encoder(nn.Module):
         if self.features == "hubert":
             h = self.input(x.float())
         else:
-            h = sum(self.input[q](x[:, q]) for q in range(8)) / math.sqrt(8)
+            h = sum(self.input[q](x[:, q]) for q in range(self.codebooks)) / math.sqrt(
+                self.codebooks
+            )
         frames = h.shape[1]
         h = h + self.position(torch.arange(frames, device=h.device))
         if self.causal:
@@ -169,8 +177,10 @@ class DualEncoder(nn.Module):
         super().__init__()
         features = "hubert" if variant == "hubert" else "codes"
         self.features = features
-        self.a = Encoder(features, width, layers, causal=variant == "causal")
-        self.b = Encoder(features, width, layers, causal=False)
+        codebooks = 1 if variant.startswith("cb0") else 8
+        causal = variant.endswith("causal")
+        self.a = Encoder(features, width, layers, causal, codebooks)
+        self.b = Encoder(features, width, layers, False, codebooks)
         self.scale = nn.Parameter(torch.tensor(math.log(10.0)))
 
     def inputs(self, data, rows, side: str):
