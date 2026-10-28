@@ -1,0 +1,384 @@
+{"family": "need", "key": "drink", "answer": "Here is some water.", "id": "c0000"}
+{"family": "need", "key": "eat", "answer": "Here is your snack.", "id": "c0001"}
+{"family": "need", "key": "sleep", "answer": "Okay, let's go to bed.", "id": "c0002"}
+{"family": "need", "key": "play", "answer": "Let's play with your blocks.", "id": "c0003"}
+{"family": "need", "key": "read", "answer": "Let's read a book.", "id": "c0004"}
+{"family": "need", "key": "draw", "answer": "Here are your crayons.", "id": "c0005"}
+{"family": "need", "key": "swim", "answer": "Let's go to the pool.", "id": "c0006"}
+{"family": "need", "key": "hug", "answer": "Here is a big hug.", "id": "c0007"}
+{"family": "need", "key": "banana", "answer": "Here is your banana.", "id": "c0008"}
+{"family": "need", "key": "park", "answer": "Let's go to the park.", "id": "c0009"}
+{"family": "need", "key": "cookie", "answer": "Here is a cookie.", "id": "c0010"}
+{"family": "need", "key": "ball", "answer": "Let's play with the ball.", "id": "c0011"}
+{"family": "need", "key": "potty", "answer": "Let's go to the potty.", "id": "c0012"}
+{"family": "need", "key": "music", "answer": "Let's listen to some music.", "id": "c0013"}
+{"family": "need", "key": "nap", "answer": "Let's take a nap.", "id": "c0014"}
+{"family": "need", "key": "milk", "answer": "Here is your milk.", "id": "c0015"}
+{"family": "need", "key": "juice", "answer": "Here is your juice.", "id": "c0016"}
+{"family": "need", "key": "puzzle", "answer": "Let's do the puzzle.", "id": "c0017"}
+{"family": "need", "key": "swing", "answer": "Let's go on the swing.", "id": "c0018"}
+{"family": "need", "key": "slide", "answer": "Let's go down the slide.", "id": "c0019"}
+{"family": "need", "key": "bath", "answer": "Let's take a bath.", "id": "c0020"}
+{"family": "need", "key": "kite", "answer": "Let's fly the kite.", "id": "c0021"}
+{"family": "need", "key": "balloon", "answer": "Here is a balloon.", "id": "c0022"}
+{"family": "need", "key": "apple", "answer": "Here is an apple.", "id": "c0023"}
+{"family": "need", "key": "song", "answer": "Let's sing a song.", "id": "c0024"}
+{"family": "need", "key": "doll", "answer": "Here is your doll.", "id": "c0025"}
+{"family": "need", "key": "train", "answer": "Let's play with the train.", "id": "c0026"}
+{"family": "need", "key": "car", "answer": "Here is your toy car.", "id": "c0027"}
+{"family": "need", "key": "sand", "answer": "Let's play in the sandbox.", "id": "c0028"}
+{"family": "need", "key": "teddy", "answer": "Here is your teddy.", "id": "c0029"}
+{"family": "need", "key": "cracker", "answer": "Here is a cracker.", "id": "c0030"}
+{"family": "need", "key": "truck", "answer": "Here is your toy truck.", "id": "c0031"}
+{"family": "need", "key": "airplane", "answer": "Let's fly your airplane.", "id": "c0032"}
+{"family": "need", "key": "bike", "answer": "Let's ride your bike.", "id": "c0033"}
+{"family": "need", "key": "popcorn", "answer": "Here is some popcorn.", "id": "c0034"}
+{"family": "need", "key": "grapes", "answer": "Here are some grapes.", "id": "c0035"}
+{"family": "need", "key": "ice cream", "answer": "Here is some ice cream.", "id": "c0036"}
+{"family": "need", "key": "sticker", "answer": "Here is a sticker.", "id": "c0037"}
+{"family": "need", "key": "water", "answer": "Here is a glass of water.", "id": "c0038"}
+{"family": "need", "key": "snack", "answer": "Here is your snack.", "id": "c0039"}
+{"family": "feeling", "key": "cold", "answer": "Put on your warm sweater.", "id": "c0040"}
+{"family": "feeling", "key": "hot", "answer": "Let's take off your jacket.", "id": "c0041"}
+{"family": "feeling", "key": "tired", "answer": "Let's take a little rest.", "id": "c0042"}
+{"family": "feeling", "key": "sick", "answer": "Lie down and rest, I am here.", "id": "c0043"}
+{"family": "feeling", "key": "sad", "answer": "Come here, I will hug you.", "id": "c0044"}
+{"family": "feeling", "key": "scared", "answer": "Don't worry, you are safe.", "id": "c0045"}
+{"family": "feeling", "key": "bored", "answer": "Let's play a game.", "id": "c0046"}
+{"family": "feeling", "key": "hungry", "answer": "Let's make you a sandwich.", "id": "c0047"}
+{"family": "feeling", "key": "thirsty", "answer": "Here is some water.", "id": "c0048"}
+{"family": "feeling", "key": "happy", "answer": "I am so glad.", "id": "c0049"}
+{"family": "feeling", "key": "wet", "answer": "Let's get you dry clothes.", "id": "c0050"}
+{"family": "feeling", "key": "itchy", "answer": "Let me scratch it for you.", "id": "c0051"}
+{"family": "feeling", "key": "dirty", "answer": "Let's wash you up.", "id": "c0052"}
+{"family": "feeling", "key": "sleepy", "answer": "Let's go to bed.", "id": "c0053"}
+{"family": "feeling", "key": "grumpy", "answer": "Let's take a deep breath.", "id": "c0054"}
+{"family": "feeling", "key": "lonely", "answer": "I will stay with you.", "id": "c0055"}
+{"family": "feeling", "key": "angry", "answer": "Let's breathe slowly together.", "id": "c0056"}
+{"family": "feeling", "key": "full", "answer": "Okay, no more food then.", "id": "c0057"}
+{"family": "feeling", "key": "sticky", "answer": "Let's wash your hands.", "id": "c0058"}
+{"family": "feeling", "key": "sweaty", "answer": "Let's wipe you with a towel.", "id": "c0059"}
+{"family": "feeling", "key": "shy", "answer": "It is okay, take your time.", "id": "c0060"}
+{"family": "feeling", "key": "tummy ache", "answer": "Lie down, I will rub your tummy.", "id": "c0061"}
+{"family": "feeling", "key": "headache", "answer": "Let's rest in a quiet room.", "id": "c0062"}
+{"family": "color", "key": "sky", "answer": "It is blue.", "id": "c0063"}
+{"family": "color", "key": "grass", "answer": "It is green.", "id": "c0064"}
+{"family": "color", "key": "snow", "answer": "It is white.", "id": "c0065"}
+{"family": "color", "key": "banana", "answer": "It is yellow.", "id": "c0066"}
+{"family": "color", "key": "tomato", "answer": "It is red.", "id": "c0067"}
+{"family": "color", "key": "coal", "answer": "It is black.", "id": "c0068"}
+{"family": "color", "key": "milk", "answer": "It is white.", "id": "c0069"}
+{"family": "color", "key": "orange", "answer": "It is orange.", "id": "c0070"}
+{"family": "color", "key": "lemon", "answer": "It is yellow.", "id": "c0071"}
+{"family": "color", "key": "blood", "answer": "It is red.", "id": "c0072"}
+{"family": "color", "key": "cloud", "answer": "It is white.", "id": "c0073"}
+{"family": "color", "key": "leaf", "answer": "It is green.", "id": "c0074"}
+{"family": "color", "key": "dirt", "answer": "It is brown.", "id": "c0075"}
+{"family": "color", "key": "night", "answer": "It is black.", "id": "c0076"}
+{"family": "color", "key": "sun", "answer": "It is yellow.", "id": "c0077"}
+{"family": "color", "key": "frog", "answer": "It is green.", "id": "c0078"}
+{"family": "color", "key": "cherry", "answer": "It is red.", "id": "c0079"}
+{"family": "color", "key": "strawberry", "answer": "It is red.", "id": "c0080"}
+{"family": "color", "key": "pumpkin", "answer": "It is orange.", "id": "c0081"}
+{"family": "color", "key": "carrot", "answer": "It is orange.", "id": "c0082"}
+{"family": "color", "key": "plum", "answer": "It is purple.", "id": "c0083"}
+{"family": "color", "key": "egg yolk", "answer": "It is yellow.", "id": "c0084"}
+{"family": "color", "key": "lime", "answer": "It is green.", "id": "c0085"}
+{"family": "color", "key": "pea", "answer": "It is green.", "id": "c0086"}
+{"family": "color", "key": "raspberry", "answer": "It is red.", "id": "c0087"}
+{"family": "color", "key": "avocado", "answer": "It is green.", "id": "c0088"}
+{"family": "color", "key": "coffee", "answer": "It is brown.", "id": "c0089"}
+{"family": "color", "key": "blueberry", "answer": "It is blue.", "id": "c0090"}
+{"family": "color", "key": "mud", "answer": "It is brown.", "id": "c0091"}
+{"family": "color", "key": "sunflower", "answer": "It is yellow.", "id": "c0092"}
+{"family": "color", "key": "chocolate", "answer": "It is brown.", "id": "c0093"}
+{"family": "color", "key": "fire truck", "answer": "It is red.", "id": "c0094"}
+{"family": "color", "key": "polar bear", "answer": "It is white.", "id": "c0095"}
+{"family": "color", "key": "crow", "answer": "It is black.", "id": "c0096"}
+{"family": "color", "key": "flamingo", "answer": "It is pink.", "id": "c0097"}
+{"family": "color", "key": "elephant", "answer": "It is gray.", "id": "c0098"}
+{"family": "animal_sound", "key": "cat", "answer": "It says meow.", "id": "c0099"}
+{"family": "animal_sound", "key": "dog", "answer": "It says woof.", "id": "c0100"}
+{"family": "animal_sound", "key": "cow", "answer": "It says moo.", "id": "c0101"}
+{"family": "animal_sound", "key": "duck", "answer": "It says quack.", "id": "c0102"}
+{"family": "animal_sound", "key": "sheep", "answer": "It says baa.", "id": "c0103"}
+{"family": "animal_sound", "key": "owl", "answer": "It says hoot.", "id": "c0104"}
+{"family": "animal_sound", "key": "bee", "answer": "It says buzz.", "id": "c0105"}
+{"family": "animal_sound", "key": "horse", "answer": "It says neigh.", "id": "c0106"}
+{"family": "animal_sound", "key": "pig", "answer": "It says oink.", "id": "c0107"}
+{"family": "animal_sound", "key": "chicken", "answer": "It says cluck.", "id": "c0108"}
+{"family": "animal_sound", "key": "rooster", "answer": "It says cock a doodle doo.", "id": "c0109"}
+{"family": "animal_sound", "key": "donkey", "answer": "It says hee haw.", "id": "c0110"}
+{"family": "animal_sound", "key": "goat", "answer": "It says maa.", "id": "c0111"}
+{"family": "animal_sound", "key": "lion", "answer": "It says roar.", "id": "c0112"}
+{"family": "animal_sound", "key": "tiger", "answer": "It says roar.", "id": "c0113"}
+{"family": "animal_sound", "key": "bear", "answer": "It says grr.", "id": "c0114"}
+{"family": "animal_sound", "key": "frog", "answer": "It says ribbit.", "id": "c0115"}
+{"family": "animal_sound", "key": "bird", "answer": "It says tweet.", "id": "c0116"}
+{"family": "animal_sound", "key": "snake", "answer": "It says hiss.", "id": "c0117"}
+{"family": "animal_sound", "key": "wolf", "answer": "It says awoo.", "id": "c0118"}
+{"family": "animal_sound", "key": "goose", "answer": "It says honk.", "id": "c0119"}
+{"family": "animal_sound", "key": "chick", "answer": "It says peep.", "id": "c0120"}
+{"family": "animal_sound", "key": "mouse", "answer": "It says squeak.", "id": "c0121"}
+{"family": "animal_sound", "key": "turkey", "answer": "It says gobble.", "id": "c0122"}
+{"family": "opposite", "key": "hot", "answer": "Cold.", "id": "c0123"}
+{"family": "opposite", "key": "big", "answer": "Small.", "id": "c0124"}
+{"family": "opposite", "key": "up", "answer": "Down.", "id": "c0125"}
+{"family": "opposite", "key": "open", "answer": "Closed.", "id": "c0126"}
+{"family": "opposite", "key": "wet", "answer": "Dry.", "id": "c0127"}
+{"family": "opposite", "key": "fast", "answer": "Slow.", "id": "c0128"}
+{"family": "opposite", "key": "full", "answer": "Empty.", "id": "c0129"}
+{"family": "opposite", "key": "high", "answer": "Low.", "id": "c0130"}
+{"family": "opposite", "key": "thick", "answer": "Thin.", "id": "c0131"}
+{"family": "opposite", "key": "long", "answer": "Short.", "id": "c0132"}
+{"family": "opposite", "key": "new", "answer": "Old.", "id": "c0133"}
+{"family": "opposite", "key": "dry", "answer": "Wet.", "id": "c0134"}
+{"family": "opposite", "key": "slow", "answer": "Fast.", "id": "c0135"}
+{"family": "opposite", "key": "empty", "answer": "Full.", "id": "c0136"}
+{"family": "opposite", "key": "clean", "answer": "Dirty.", "id": "c0137"}
+{"family": "opposite", "key": "near", "answer": "Far.", "id": "c0138"}
+{"family": "opposite", "key": "loud", "answer": "Quiet.", "id": "c0139"}
+{"family": "opposite", "key": "soft", "answer": "Hard.", "id": "c0140"}
+{"family": "opposite", "key": "small", "answer": "Big.", "id": "c0141"}
+{"family": "opposite", "key": "cold", "answer": "Hot.", "id": "c0142"}
+{"family": "opposite", "key": "tall", "answer": "Short.", "id": "c0143"}
+{"family": "opposite", "key": "down", "answer": "Up.", "id": "c0144"}
+{"family": "opposite", "key": "dark", "answer": "Light.", "id": "c0145"}
+{"family": "opposite", "key": "left", "answer": "Right.", "id": "c0146"}
+{"family": "opposite", "key": "dirty", "answer": "Clean.", "id": "c0147"}
+{"family": "opposite", "key": "narrow", "answer": "Wide.", "id": "c0148"}
+{"family": "opposite", "key": "in", "answer": "Out.", "id": "c0149"}
+{"family": "opposite", "key": "out", "answer": "In.", "id": "c0150"}
+{"family": "opposite", "key": "happy", "answer": "Sad.", "id": "c0151"}
+{"family": "opposite", "key": "day", "answer": "Night.", "id": "c0152"}
+{"family": "opposite", "key": "night", "answer": "Day.", "id": "c0153"}
+{"family": "opposite", "key": "heavy", "answer": "Light.", "id": "c0154"}
+{"family": "opposite", "key": "quiet", "answer": "Loud.", "id": "c0155"}
+{"family": "opposite", "key": "far", "answer": "Near.", "id": "c0156"}
+{"family": "opposite", "key": "closed", "answer": "Open.", "id": "c0157"}
+{"family": "opposite", "key": "yes", "answer": "No.", "id": "c0158"}
+{"family": "body", "key": "eyes", "answer": "We see with our eyes.", "id": "c0159"}
+{"family": "body", "key": "ears", "answer": "We hear with our ears.", "id": "c0160"}
+{"family": "body", "key": "nose", "answer": "We smell with our nose.", "id": "c0161"}
+{"family": "body", "key": "mouth", "answer": "We eat and talk with it.", "id": "c0162"}
+{"family": "body", "key": "hands", "answer": "We hold things with our hands.", "id": "c0163"}
+{"family": "body", "key": "feet", "answer": "We walk with our feet.", "id": "c0164"}
+{"family": "body", "key": "teeth", "answer": "We chew food with them.", "id": "c0165"}
+{"family": "body", "key": "tongue", "answer": "We taste with our tongue.", "id": "c0166"}
+{"family": "body", "key": "legs", "answer": "We run with our legs.", "id": "c0167"}
+{"family": "body", "key": "lungs", "answer": "We breathe with our lungs.", "id": "c0168"}
+{"family": "body", "key": "brain", "answer": "We think with our brain.", "id": "c0169"}
+{"family": "baby_animal", "key": "dog", "answer": "A puppy.", "id": "c0170"}
+{"family": "baby_animal", "key": "cat", "answer": "A kitten.", "id": "c0171"}
+{"family": "baby_animal", "key": "cow", "answer": "A calf.", "id": "c0172"}
+{"family": "baby_animal", "key": "sheep", "answer": "A lamb.", "id": "c0173"}
+{"family": "baby_animal", "key": "duck", "answer": "A duckling.", "id": "c0174"}
+{"family": "baby_animal", "key": "goat", "answer": "A kid.", "id": "c0175"}
+{"family": "baby_animal", "key": "hen", "answer": "A chick.", "id": "c0176"}
+{"family": "baby_animal", "key": "lion", "answer": "A cub.", "id": "c0177"}
+{"family": "baby_animal", "key": "tiger", "answer": "A cub.", "id": "c0178"}
+{"family": "baby_animal", "key": "bear", "answer": "A cub.", "id": "c0179"}
+{"family": "baby_animal", "key": "wolf", "answer": "A pup.", "id": "c0180"}
+{"family": "baby_animal", "key": "giraffe", "answer": "A calf.", "id": "c0181"}
+{"family": "baby_animal", "key": "kangaroo", "answer": "A joey.", "id": "c0182"}
+{"family": "baby_animal", "key": "koala", "answer": "A joey.", "id": "c0183"}
+{"family": "baby_animal", "key": "panda", "answer": "A cub.", "id": "c0184"}
+{"family": "baby_animal", "key": "hippo", "answer": "A calf.", "id": "c0185"}
+{"family": "baby_animal", "key": "goose", "answer": "A gosling.", "id": "c0186"}
+{"family": "baby_animal", "key": "chicken", "answer": "A chick.", "id": "c0187"}
+{"family": "baby_animal", "key": "frog", "answer": "A tadpole.", "id": "c0188"}
+{"family": "baby_animal", "key": "penguin", "answer": "A chick.", "id": "c0189"}
+{"family": "baby_animal", "key": "horse", "answer": "A foal.", "id": "c0190"}
+{"family": "baby_animal", "key": "pig", "answer": "A piglet.", "id": "c0191"}
+{"family": "baby_animal", "key": "deer", "answer": "A fawn.", "id": "c0192"}
+{"family": "baby_animal", "key": "butterfly", "answer": "A caterpillar.", "id": "c0193"}
+{"family": "animal_home", "key": "bird", "answer": "In a nest.", "id": "c0194"}
+{"family": "animal_home", "key": "bee", "answer": "In a hive.", "id": "c0195"}
+{"family": "animal_home", "key": "spider", "answer": "In a web.", "id": "c0196"}
+{"family": "animal_home", "key": "fish", "answer": "In the water.", "id": "c0197"}
+{"family": "animal_home", "key": "rabbit", "answer": "In a burrow.", "id": "c0198"}
+{"family": "animal_home", "key": "horse", "answer": "In a stable.", "id": "c0199"}
+{"family": "animal_home", "key": "cow", "answer": "In a barn.", "id": "c0200"}
+{"family": "animal_home", "key": "duck", "answer": "On the pond.", "id": "c0201"}
+{"family": "animal_home", "key": "chicken", "answer": "In a coop.", "id": "c0202"}
+{"family": "animal_home", "key": "hen", "answer": "In a coop.", "id": "c0203"}
+{"family": "animal_home", "key": "monkey", "answer": "In the trees.", "id": "c0204"}
+{"family": "animal_home", "key": "squirrel", "answer": "In a tree.", "id": "c0205"}
+{"family": "animal_home", "key": "fox", "answer": "In a den.", "id": "c0206"}
+{"family": "animal_home", "key": "bear", "answer": "In a cave.", "id": "c0207"}
+{"family": "animal_home", "key": "tiger", "answer": "In the jungle.", "id": "c0208"}
+{"family": "animal_home", "key": "camel", "answer": "In the desert.", "id": "c0209"}
+{"family": "animal_home", "key": "whale", "answer": "In the ocean.", "id": "c0210"}
+{"family": "animal_home", "key": "dolphin", "answer": "In the ocean.", "id": "c0211"}
+{"family": "animal_home", "key": "frog", "answer": "In a pond.", "id": "c0212"}
+{"family": "animal_home", "key": "deer", "answer": "In the forest.", "id": "c0213"}
+{"family": "animal_home", "key": "penguin", "answer": "On the ice.", "id": "c0214"}
+{"family": "animal_home", "key": "shark", "answer": "In the ocean.", "id": "c0215"}
+{"family": "animal_home", "key": "octopus", "answer": "In the ocean.", "id": "c0216"}
+{"family": "animal_home", "key": "hamster", "answer": "In a cage.", "id": "c0217"}
+{"family": "animal_home", "key": "polar bear", "answer": "On the ice.", "id": "c0218"}
+{"family": "animal_home", "key": "ant", "answer": "In an anthill.", "id": "c0219"}
+{"family": "animal_home", "key": "dog", "answer": "In a doghouse.", "id": "c0220"}
+{"family": "animal_home", "key": "pig", "answer": "In a pen.", "id": "c0221"}
+{"family": "use", "key": "spoon", "answer": "To eat soup.", "id": "c0222"}
+{"family": "use", "key": "fork", "answer": "To eat food.", "id": "c0223"}
+{"family": "use", "key": "knife", "answer": "To cut food.", "id": "c0224"}
+{"family": "use", "key": "cup", "answer": "To drink from.", "id": "c0225"}
+{"family": "use", "key": "key", "answer": "To open the door.", "id": "c0226"}
+{"family": "use", "key": "towel", "answer": "To dry yourself.", "id": "c0227"}
+{"family": "use", "key": "broom", "answer": "To sweep the floor.", "id": "c0228"}
+{"family": "use", "key": "pillow", "answer": "To rest your head.", "id": "c0229"}
+{"family": "use", "key": "toothbrush", "answer": "To brush your teeth.", "id": "c0230"}
+{"family": "use", "key": "comb", "answer": "To comb your hair.", "id": "c0231"}
+{"family": "use", "key": "soap", "answer": "To wash your hands.", "id": "c0232"}
+{"family": "use", "key": "umbrella", "answer": "To stay dry in the rain.", "id": "c0233"}
+{"family": "use", "key": "scissors", "answer": "To cut paper.", "id": "c0234"}
+{"family": "use", "key": "pencil", "answer": "To write and draw.", "id": "c0235"}
+{"family": "use", "key": "bed", "answer": "To sleep in.", "id": "c0236"}
+{"family": "use", "key": "chair", "answer": "To sit on.", "id": "c0237"}
+{"family": "use", "key": "plate", "answer": "To put food on.", "id": "c0238"}
+{"family": "use", "key": "shovel", "answer": "To dig in the sand.", "id": "c0239"}
+{"family": "use", "key": "hammer", "answer": "To hit nails.", "id": "c0240"}
+{"family": "use", "key": "phone", "answer": "To call people.", "id": "c0241"}
+{"family": "use", "key": "clock", "answer": "To tell the time.", "id": "c0242"}
+{"family": "use", "key": "glasses", "answer": "To see better.", "id": "c0243"}
+{"family": "use", "key": "blanket", "answer": "To keep warm.", "id": "c0244"}
+{"family": "use", "key": "book", "answer": "To read stories.", "id": "c0245"}
+{"family": "use", "key": "lamp", "answer": "To give us light.", "id": "c0246"}
+{"family": "use", "key": "fridge", "answer": "To keep food cold.", "id": "c0247"}
+{"family": "use", "key": "oven", "answer": "To cook food.", "id": "c0248"}
+{"family": "use", "key": "ladder", "answer": "To climb up high.", "id": "c0249"}
+{"family": "use", "key": "camera", "answer": "To take pictures.", "id": "c0250"}
+{"family": "use", "key": "bucket", "answer": "To carry water.", "id": "c0251"}
+{"family": "place", "key": "milk", "answer": "In the fridge.", "id": "c0252"}
+{"family": "place", "key": "shoes", "answer": "By the front door.", "id": "c0253"}
+{"family": "place", "key": "toothbrush", "answer": "In the bathroom.", "id": "c0254"}
+{"family": "place", "key": "toys", "answer": "In the toy box.", "id": "c0255"}
+{"family": "place", "key": "books", "answer": "On the shelf.", "id": "c0256"}
+{"family": "place", "key": "pillow", "answer": "On the bed.", "id": "c0257"}
+{"family": "place", "key": "socks", "answer": "In the drawer.", "id": "c0258"}
+{"family": "place", "key": "butter", "answer": "In the fridge.", "id": "c0259"}
+{"family": "place", "key": "towel", "answer": "In the bathroom.", "id": "c0260"}
+{"family": "place", "key": "soap", "answer": "In the bathroom.", "id": "c0261"}
+{"family": "place", "key": "blanket", "answer": "On the bed.", "id": "c0262"}
+{"family": "place", "key": "coat", "answer": "On the hook.", "id": "c0263"}
+{"family": "place", "key": "couch", "answer": "In the living room.", "id": "c0264"}
+{"family": "place", "key": "bed", "answer": "In the bedroom.", "id": "c0265"}
+{"family": "place", "key": "eggs", "answer": "In the fridge.", "id": "c0266"}
+{"family": "place", "key": "forks", "answer": "In the kitchen drawer.", "id": "c0267"}
+{"family": "place", "key": "trash", "answer": "In the trash can.", "id": "c0268"}
+{"family": "place", "key": "car", "answer": "In the garage.", "id": "c0269"}
+{"family": "place", "key": "clothes", "answer": "In the closet.", "id": "c0270"}
+{"family": "weather", "key": "rain", "answer": "Wear your raincoat.", "id": "c0271"}
+{"family": "weather", "key": "sun", "answer": "Put on your sun hat.", "id": "c0272"}
+{"family": "weather", "key": "wind", "answer": "Wear a warm jacket.", "id": "c0273"}
+{"family": "weather", "key": "snow", "answer": "Put on your gloves and boots.", "id": "c0274"}
+{"family": "weather", "key": "storm", "answer": "Let's stay inside.", "id": "c0275"}
+{"family": "weather", "key": "mud", "answer": "Put on your rubber boots.", "id": "c0276"}
+{"family": "weather", "key": "dark", "answer": "Let's turn on the light.", "id": "c0277"}
+{"family": "weather", "key": "ice", "answer": "Walk slowly, it is slippery.", "id": "c0278"}
+{"family": "weather", "key": "thunder", "answer": "It is okay, it is just thunder.", "id": "c0279"}
+{"family": "weather", "key": "hot", "answer": "Let's drink some cold water.", "id": "c0280"}
+{"family": "category", "key": "apple", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0281"}
+{"family": "category", "key": "broccoli", "answer": "A vegetable.", "options": "fruit or a vegetable", "id": "c0282"}
+{"family": "category", "key": "banana", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0283"}
+{"family": "category", "key": "carrot", "answer": "A vegetable.", "options": "fruit or a vegetable", "id": "c0284"}
+{"family": "category", "key": "orange", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0285"}
+{"family": "category", "key": "lettuce", "answer": "A vegetable.", "options": "fruit or a vegetable", "id": "c0286"}
+{"family": "category", "key": "grape", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0287"}
+{"family": "category", "key": "onion", "answer": "A vegetable.", "options": "fruit or a vegetable", "id": "c0288"}
+{"family": "category", "key": "pear", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0289"}
+{"family": "category", "key": "pineapple", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0290"}
+{"family": "category", "key": "cucumber", "answer": "A vegetable.", "options": "fruit or a vegetable", "id": "c0291"}
+{"family": "category", "key": "strawberry", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0292"}
+{"family": "category", "key": "potato", "answer": "A vegetable.", "options": "fruit or a vegetable", "id": "c0293"}
+{"family": "category", "key": "corn", "answer": "A vegetable.", "options": "fruit or a vegetable", "id": "c0294"}
+{"family": "category", "key": "watermelon", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0295"}
+{"family": "category", "key": "spinach", "answer": "A vegetable.", "options": "fruit or a vegetable", "id": "c0296"}
+{"family": "category", "key": "blueberry", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0297"}
+{"family": "category", "key": "mango", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0298"}
+{"family": "category", "key": "peach", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0299"}
+{"family": "category", "key": "celery", "answer": "A vegetable.", "options": "fruit or a vegetable", "id": "c0300"}
+{"family": "category", "key": "cherry", "answer": "A fruit.", "options": "fruit or a vegetable", "id": "c0301"}
+{"family": "category", "key": "dog", "answer": "An animal.", "options": "animal or a plant", "id": "c0302"}
+{"family": "category", "key": "cat", "answer": "An animal.", "options": "animal or a plant", "id": "c0303"}
+{"family": "category", "key": "bird", "answer": "An animal.", "options": "animal or a plant", "id": "c0304"}
+{"family": "category", "key": "fish", "answer": "An animal.", "options": "animal or a plant", "id": "c0305"}
+{"family": "category", "key": "horse", "answer": "An animal.", "options": "animal or a plant", "id": "c0306"}
+{"family": "category", "key": "elephant", "answer": "An animal.", "options": "animal or a plant", "id": "c0307"}
+{"family": "category", "key": "tree", "answer": "A plant.", "options": "animal or a plant", "id": "c0308"}
+{"family": "category", "key": "flower", "answer": "A plant.", "options": "animal or a plant", "id": "c0309"}
+{"family": "category", "key": "grass", "answer": "A plant.", "options": "animal or a plant", "id": "c0310"}
+{"family": "category", "key": "rose", "answer": "A plant.", "options": "animal or a plant", "id": "c0311"}
+{"family": "category", "key": "cookie", "answer": "A food.", "options": "food or a toy", "id": "c0312"}
+{"family": "category", "key": "bread", "answer": "A food.", "options": "food or a toy", "id": "c0313"}
+{"family": "category", "key": "ball", "answer": "A toy.", "options": "food or a toy", "id": "c0314"}
+{"family": "category", "key": "doll", "answer": "A toy.", "options": "food or a toy", "id": "c0315"}
+{"family": "category", "key": "teddy bear", "answer": "A toy.", "options": "food or a toy", "id": "c0316"}
+{"family": "category", "key": "block", "answer": "A toy.", "options": "food or a toy", "id": "c0317"}
+{"family": "category", "key": "cake", "answer": "A food.", "options": "food or a toy", "id": "c0318"}
+{"family": "category", "key": "soup", "answer": "A food.", "options": "food or a toy", "id": "c0319"}
+{"family": "category", "key": "pizza", "answer": "A food.", "options": "food or a toy", "id": "c0320"}
+{"family": "number_next", "key": "one", "answer": "Two.", "id": "c0321"}
+{"family": "number_before", "key": "one", "answer": "Zero.", "id": "c0322"}
+{"family": "number_next", "key": "two", "answer": "Three.", "id": "c0323"}
+{"family": "number_before", "key": "two", "answer": "One.", "id": "c0324"}
+{"family": "number_next", "key": "three", "answer": "Four.", "id": "c0325"}
+{"family": "number_before", "key": "three", "answer": "Two.", "id": "c0326"}
+{"family": "number_next", "key": "four", "answer": "Five.", "id": "c0327"}
+{"family": "number_before", "key": "four", "answer": "Three.", "id": "c0328"}
+{"family": "number_next", "key": "five", "answer": "Six.", "id": "c0329"}
+{"family": "number_before", "key": "five", "answer": "Four.", "id": "c0330"}
+{"family": "number_next", "key": "six", "answer": "Seven.", "id": "c0331"}
+{"family": "number_before", "key": "six", "answer": "Five.", "id": "c0332"}
+{"family": "number_next", "key": "seven", "answer": "Eight.", "id": "c0333"}
+{"family": "number_before", "key": "seven", "answer": "Six.", "id": "c0334"}
+{"family": "number_next", "key": "eight", "answer": "Nine.", "id": "c0335"}
+{"family": "number_before", "key": "eight", "answer": "Seven.", "id": "c0336"}
+{"family": "number_next", "key": "nine", "answer": "Ten.", "id": "c0337"}
+{"family": "number_before", "key": "nine", "answer": "Eight.", "id": "c0338"}
+{"family": "number_next", "key": "ten", "answer": "Eleven.", "id": "c0339"}
+{"family": "number_before", "key": "ten", "answer": "Nine.", "id": "c0340"}
+{"family": "number_next", "key": "eleven", "answer": "Twelve.", "id": "c0341"}
+{"family": "number_before", "key": "eleven", "answer": "Ten.", "id": "c0342"}
+{"family": "number_next", "key": "twelve", "answer": "Thirteen.", "id": "c0343"}
+{"family": "number_before", "key": "twelve", "answer": "Eleven.", "id": "c0344"}
+{"family": "number_next", "key": "thirteen", "answer": "Fourteen.", "id": "c0345"}
+{"family": "number_before", "key": "thirteen", "answer": "Twelve.", "id": "c0346"}
+{"family": "number_next", "key": "fourteen", "answer": "Fifteen.", "id": "c0347"}
+{"family": "number_before", "key": "fourteen", "answer": "Thirteen.", "id": "c0348"}
+{"family": "number_next", "key": "fifteen", "answer": "Sixteen.", "id": "c0349"}
+{"family": "number_before", "key": "fifteen", "answer": "Fourteen.", "id": "c0350"}
+{"family": "number_next", "key": "sixteen", "answer": "Seventeen.", "id": "c0351"}
+{"family": "number_before", "key": "sixteen", "answer": "Fifteen.", "id": "c0352"}
+{"family": "number_next", "key": "seventeen", "answer": "Eighteen.", "id": "c0353"}
+{"family": "number_before", "key": "seventeen", "answer": "Sixteen.", "id": "c0354"}
+{"family": "number_next", "key": "eighteen", "answer": "Nineteen.", "id": "c0355"}
+{"family": "number_before", "key": "eighteen", "answer": "Seventeen.", "id": "c0356"}
+{"family": "number_next", "key": "nineteen", "answer": "Twenty.", "id": "c0357"}
+{"family": "number_before", "key": "nineteen", "answer": "Eighteen.", "id": "c0358"}
+{"family": "add", "key": "one one", "answer": "Two.", "id": "c0359"}
+{"family": "add", "key": "one two", "answer": "Three.", "id": "c0360"}
+{"family": "add", "key": "one three", "answer": "Four.", "id": "c0361"}
+{"family": "add", "key": "one four", "answer": "Five.", "id": "c0362"}
+{"family": "add", "key": "one five", "answer": "Six.", "id": "c0363"}
+{"family": "add", "key": "two one", "answer": "Three.", "id": "c0364"}
+{"family": "add", "key": "two two", "answer": "Four.", "id": "c0365"}
+{"family": "add", "key": "two three", "answer": "Five.", "id": "c0366"}
+{"family": "add", "key": "two four", "answer": "Six.", "id": "c0367"}
+{"family": "add", "key": "two five", "answer": "Seven.", "id": "c0368"}
+{"family": "add", "key": "three one", "answer": "Four.", "id": "c0369"}
+{"family": "add", "key": "three two", "answer": "Five.", "id": "c0370"}
+{"family": "add", "key": "three three", "answer": "Six.", "id": "c0371"}
+{"family": "add", "key": "three four", "answer": "Seven.", "id": "c0372"}
+{"family": "add", "key": "three five", "answer": "Eight.", "id": "c0373"}
+{"family": "add", "key": "four one", "answer": "Five.", "id": "c0374"}
+{"family": "add", "key": "four two", "answer": "Six.", "id": "c0375"}
+{"family": "add", "key": "four three", "answer": "Seven.", "id": "c0376"}
+{"family": "add", "key": "four four", "answer": "Eight.", "id": "c0377"}
+{"family": "add", "key": "four five", "answer": "Nine.", "id": "c0378"}
+{"family": "add", "key": "five one", "answer": "Six.", "id": "c0379"}
+{"family": "add", "key": "five two", "answer": "Seven.", "id": "c0380"}
+{"family": "add", "key": "five three", "answer": "Eight.", "id": "c0381"}
+{"family": "add", "key": "five four", "answer": "Nine.", "id": "c0382"}
+{"family": "add", "key": "five five", "answer": "Ten.", "id": "c0383"}

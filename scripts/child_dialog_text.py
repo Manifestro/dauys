@@ -10,8 +10,9 @@ Stages (each reads the previous stage's file and writes its own):
 - ``concepts``: an LLM lists items per family with their answer; a second
   pass judges each fact, and only facts judged correct, common knowledge and
   unambiguous are kept. Numbers and sums are computed, not generated.
-- ``expand``: per concept, 24 ways a child could say it (all containing the
-  key word) and 4 ways to reply.
+- ``expand``: per concept, 40 ways a child could say it (all containing the
+  key word) and 4 ways to reply. ``--concepts`` takes a reviewed concept list
+  instead of the generated one (``scripts/child_dialog_concepts_v1.jsonl``).
 - ``validate``: rule checks (key word present, answer not given away, length,
   characters, duplicates), then an LLM judge drops unnatural or ambiguous
   lines and replies that do not answer the question.
@@ -191,7 +192,7 @@ NUMBERS = [
     "twenty",
 ]
 LINE = re.compile(r"^[A-Za-z][A-Za-z ,.'?!-]*$")
-QUESTIONS, REPLIES = 24, 4
+QUESTIONS, REPLIES = 40, 4
 HELD_OUT = 3
 
 
@@ -340,6 +341,8 @@ async def expand(client, model, concept) -> dict:
     else:
         _, reply, example_q, example_a = FAMILIES[family]
         ask = f"say or ask something whose answer is: {concept['answer']}"
+        if concept.get("options"):
+            ask = f"ask whether a {concept['key']} is a {concept['options']}"
     prompt = (
         f"A small child talks to a caregiver. Write {QUESTIONS} different short "
         f"things the child could say to {ask}. Every line must contain the exact "
@@ -430,7 +433,11 @@ def export(items: list[dict], output: Path, seed: int) -> dict:
             continue
         rng.shuffle(questions)
         concepts.append(
-            {k: item[k] for k in ("id", "family", "key", "answer")}
+            {
+                k: item[k]
+                for k in ("id", "family", "key", "answer", "options")
+                if k in item
+            }
             | {"replies": item["replies"]}
         )
         for index, question in enumerate(questions):
@@ -485,10 +492,8 @@ async def main_async(args) -> None:
         )
         print(json.dumps({"concepts": len(concepts)}))
     elif args.stage == "expand":
-        concepts = [
-            json.loads(line)
-            for line in (work / "concepts-raw.jsonl").read_text().splitlines()
-        ]
+        source = args.concepts or work / "concepts-raw.jsonl"
+        concepts = [json.loads(line) for line in source.read_text().splitlines()]
         items = await asyncio.gather(
             *(bounded(expand(client, args.model, c)) for c in concepts)
         )
@@ -533,6 +538,7 @@ def main() -> None:
     parser.add_argument("stage", choices=["concepts", "expand", "validate", "export"])
     parser.add_argument("--workdir", type=Path, required=True)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--concepts", type=Path, help="Reviewed concept list")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
     parser.add_argument("--api-key", default="EMPTY")
     parser.add_argument("--model", default="Qwen/Qwen3-32B-AWQ")
