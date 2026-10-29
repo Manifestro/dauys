@@ -81,3 +81,29 @@ def test_select_cuts_defaults_to_base_speaker_and_keeps_the_spec(tmp_path):
         "af_sky",
         "blend:am_echo:am_adam:0.47",
     ]
+
+
+def test_select_cuts_accepts_two_id_tagged_pools_together(tmp_path):
+    definitions = [
+        ("pool1", "p-r000", 0.1, "tokens/a.pt"),
+        ("pool2", "p-pool2-r000", 0.2, "tokens/b.pt"),
+    ]
+    manifests = []
+    for pool, identifier, rank, tokens in definitions:
+        manifest = tmp_path / pool / "enc" / "train" / "manifest.jsonl"
+        manifest.parent.mkdir(parents=True)
+        row = {
+            "id": identifier,
+            "rank": rank,
+            "frames": HOUR,
+            "tokens_path": tokens,
+        }
+        manifest.write_text(json.dumps(row) + "\n")
+        manifests.append((manifest, [row]))
+    selected = select_cuts(manifests, 2, tmp_path)
+    assert [row["id"] for row in selected] == ["p-r000", "p-pool2-r000"]
+    assert len({row["id"] for row in selected}) == len(selected)
+    assert [row["tokens_path"] for row in selected] == [
+        "pool1/enc/train/tokens/a.pt",
+        "pool2/enc/train/tokens/b.pt",
+    ]

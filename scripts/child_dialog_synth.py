@@ -88,14 +88,21 @@ def make_plan(
     return plan
 
 
-def make_big_plan(pairs: list[dict], renditions: int, seed: int = 0) -> list[dict]:
-    """Many ranked train renditions with held-in voices and blended speakers."""
+def make_big_plan(
+    pairs: list[dict], renditions: int, seed: int = 0, tag: str = ""
+) -> list[dict]:
+    """Many ranked train renditions with held-in voices and blended speakers.
+
+    ``tag`` only changes the item id, so a second pool cannot collide with the
+    first while keeping the same renditions, ranks and audio.
+    """
     plan = []
     for pair in pairs:
         if pair["split"] == "test":
             continue
         for index in range(renditions):
-            identity = f"{pair['id']}-r{index:03d}"
+            base_identity = f"{pair['id']}-r{index:03d}"
+            identity = f"{pair['id']}-{tag}-r{index:03d}" if tag else base_identity
             rng = random.Random(stable(pair["id"] + str(index)) ^ seed)
             if rng.random() < 0.3:
                 spec = rng.choice(TRAIN_VOICES)
@@ -120,7 +127,7 @@ def make_big_plan(pairs: list[dict], renditions: int, seed: int = 0) -> list[dic
                     "reply": reply,
                     "a_wav": clip_name(pair["question"], f"{spec}@{speed}"),
                     "b_wav": clip_name(reply, REPLY_VOICE),
-                    "rank": random.Random(stable(identity) ^ seed).random(),
+                    "rank": random.Random(stable(base_identity) ^ seed).random(),
                 }
             )
     return plan
@@ -193,6 +200,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--id-tag", default="")
     parser.add_argument("--big-renditions", type=int)
     parser.add_argument("--shard", type=int)
     parser.add_argument("--shards", type=int)
@@ -214,7 +222,7 @@ def main() -> None:
     if args.big_renditions is None:
         plan = make_plan(pairs, args.train_voices, args.reply_voices)
     else:
-        plan = make_big_plan(pairs, args.big_renditions, args.seed)
+        plan = make_big_plan(pairs, args.big_renditions, args.seed, args.id_tag)
     if args.shards is not None:
         plan = shard_plan(plan, args.shard, args.shards)
     wavs = args.output / "wavs"

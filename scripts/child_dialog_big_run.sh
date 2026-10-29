@@ -13,6 +13,9 @@ cd "$ROOT"
 : "${WORKERS:?WORKERS must be set}"
 : "${MIMI:?MIMI must point to the Mimi checkpoint}"
 : "${SILENCE:?SILENCE must point to silence-codes.json}"
+TAG="${TAG:-}"
+SEED="${SEED:-0}"
+DEST_PREFIX="${DEST_PREFIX:-big}"
 
 mkdir -p "$WORK"
 for ((K = FIRST; K <= LAST; K++)); do
@@ -27,7 +30,8 @@ for ((K = FIRST; K <= LAST; K++)); do
         --big-renditions "$RENDITIONS" \
         --shard "$K" \
         --shards "$SHARDS" \
-        --seed 0 \
+        --seed "$SEED" \
+        --id-tag "$TAG" \
         --workers "$WORKERS" \
         --pcm16; then
         if uv run --no-sync python scripts/child_dialog_encode.py \
@@ -42,7 +46,7 @@ for ((K = FIRST; K <= LAST; K++)); do
                 continue
             fi
             if tar -cf "$TAR" -C "$SHARD" enc synth/plan.jsonl; then
-                DEST=$(printf "big/shard-%04d.tar" "$K")
+                DEST=$(printf "%s/shard-%04d.tar" "$DEST_PREFIX" "$K")
                 if uv run --no-sync python -c \
                     'import sys; from huggingface_hub import upload_file; upload_file(path_or_fileobj=sys.argv[1], path_in_repo=sys.argv[2], repo_id="karl4th/dauys-child-dialog-text", repo_type="dataset")' \
                     "$TAR" "$DEST"; then

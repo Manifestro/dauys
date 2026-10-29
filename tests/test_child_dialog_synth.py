@@ -124,3 +124,24 @@ def test_shard_plan_partitions_by_rank_without_overlap():
     assert max(item["rank"] for item in shards[1]) < min(
         item["rank"] for item in shards[2]
     )
+
+
+def test_make_big_plan_id_tag_changes_only_ids():
+    pairs = [
+        _pair("p0", "train", ["It is blue.", "Blue."]),
+        _pair("p1", "train", ["It is green."]),
+        _pair("t0", "test", ["It is red."]),
+    ]
+    plain = make_big_plan(pairs, 5, seed=3)
+    tagged = make_big_plan(pairs, 5, seed=3, tag="pool2")
+    assert [row["id"] for row in tagged] == [
+        f"{row['pair']}-pool2-r{int(row['id'].rsplit('-r', 1)[1]):03d}" for row in plain
+    ]
+    for plain_row, tagged_row in zip(plain, tagged, strict=True):
+        assert tagged_row["id"] == (
+            f"{plain_row['pair']}-pool2-r{int(plain_row['id'].rsplit('-r', 1)[1]):03d}"
+        )
+        assert {key: value for key, value in tagged_row.items() if key != "id"} == {
+            key: value for key, value in plain_row.items() if key != "id"
+        }
+    assert make_big_plan(pairs, 5, seed=3, tag="") == plain
