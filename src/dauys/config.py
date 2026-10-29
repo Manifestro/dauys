@@ -40,6 +40,8 @@ class ModelConfig:
     mamba_norm_eps: float | None = None
     zero_init_fusion_outputs: bool = False
     self_hearing: str = "none"
+    ear_embeddings: str = "shared"
+    freeze_ear: bool = False
 
     @classmethod
     def stage1(cls) -> "ModelConfig":
@@ -57,9 +59,7 @@ class ModelConfig:
 
     @classmethod
     def v02_stage1(cls) -> "ModelConfig":
-        resource = files("dauys").joinpath(
-            "configs/dauys-hybrid-v0.2-stage1.yaml"
-        )
+        resource = files("dauys").joinpath("configs/dauys-hybrid-v0.2-stage1.yaml")
         with resource.open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
         return cls._from_mapping(data)
@@ -115,6 +115,8 @@ class ModelConfig:
                 data["model"].get("zero_init_fusion_outputs", False)
             ),
             self_hearing=str(data["listening"].get("self_hearing", "none")),
+            ear_embeddings=str(data["listening"].get("ear_embeddings", "shared")),
+            freeze_ear=bool(data["listening"].get("freeze_ear", False)),
         )
         config.validate(data)
         return config
@@ -188,10 +190,16 @@ class ModelConfig:
             raise ValueError("Invalid parameter cap")
         if self.self_hearing not in ("none", "labeled", "mixed"):
             raise ValueError("Self-hearing must be none, labeled or mixed")
+        if self.ear_embeddings not in ("shared", "separate"):
+            raise ValueError("Ear embeddings must be shared or separate")
+        if self.ear_embeddings == "separate" and self.self_hearing != "none":
+            raise ValueError("Separate ear embeddings cannot use self-hearing")
         if (
             self.mamba_norm_eps is not None
             or self.zero_init_fusion_outputs
             or self.self_hearing != "none"
+            or self.ear_embeddings != "shared"
+            or self.freeze_ear
         ) and not self.proxy:
             raise ValueError("Initialization changes are limited to proxy configs")
         if self.name == "dauys-hybrid-v0.1" and (

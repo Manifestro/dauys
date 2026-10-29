@@ -353,10 +353,20 @@ def previous_frames(codes: torch.Tensor, initial_codes: torch.Tensor) -> torch.T
 class DauysHybrid(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
+        if config.ear_embeddings == "separate" and config.self_hearing != "none":
+            raise ValueError("Separate ear embeddings cannot use self-hearing")
         self.config = config
         self.embeddings = nn.ModuleList(
             nn.Embedding(config.vocab_size, config.embedding_dim)
             for _ in range(config.codebooks)
+        )
+        self.ear_embeddings = (
+            nn.ModuleList(
+                nn.Embedding(config.vocab_size, config.embedding_dim)
+                for _ in range(config.codebooks)
+            )
+            if config.ear_embeddings == "separate"
+            else None
         )
         self.roles = nn.Embedding(2, config.embedding_dim)
         self.listening_projection = nn.Linear(
@@ -433,11 +443,28 @@ class DauysHybrid(nn.Module):
             for block in self.dialogue:
                 if isinstance(block, DialogueBlock):
                     block.zero_init_outputs()
+        if config.freeze_ear:
+            self.freeze_ear_parameters()
         if self.trainable_parameters() > config.max_trainable_parameters:
             raise ValueError("Trainable parameter budget exceeded")
 
     def trainable_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def freeze_ear_parameters(self) -> None:
+        if self.ear_embeddings is not None:
+            self.ear_embeddings.requires_grad_(False)
+        self.listening_projection.requires_grad_(False)
+        self.listening.requires_grad_(False)
+        for block in self.listening:
+            block.eval()
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.config.freeze_ear:
+            for block in self.listening:
+                block.eval()
+        return self
 
     def fusion_block_indices(self) -> tuple[int, ...]:
         return tuple(
@@ -501,6 +528,32 @@ class DauysHybrid(nn.Module):
             x = sum(self.embeddings[q](codes[:, q]) for q in range(8))
         return self.frame_dropout(x / math.sqrt(8) + self.roles.weight[role])
 
+    def _ear_embed(
+        self,
+        codes: torch.Tensor,
+        acoustic_dropout: float = 0.0,
+        acoustic_dropout_items: torch.Tensor | None = None,
+        acoustic_keep_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if self.config.ear_embeddings == "separate":
+            if codes.ndim != 3 or codes.shape[1] != self.config.codebooks:
+                raise ValueError("Codes must have shape [batch, 8, frames]")
+            if codes.dtype not in (torch.int32, torch.int64):
+                raise TypeError("Codes must be integer indices")
+            assert self.ear_embeddings is not None
+            x = sum(
+                self.ear_embeddings[q](codes[:, q])
+                for q in range(self.config.codebooks)
+            )
+            return x / math.sqrt(self.config.codebooks)
+        return self._embed(
+            codes,
+            0,
+            acoustic_dropout,
+            acoustic_dropout_items,
+            acoustic_keep_mask,
+        )
+
     def ear_input(
         self,
         user_embedding: torch.Tensor,
@@ -534,9 +587,8 @@ class DauysHybrid(nn.Module):
         own_previous_codes: torch.Tensor | None = None,
     ) -> torch.Tensor:
         listening = self.ear_input(
-            self._embed(
+            self._ear_embed(
                 user_codes,
-                0,
                 acoustic_dropout,
                 acoustic_dropout_items,
                 acoustic_keep_mask,
@@ -639,7 +691,7 @@ class DauysHybrid(nn.Module):
             previous_user = torch.cat(
                 (initial_user_codes.unsqueeze(-1), user_codes[:, :, :-1]), dim=-1
             )
-            user_state = self.listening_projection(self._embed(previous_user, 0))
+            user_state = self.listening_projection(self._ear_embed(previous_user))
             for block in self.listening:
                 user_state = block(user_state)
             user_context = self.final_norm(self.user_prediction_projection(user_state))
@@ -722,7 +774,7 @@ class DauysHybrid(nn.Module):
         previous = torch.cat(
             (initial_output_codes.unsqueeze(-1), output_codes[:, :, :-1]), dim=-1
         )
-        listening = self.ear_input(self._embed(user_codes, 0), previous)
+        listening = self.ear_input(self._ear_embed(user_codes), previous)
         for index, block in enumerate(self.listening):
             listening = cast(MambaBlock, block).prefill(
                 listening, state.listening_mamba[index]
@@ -775,7 +827,7 @@ class DauysHybrid(nn.Module):
         if user_codes.shape != (batch, 8) or previous_output.shape != (batch, 8):
             raise ValueError("Each stream step requires [batch, 8] codes")
         listening = self.ear_input(
-            self._embed(user_codes[:, :, None], 0), previous_output[:, :, None]
+            self._ear_embed(user_codes[:, :, None]), previous_output[:, :, None]
         )
         for block, cache in zip(self.listening, state.listening_mamba):
             listening = cast(MambaBlock, block).step(listening, cache)

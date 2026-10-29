@@ -58,7 +58,16 @@ class EarTarget(nn.Module):
 
     def __init__(self, model: DauysHybrid) -> None:
         super().__init__()
-        self.embeddings = copy.deepcopy(model.embeddings)
+        self.embeddings = (
+            copy.deepcopy(model.embeddings)
+            if model.config.ear_embeddings == "shared"
+            else None
+        )
+        self.ear_embeddings = (
+            copy.deepcopy(model.ear_embeddings)
+            if model.config.ear_embeddings == "separate"
+            else None
+        )
         self.role = nn.Parameter(model.roles.weight[0].detach().clone())
         self.projection = copy.deepcopy(model.listening_projection)
         self.blocks = copy.deepcopy(model.listening)
@@ -68,8 +77,25 @@ class EarTarget(nn.Module):
         pairs: list[tuple[torch.Tensor, torch.Tensor]] = [
             (self.role, model.roles.weight[0])
         ]
+        if self.ear_embeddings is not None:
+            assert model.ear_embeddings is not None
+            pairs.extend(
+                zip(
+                    self.ear_embeddings.parameters(),
+                    model.ear_embeddings.parameters(),
+                    strict=True,
+                )
+            )
+        else:
+            assert self.embeddings is not None
+            pairs.extend(
+                zip(
+                    self.embeddings.parameters(),
+                    model.embeddings.parameters(),
+                    strict=True,
+                )
+            )
         for mine, online in (
-            (self.embeddings, model.embeddings),
             (self.projection, model.listening_projection),
             (self.blocks, model.listening),
         ):
@@ -84,8 +110,13 @@ class EarTarget(nn.Module):
     @torch.no_grad()
     def forward(self, codes: torch.Tensor) -> torch.Tensor:
         """Ear states for a [batch, 8, frames] stream, heard as speech (role 0)."""
-        x = sum(self.embeddings[q](codes[:, q]) for q in range(codes.shape[1]))
-        x = self.projection(x / math.sqrt(codes.shape[1]) + self.role)
+        if self.ear_embeddings is not None:
+            x = sum(self.ear_embeddings[q](codes[:, q]) for q in range(codes.shape[1]))
+            x = self.projection(x / math.sqrt(codes.shape[1]))
+        else:
+            assert self.embeddings is not None
+            x = sum(self.embeddings[q](codes[:, q]) for q in range(codes.shape[1]))
+            x = self.projection(x / math.sqrt(codes.shape[1]) + self.role)
         for block in self.blocks:
             x = block(x)
         return x

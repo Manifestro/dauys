@@ -118,8 +118,10 @@ def load_initial_weights(
     payload = load_research_checkpoint(checkpoint)
     result = model.load_state_dict(payload["model"], strict=False)
     # Self-hearing inputs are new and start silent, so a checkpoint trained
-    # without them still fits.
+    # without them still fits. A separate ear can be filled by --init-ear.
     allowed: tuple[str, ...] = ("self_hearing_",)
+    if model.config.ear_embeddings == "separate":
+        allowed += ("ear_embeddings.",)
     if from_v01:
         allowed += (
             "listening_norm.",

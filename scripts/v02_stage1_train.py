@@ -114,6 +114,22 @@ def _silence(path: Path) -> torch.Tensor:
     return codes
 
 
+def map_ear_state(screen_state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Map a screening Ear state_dict onto the hybrid model's listening tower."""
+    prefixes = (
+        ("embeddings.", "ear_embeddings."),
+        ("projection.", "listening_projection."),
+        ("blocks.", "listening."),
+    )
+    mapped = {}
+    for key, value in screen_state.items():
+        for source, target in prefixes:
+            if key.startswith(source):
+                mapped[target + key[len(source) :]] = value
+                break
+    return mapped
+
+
 def _git() -> tuple[str, bool]:
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     dirty = bool(
@@ -224,6 +240,11 @@ def main() -> None:
         help="Dialogue Mamba-2 backbone; pass an empty string to disable",
     )
     parser.add_argument("--init-checkpoint", type=Path)
+    parser.add_argument(
+        "--init-ear",
+        type=Path,
+        help="Screening Ear state_dict to load into a separate listening tower",
+    )
     parser.add_argument("--steps", type=int, default=20_000)
     parser.add_argument("--speakers", type=int, default=16)
     parser.add_argument("--anchors", type=int, default=4)
@@ -341,6 +362,31 @@ def main() -> None:
         print(json.dumps({"init_backbone": args.init_backbone, "layers": pairs}))
     if args.init_checkpoint and not args.resume:
         load_initial_weights(model, args.init_checkpoint, from_v01=False)
+    if args.init_ear is not None:
+        if config.ear_embeddings != "separate":
+            raise ValueError("--init-ear requires ear_embeddings: separate")
+        if not args.resume:
+            screen_state = torch.load(
+                args.init_ear, map_location="cpu", weights_only=True
+            )
+            if isinstance(screen_state.get("model"), dict):
+                screen_state = screen_state["model"]
+            mapped = map_ear_state(screen_state)
+            ear_keys = {
+                key
+                for key in model.state_dict()
+                if key.startswith(
+                    ("ear_embeddings.", "listening_projection.", "listening.")
+                )
+            }
+            missing = sorted(ear_keys - mapped.keys())
+            unexpected = sorted(mapped.keys() - ear_keys)
+            if missing or unexpected:
+                raise ValueError(
+                    "Initial ear checkpoint is incompatible with this geometry: "
+                    f"missing={missing}, unexpected={unexpected}"
+                )
+            model.load_state_dict(mapped, strict=False)
     model = model.to(device)
     print(json.dumps({"trainable_parameters": model.trainable_parameters()}))
     intent_config = IntentConfig(horizon=12, weight=args.intent_weight)
@@ -416,6 +462,7 @@ def main() -> None:
         "heldout_manifest_sha256": sha256(args.heldout_manifest),
         "init_backbone": args.init_backbone or "none",
         "init_checkpoint": str(args.init_checkpoint or "none"),
+        "init_ear": str(args.init_ear or "none"),
     }
     metadata = {
         "plan": {
