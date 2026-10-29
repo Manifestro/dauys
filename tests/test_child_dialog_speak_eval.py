@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import v02_word_meaning_speak_eval as speak_eval
 from child_dialog_speak_eval import (
     best_answer,
+    build_parser,
+    choose_candidate,
     pick_other_reply,
     rescore,
     words,
@@ -62,6 +64,35 @@ def test_different_answers_are_distinguished():
     assert best_answer("A vegetable.", answers) == "A vegetable."
     assert best_answer("A fruit.", answers) == "A fruit."
     assert best_answer("A rock.", answers) is None
+
+
+def test_parser_knows_rerank_scoring_arguments():
+    parser = build_parser()
+    defaults = parser.parse_args(
+        ["--concepts", "concepts.jsonl", "--output", "out.json"]
+    )
+    assert defaults.batch == 16
+    assert defaults.onset_frames == 0
+    explicit = parser.parse_args(
+        [
+            "--concepts",
+            "concepts.jsonl",
+            "--output",
+            "out.json",
+            "--batch",
+            "4",
+            "--onset-frames",
+            "7",
+        ]
+    )
+    assert explicit.batch == 4
+    assert explicit.onset_frames == 7
+
+
+def test_choose_candidate_handles_infinities_and_ties():
+    assert choose_candidate([float("inf"), 1.0, 1.0]) == 1
+    assert choose_candidate([2.0, 1.0, 1.0]) == 1
+    assert choose_candidate([float("inf"), float("inf")]) == 0
 
 
 def test_pick_other_reply_uses_a_different_answer_deterministically():
@@ -177,6 +208,7 @@ def test_rescore_reuses_saved_transcripts(tmp_path):
             "source": "true",
             "seed": 0,
             "guidance": 1.0,
+            "rerank": 0,
             "items": 2,
             "correct": 0.5,
             "correct_first": 0.5,

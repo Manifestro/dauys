@@ -14,8 +14,10 @@ scoring only.
 summary per decoding variant and seed; those seed frames are included in the
 audio scored by Whisper. ``--seed-source`` chooses the correct answer, another
 answer of the group, or only the correct seed frames without generation.
-``--rescore`` reads a previous output and re-scores its transcripts with the
-same rules, without loading the model, Mimi or Whisper.
+``--guidance`` applies classifier-free guidance, and ``--rerank K`` samples K
+continuations and keeps the best conditional-minus-prior NLL. ``--rescore``
+reads a previous output and re-scores its transcripts with the same rules,
+without loading the model, Mimi or Whisper.
 """
 
 import argparse
@@ -35,7 +37,14 @@ from dauys.model import DauysHybrid
 from dauys.v02_pretrain_eval import WhisperTranscriber
 
 sys.path.insert(0, str(Path(__file__).parent))
-from v02_word_meaning_speak_eval import VARIANTS, content, speak, speak_cfg
+from v02_word_meaning_eval import reply_nll
+from v02_word_meaning_speak_eval import (
+    VARIANTS,
+    content,
+    speak,
+    speak_cfg,
+    speak_codes,
+)
 
 QUIET_RMS = 0.01
 ONES = (
@@ -130,11 +139,49 @@ def pick_other_reply(rows_of_group: list[dict], row: dict, rng: random.Random) -
     return rng.choice(candidates)
 
 
+def choose_candidate(scores: list[float]) -> int:
+    """Return the first index with the minimum score, including infinities."""
+    if not scores:
+        raise ValueError("At least one candidate is required")
+    return min(range(len(scores)), key=scores.__getitem__)
+
+
+def _rerank_scores(
+    model,
+    silence,
+    a_codes,
+    a_active,
+    candidates,
+    *,
+    batch: int,
+    onset: int,
+) -> list[float]:
+    """PMI score for each candidate: lower conditional-minus-prior NLL is better."""
+    silent_a = silence[:, None].expand(8, a_codes.shape[-1]).clone()
+    silent_active = torch.zeros(a_codes.shape[-1], dtype=torch.bool)
+    normal_pairs, prior_pairs = [], []
+    for candidate in candidates:
+        active = candidate[0].ne(silence[0])
+        normal_pairs.append(((a_codes, a_active), (candidate, active)))
+        prior_pairs.append(((silent_a, silent_active), (candidate, active)))
+    conditional = reply_nll(
+        model, silence, normal_pairs, batch=batch, onset=onset
+    ).tolist()
+    prior = reply_nll(model, silence, prior_pairs, batch=batch, onset=onset).tolist()
+    return [
+        float(cond - base)
+        if candidates[index][0].ne(silence[0]).any()
+        else float("inf")
+        for index, (cond, base) in enumerate(zip(conditional, prior, strict=True))
+    ]
+
+
 def _summary(
     variant: str,
     source: str,
     seed: int,
     guidance: float,
+    rerank: int,
     examples: list[dict],
     by_group: dict[str, dict[str, list[str]]],
     pairs: dict[str, dict],
@@ -164,6 +211,7 @@ def _summary(
         "source": source,
         "seed": seed,
         "guidance": guidance,
+        "rerank": rerank,
         "items": n,
         "correct": round(correct / n, 3) if n else 0.0,
         "correct_first": round(first / n, 3) if n else 0.0,
@@ -206,6 +254,11 @@ def rescore(
             heard_first = best_answer(" ".join(heard.split()[:6]), answers)
             seed_answer = example.get("seed_answer", expected)
             seed_key = answer_key(seed_answer)
+            reranked = {
+                key: example[key]
+                for key in ("rerank_scores", "chosen")
+                if key in example
+            }
             examples.append(
                 {
                     "question": example["question"],
@@ -217,6 +270,7 @@ def rescore(
                     "seed_answer": seed_answer,
                     "ok_seed_answer": heard_answer == seed_key,
                     "ok_first_seed_answer": heard_first == seed_key,
+                    **reranked,
                 }
             )
         summary = _summary(
@@ -224,6 +278,7 @@ def rescore(
             source,
             int(previous.get("seed", 0)),
             float(previous.get("guidance", 1.0)),
+            int(previous.get("rerank", 0)),
             examples,
             by_group,
             pairs,
@@ -233,7 +288,7 @@ def rescore(
     return results
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--checkpoint", type=Path)
@@ -252,10 +307,23 @@ def main() -> None:
         default="true",
     )
     parser.add_argument("--guidance", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--rerank", type=int, default=0)
     parser.add_argument("--frames", type=int, default=50)
+    parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument(
+        "--onset-frames",
+        type=int,
+        default=0,
+        help="Score only the first N speech frames when reranking",
+    )
     parser.add_argument("--asr-model", default="openai/whisper-large-v3")
     parser.add_argument("--wavs", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
     concepts = {
         c["id"]: c for c in map(json.loads, args.concepts.read_text().splitlines())
@@ -281,6 +349,12 @@ def main() -> None:
         )
     if args.seed_source == "only" and any(seed <= 0 for seed in args.seeds):
         parser.error("--seed-source only requires positive --seeds")
+    if args.rerank < 0:
+        parser.error("--rerank cannot be negative")
+    if args.rerank > 0 and any(value != 1.0 for value in args.guidance):
+        parser.error("--rerank requires --guidance 1.0")
+    if args.rerank > 0 and args.seed_source != "true":
+        parser.error("--rerank requires --seed-source true")
     by_group = answer_groups(concepts)
     rows = []
     for line in (args.data / "manifest.jsonl").read_text().splitlines():
@@ -323,56 +397,96 @@ def main() -> None:
             for guidance in args.guidance:
                 generator = torch.Generator(device="cuda").manual_seed(0)
                 waves = []
+                rerank_scores_by_row = []
+                chosen_index_by_row = []
                 for row in chosen:
-                    a = torch.load(args.data / row["a_clip"], weights_only=True)[
-                        "codes"
-                    ]
+                    a_data = torch.load(args.data / row["a_clip"], weights_only=True)
+                    a = a_data["codes"]
                     b = torch.load(args.data / row["b_clip"], weights_only=True)[
                         "codes"
                     ]
-                    if args.seed_source == "only":
-                        codes = b[:, :seed].long().to(device)[None]
+                    if args.rerank > 0:
+                        candidates = [
+                            speak_codes(
+                                model,
+                                codec,
+                                silence,
+                                a,
+                                b,
+                                seed=seed,
+                                frames=args.frames,
+                                decoding=decoding,
+                                gated=gated,
+                                rng=generator,
+                            )
+                            for _ in range(args.rerank)
+                        ]
+                        scores = _rerank_scores(
+                            model,
+                            silence,
+                            a,
+                            a_data["activity"].bool(),
+                            candidates,
+                            batch=args.batch,
+                            onset=args.onset_frames,
+                        )
+                        chosen_index = choose_candidate(scores)
+                        rerank_scores_by_row.append(scores)
+                        chosen_index_by_row.append(chosen_index)
+                        codes = candidates[chosen_index].long().to(device)[None]
                         wave = decode(codec, codes)[0, 0].float().cpu().numpy()
                     else:
-                        seed_b = b
-                        if args.seed_source == "other":
-                            seed_b = torch.load(
-                                args.data / others[row["id"]]["b_clip"],
-                                weights_only=True,
-                            )["codes"]
-                        if guidance == 1.0:
-                            wave = speak(
-                                model,
-                                codec,
-                                silence,
-                                a,
-                                seed_b,
-                                seed=seed,
-                                frames=args.frames,
-                                decoding=decoding,
-                                gated=gated,
-                                rng=generator,
-                                include_seed=True,
-                            )
+                        rerank_scores_by_row.append(None)
+                        chosen_index_by_row.append(None)
+                        if args.seed_source == "only":
+                            codes = b[:, :seed].long().to(device)[None]
+                            wave = decode(codec, codes)[0, 0].float().cpu().numpy()
                         else:
-                            wave = speak_cfg(
-                                model,
-                                codec,
-                                silence,
-                                a,
-                                seed_b,
-                                seed=seed,
-                                frames=args.frames,
-                                decoding=decoding,
-                                gated=gated,
-                                rng=generator,
-                                guidance=guidance,
-                                include_seed=True,
-                            )
+                            seed_b = b
+                            if args.seed_source == "other":
+                                seed_b = torch.load(
+                                    args.data / others[row["id"]]["b_clip"],
+                                    weights_only=True,
+                                )["codes"]
+                            if guidance == 1.0:
+                                wave = speak(
+                                    model,
+                                    codec,
+                                    silence,
+                                    a,
+                                    seed_b,
+                                    seed=seed,
+                                    frames=args.frames,
+                                    decoding=decoding,
+                                    gated=gated,
+                                    rng=generator,
+                                    include_seed=True,
+                                )
+                            else:
+                                wave = speak_cfg(
+                                    model,
+                                    codec,
+                                    silence,
+                                    a,
+                                    seed_b,
+                                    seed=seed,
+                                    frames=args.frames,
+                                    decoding=decoding,
+                                    gated=gated,
+                                    rng=generator,
+                                    guidance=guidance,
+                                    include_seed=True,
+                                )
                     waves.append(wave)
                 texts = asr(waves)
                 examples = []
-                for row, text, wave in zip(chosen, texts, waves):
+                for row, text, wave, scores, chosen_index in zip(
+                    chosen,
+                    texts,
+                    waves,
+                    rerank_scores_by_row,
+                    chosen_index_by_row,
+                ):
                     answers = by_group[row["topic"]]
                     expected_answer = concepts[row["concept"]]["answer"]
                     expected = answer_key(expected_answer)
@@ -385,24 +499,27 @@ def main() -> None:
                     heard_answer = best_answer(text, answers)
                     heard_first = best_answer(" ".join(text.split()[:6]), answers)
                     quiet = float(np.sqrt(np.mean(wave[-24_000:] ** 2))) < QUIET_RMS
-                    examples.append(
-                        {
-                            "question": row["question"],
-                            "expected": expected_answer,
-                            "heard": text,
-                            "ok": heard_answer == expected,
-                            "ok_first": heard_first == expected,
-                            "stopped": quiet,
-                            "seed_answer": seed_answer,
-                            "ok_seed_answer": heard_answer == seed_key,
-                            "ok_first_seed_answer": heard_first == seed_key,
-                        }
-                    )
+                    example = {
+                        "question": row["question"],
+                        "expected": expected_answer,
+                        "heard": text,
+                        "ok": heard_answer == expected,
+                        "ok_first": heard_first == expected,
+                        "stopped": quiet,
+                        "seed_answer": seed_answer,
+                        "ok_seed_answer": heard_answer == seed_key,
+                        "ok_first_seed_answer": heard_first == seed_key,
+                    }
+                    if args.rerank > 0:
+                        example["rerank_scores"] = scores
+                        example["chosen"] = chosen_index
+                    examples.append(example)
                 summary = _summary(
                     variant,
                     args.seed_source,
                     seed,
                     guidance,
+                    args.rerank,
                     examples,
                     by_group,
                     pairs,
@@ -414,6 +531,7 @@ def main() -> None:
 
                     folder = (
                         args.wavs / f"{variant}-s{seed}-{args.seed_source}-g{guidance}"
+                        f"-r{args.rerank}"
                     )
                     folder.mkdir(parents=True, exist_ok=True)
                     for row, wave in list(zip(chosen, waves))[:12]:

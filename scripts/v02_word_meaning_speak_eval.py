@@ -116,7 +116,7 @@ def combine_guidance(cond_logits, uncond_logits, guidance):
 
 
 @torch.inference_mode()
-def speak(
+def speak_codes(
     model,
     codec,
     silence,
@@ -128,8 +128,8 @@ def speak(
     decoding,
     gated,
     rng,
-    include_seed: bool = False,
 ):
+    """Generate gated model codes [8, frames] on CPU, without seed frames."""
     device = next(model.parameters()).device
     quiet = silence.to(device)[None]
     a = a_codes.long().to(device)[None]
@@ -149,6 +149,37 @@ def speak(
     if gated:
         speaking = torch.stack(active, dim=-1)[:, None]
         codes = torch.where(speaking, codes, quiet[:, :, None])
+    return codes.long().cpu()
+
+
+@torch.inference_mode()
+def speak(
+    model,
+    codec,
+    silence,
+    a_codes,
+    b_codes,
+    *,
+    seed,
+    frames,
+    decoding,
+    gated,
+    rng,
+    include_seed: bool = False,
+):
+    device = next(model.parameters()).device
+    codes = speak_codes(
+        model,
+        codec,
+        silence,
+        a_codes,
+        b_codes,
+        seed=seed,
+        frames=frames,
+        decoding=decoding,
+        gated=gated,
+        rng=rng,
+    ).to(device)
     if include_seed and seed:
         seed_codes = b_codes[:, :seed].long().to(device)[None]
         codes = torch.cat((seed_codes, codes), dim=-1)
