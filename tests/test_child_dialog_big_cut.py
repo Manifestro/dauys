@@ -46,3 +46,38 @@ def test_select_cuts_rewrites_tokens_next_to_each_manifest(tmp_path):
     rows = [json.loads(line) for line in manifest.read_text().splitlines()]
     selected = select_cuts([(manifest, rows)], 1, tmp_path)
     assert selected[0]["tokens_path"] == "shard-0/enc/train/tokens/r0.pt"
+
+
+def test_select_cuts_defaults_to_base_speaker_and_keeps_the_spec(tmp_path):
+    manifest = tmp_path / "train" / "manifest.jsonl"
+    manifest.parent.mkdir(parents=True)
+    rows = [
+        {
+            "id": "b",
+            "rank": 0.1,
+            "frames": HOUR,
+            "voice": "blend:am_echo:am_adam:0.47",
+            "speaker": "blend:am_echo:am_adam:0.47",
+            "tokens_path": "tokens/b.pt",
+        },
+        {
+            "id": "a",
+            "rank": 0.0,
+            "frames": HOUR,
+            "voice": "af_sky",
+            "speaker": "af_sky",
+            "tokens_path": "tokens/a.pt",
+        },
+    ]
+    manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    base = select_cuts([(manifest, rows)], 2, None)
+    assert [(row["id"], row["speaker"]) for row in base] == [
+        ("a", "af_sky"),
+        ("b", "am_echo"),
+    ]
+    assert base[1]["voice"] == "blend:am_echo:am_adam:0.47"
+    spec = select_cuts([(manifest, rows)], 2, None, speaker_key="spec")
+    assert [row["speaker"] for row in spec] == [
+        "af_sky",
+        "blend:am_echo:am_adam:0.47",
+    ]

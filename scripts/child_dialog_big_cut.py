@@ -8,6 +8,29 @@ from pathlib import Path
 FRAME_RATE = 12.5
 
 
+def base_speaker(spec: str) -> str:
+    """First voice of a blend spec, or the plain voice name."""
+    if spec.startswith("blend:"):
+        parts = spec.split(":")
+        if len(parts) != 4:
+            raise ValueError(f"Invalid blend voice spec: {spec}")
+        return parts[1]
+    return spec
+
+
+def apply_speaker_key(rows: list[dict], key: str) -> list[dict]:
+    """Choose the trainer's speaker grouping while preserving the voice spec."""
+    if key not in ("spec", "base"):
+        raise ValueError("Speaker key must be spec or base")
+    for row in rows:
+        spec = str(row.get("voice") or row.get("speaker") or "")
+        if not spec:
+            continue
+        row["voice"] = spec
+        row["speaker"] = base_speaker(spec) if key == "base" else spec
+    return rows
+
+
 def select_rows(rows: list[dict], hours: float) -> list[dict]:
     """Take rows in rank order until their audio reaches ``hours``."""
     if hours < 0:
@@ -37,6 +60,8 @@ def select_cuts(
     manifests: list[tuple[Path, list[dict]]],
     hours: float,
     root: Path | None,
+    *,
+    speaker_key: str = "base",
 ) -> list[dict]:
     """Select a cut and rewrite tokens paths next to their source manifests."""
     rows = []
@@ -54,7 +79,7 @@ def select_cuts(
         row["tokens_path"] = (
             tokens if root_path is None else os.path.relpath(tokens, root_path)
         )
-    return selected
+    return apply_speaker_key(selected, speaker_key)
 
 
 def main() -> None:
@@ -63,6 +88,7 @@ def main() -> None:
     parser.add_argument("--hours", type=float, nargs="+", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--root", type=Path)
+    parser.add_argument("--speaker-key", choices=("spec", "base"), default="base")
     args = parser.parse_args()
     manifests = []
     for path in args.manifests:
@@ -72,7 +98,12 @@ def main() -> None:
         manifests.append((path, rows))
     args.output.mkdir(parents=True, exist_ok=True)
     for hours in args.hours:
-        rows = select_cuts(manifests, hours, args.root)
+        rows = select_cuts(
+            manifests,
+            hours,
+            args.root,
+            speaker_key=args.speaker_key,
+        )
         path = args.output / f"train-{hours:g}h.jsonl"
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
         print(
