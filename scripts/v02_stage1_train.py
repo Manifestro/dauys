@@ -130,6 +130,13 @@ def map_ear_state(screen_state: dict[str, torch.Tensor]) -> dict[str, torch.Tens
     return mapped
 
 
+def filter_intent_state(
+    state: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Drop EMA-target keys, which must be rebuilt from the loaded ear."""
+    return {key: value for key, value in state.items() if not key.startswith("target.")}
+
+
 def _git() -> tuple[str, bool]:
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     dirty = bool(
@@ -390,11 +397,29 @@ def main() -> None:
     model = model.to(device)
     print(json.dumps({"trainable_parameters": model.trainable_parameters()}))
     intent_config = IntentConfig(horizon=12, weight=args.intent_weight)
+    # The EMA target must copy the ear after --init-ear has loaded it.
     intent = IntentModule(model, intent_config).to(device)
     if args.init_checkpoint and not args.resume:
         initial = load_research_checkpoint(args.init_checkpoint)
         if "intent" in initial:
-            intent.load_state_dict(initial["intent"])
+            if args.init_ear is None:
+                intent.load_state_dict(initial["intent"])
+            else:
+                intent_state = filter_intent_state(initial["intent"])
+                result = intent.load_state_dict(intent_state, strict=False)
+                missing = [
+                    key for key in result.missing_keys if not key.startswith("target.")
+                ]
+                unexpected = [
+                    key
+                    for key in result.unexpected_keys
+                    if not key.startswith("target.")
+                ]
+                if missing or unexpected:
+                    raise ValueError(
+                        "Initial intent checkpoint is incompatible with this "
+                        f"geometry: missing={missing}, unexpected={unexpected}"
+                    )
     groups = optimizer_groups(model, args.weight_decay)
     groups.append(
         {"params": list(intent.head.parameters()), "weight_decay": args.weight_decay}

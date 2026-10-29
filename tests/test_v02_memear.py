@@ -17,7 +17,7 @@ from dauys.v03_intent import IntentConfig, IntentModule
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
-from v02_stage1_train import map_ear_state
+from v02_stage1_train import filter_intent_state, map_ear_state
 
 
 class _CausalMamba(nn.Module):
@@ -177,6 +177,22 @@ def test_map_ear_state_maps_only_the_three_ear_prefixes():
         "listening_projection.bias": screen_state["projection.bias"],
         "listening.0.projection.weight": screen_state["blocks.0.projection.weight"],
         "listening.5.projection.weight": screen_state["blocks.5.projection.weight"],
+    }
+
+
+def test_filter_intent_state_drops_only_ema_target_keys():
+    state = {
+        "head.net.0.weight": torch.zeros(1),
+        "head.net.0.bias": torch.ones(1),
+        "target.embeddings.0.weight": torch.zeros(2),
+        "target.role": torch.zeros(2),
+        "target.projection.weight": torch.ones(2),
+        "target.blocks.0.projection.weight": torch.zeros(2),
+    }
+    filtered = filter_intent_state(state)
+    assert filtered == {
+        "head.net.0.weight": state["head.net.0.weight"],
+        "head.net.0.bias": state["head.net.0.bias"],
     }
 
 
