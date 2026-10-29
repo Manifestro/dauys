@@ -4,8 +4,11 @@ import json
 import sys
 from pathlib import Path
 
+import torch
+
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
+import v02_word_meaning_speak_eval as speak_eval
 from child_dialog_speak_eval import best_answer, rescore, words
 
 
@@ -40,6 +43,37 @@ def test_different_answers_are_distinguished():
     assert best_answer("A vegetable.", answers) == "A vegetable."
     assert best_answer("A fruit.", answers) == "A fruit."
     assert best_answer("A rock.", answers) is None
+
+
+def test_speak_can_include_teacher_forced_seed_frames(monkeypatch):
+    class _Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.parameter = torch.nn.Parameter(torch.zeros(()))
+
+        def prefill_teacher(self, user, output, quiet):
+            return None
+
+        def generate_step(self, user, state, decoding, rng):
+            return torch.full((1, 8), 2), torch.ones(1, dtype=torch.bool)
+
+    class _Codec:
+        def decode(self, codes):
+            return codes.float()
+
+    monkeypatch.setattr(speak_eval, "decode", lambda codec, codes: codec.decode(codes))
+    silence = torch.zeros(8, dtype=torch.long)
+    a = torch.zeros(8, 3, dtype=torch.long)
+    b = torch.full((8, 5), 9, dtype=torch.long)
+    kwargs = {"seed": 2, "frames": 4, "decoding": None, "gated": False, "rng": None}
+
+    generated = speak_eval.speak(_Model(), _Codec(), silence, a, b, **kwargs)
+    seeded = speak_eval.speak(
+        _Model(), _Codec(), silence, a, b, include_seed=True, **kwargs
+    )
+
+    assert generated.tolist() == [2.0, 2.0, 2.0, 2.0]
+    assert seeded.tolist() == [9.0, 9.0, 2.0, 2.0, 2.0, 2.0]
 
 
 def test_rescore_reuses_saved_transcripts(tmp_path):
@@ -110,6 +144,7 @@ def test_rescore_reuses_saved_transcripts(tmp_path):
     assert results == [
         {
             "variant": "greedy",
+            "seed": 0,
             "items": 2,
             "correct": 0.5,
             "correct_first": 0.5,

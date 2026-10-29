@@ -10,8 +10,11 @@ scoring only.
 - ``correct_first``: the same, using only the transcript's first six words.
 - ``stopped``: the last second of the reply is silent.
 
-``--rescore`` reads a previous output and re-scores its transcripts with the
-same rules, without loading the model, Mimi or Whisper.
+``--seeds`` prefixes that many true reply frames before free generation, giving
+one summary per decoding variant and seed; those seed frames are included in
+the audio scored by Whisper. ``--rescore`` reads a previous output and
+re-scores its transcripts with the same rules, without loading the model, Mimi
+or Whisper.
 """
 
 import argparse
@@ -117,6 +120,7 @@ def best_answer(transcript: str, answers: dict[str, list[str]]) -> str | None:
 
 def _summary(
     variant: str,
+    seed: int,
     examples: list[dict],
     by_group: dict[str, dict[str, list[str]]],
     pairs: dict[str, dict],
@@ -139,6 +143,7 @@ def _summary(
     )
     return {
         "variant": variant,
+        "seed": seed,
         "items": n,
         "correct": round(correct / n, 3) if n else 0.0,
         "correct_first": round(first / n, 3) if n else 0.0,
@@ -185,7 +190,13 @@ def rescore(
                     "stopped": bool(example["stopped"]),
                 }
             )
-        summary = _summary(previous["variant"], examples, by_group, pairs)
+        summary = _summary(
+            previous["variant"],
+            int(previous.get("seed", 0)),
+            examples,
+            by_group,
+            pairs,
+        )
         _print_summary(summary)
         results.append(summary)
     return results
@@ -203,6 +214,7 @@ def main() -> None:
     parser.add_argument("--rescore", type=Path)
     parser.add_argument("--per-group", type=int, default=6)
     parser.add_argument("--variants", nargs="+", default=["greedy"])
+    parser.add_argument("--seeds", nargs="+", type=int, default=[0])
     parser.add_argument("--frames", type=int, default=50)
     parser.add_argument("--asr-model", default="openai/whisper-large-v3")
     parser.add_argument("--wavs", type=Path)
@@ -249,63 +261,65 @@ def main() -> None:
     model = model.cuda().eval()
     codec = load_mimi(args.mimi_checkpoint, "cuda")
     asr = WhisperTranscriber(args.asr_model, "cuda")
+    pairs = {
+        row["question"]: {"concept": row["concept"], "group": row["topic"]}
+        for row in chosen
+    }
     results = []
     for variant in args.variants:
         decoding, gated = VARIANTS[variant]
-        generator = torch.Generator(device="cuda").manual_seed(0)
-        waves = []
-        for row in chosen:
-            a = torch.load(args.data / row["a_clip"], weights_only=True)["codes"]
-            b = torch.load(args.data / row["b_clip"], weights_only=True)["codes"]
-            waves.append(
-                speak(
-                    model,
-                    codec,
-                    silence,
-                    a,
-                    b,
-                    seed=0,
-                    frames=args.frames,
-                    decoding=decoding,
-                    gated=gated,
-                    rng=generator,
+        for seed in args.seeds:
+            generator = torch.Generator(device="cuda").manual_seed(0)
+            waves = []
+            for row in chosen:
+                a = torch.load(args.data / row["a_clip"], weights_only=True)["codes"]
+                b = torch.load(args.data / row["b_clip"], weights_only=True)["codes"]
+                waves.append(
+                    speak(
+                        model,
+                        codec,
+                        silence,
+                        a,
+                        b,
+                        seed=seed,
+                        frames=args.frames,
+                        decoding=decoding,
+                        gated=gated,
+                        rng=generator,
+                        include_seed=True,
+                    )
                 )
-            )
-        texts = asr(waves)
-        examples = []
-        for row, text, wave in zip(chosen, texts, waves):
-            answers = by_group[row["topic"]]
-            expected = answer_key(concepts[row["concept"]]["answer"])
-            quiet = float(np.sqrt(np.mean(wave[-24_000:] ** 2))) < QUIET_RMS
-            examples.append(
-                {
-                    "question": row["question"],
-                    "expected": concepts[row["concept"]]["answer"],
-                    "heard": text,
-                    "ok": best_answer(text, answers) == expected,
-                    "ok_first": best_answer(" ".join(text.split()[:6]), answers)
-                    == expected,
-                    "stopped": quiet,
-                }
-            )
-        pairs = {
-            row["question"]: {"concept": row["concept"], "group": row["topic"]}
-            for row in chosen
-        }
-        summary = _summary(variant, examples, by_group, pairs)
-        _print_summary(summary)
-        results.append(summary)
-        if args.wavs:
-            import soundfile
+            texts = asr(waves)
+            examples = []
+            for row, text, wave in zip(chosen, texts, waves):
+                answers = by_group[row["topic"]]
+                expected = answer_key(concepts[row["concept"]]["answer"])
+                quiet = float(np.sqrt(np.mean(wave[-24_000:] ** 2))) < QUIET_RMS
+                examples.append(
+                    {
+                        "question": row["question"],
+                        "expected": concepts[row["concept"]]["answer"],
+                        "heard": text,
+                        "ok": best_answer(text, answers) == expected,
+                        "ok_first": best_answer(" ".join(text.split()[:6]), answers)
+                        == expected,
+                        "stopped": quiet,
+                    }
+                )
+            summary = _summary(variant, seed, examples, by_group, pairs)
+            _print_summary(summary)
+            results.append(summary)
+            if args.wavs:
+                import soundfile
 
-            folder = args.wavs / variant
-            folder.mkdir(parents=True, exist_ok=True)
-            for row, wave in list(zip(chosen, waves))[:12]:
-                soundfile.write(
-                    folder / f"{row['topic']}-{row['word'].replace(' ', '_')}.wav",
-                    wave,
-                    24_000,
-                )
+                folder = args.wavs / f"{variant}-s{seed}"
+                folder.mkdir(parents=True, exist_ok=True)
+                for row, wave in list(zip(chosen, waves))[:12]:
+                    soundfile.write(
+                        folder / f"{row['topic']}-{row['word'].replace(' ', '_')}.wav",
+                        wave,
+                        24_000,
+                    )
     args.output.write_text(json.dumps(results, indent=2) + "\n")
 
 

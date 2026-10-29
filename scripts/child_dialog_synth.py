@@ -2,9 +2,10 @@
 
 Each training question is spoken by ``--train-voices`` voices and each test
 question by every held-out voice. Voices are picked per pair by a stable hash,
-so reruns give the same plan. Replies are spoken in one caregiver voice, one
-clip per distinct reply wording; a pair takes one of its wordings by the same
-hash, so a concept's reply varies across its pairs.
+so reruns give the same plan. Replies are spoken in one or more caregiver
+voices, one clip per distinct reply wording and voice; a pair takes one of its
+wordings and the reply voice by the same hash, so a concept's reply varies
+across its pairs.
 
 Runs in its own environment (``pip install kokoro soundfile``, plus the
 espeak-ng system package) and does not import dauys. Writes 24 kHz float WAVs
@@ -36,7 +37,11 @@ def clip_name(text: str, voice: str) -> str:
     return hashlib.sha1(f"{voice}|{text}".encode()).hexdigest()[:16] + ".wav"
 
 
-def make_plan(pairs: list[dict], train_voices: int) -> list[dict]:
+def make_plan(
+    pairs: list[dict],
+    train_voices: int,
+    reply_voices: tuple[str, ...] = (REPLY_VOICE,),
+) -> list[dict]:
     plan = []
     for pair in pairs:
         if pair["split"] == "test":
@@ -49,6 +54,9 @@ def make_plan(pairs: list[dict], train_voices: int) -> list[dict]:
             ]
         for voice in voices:
             reply = pair["replies"][stable(pair["id"] + voice) % len(pair["replies"])]
+            reply_voice = reply_voices[
+                stable(pair["id"] + voice + "reply") % len(reply_voices)
+            ]
             plan.append(
                 {
                     "id": f"{pair['id']}-{voice}",
@@ -60,10 +68,11 @@ def make_plan(pairs: list[dict], train_voices: int) -> list[dict]:
                     "key": pair["key"],
                     "frame": pair["frame"],
                     "voice": voice,
+                    "reply_voice": reply_voice,
                     "question": pair["question"],
                     "reply": reply,
                     "a_wav": clip_name(pair["question"], voice),
-                    "b_wav": clip_name(reply, REPLY_VOICE),
+                    "b_wav": clip_name(reply, reply_voice),
                 }
             )
     return plan
@@ -103,17 +112,18 @@ def main() -> None:
     parser.add_argument("--pairs", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--train-voices", type=int, default=5)
+    parser.add_argument("--reply-voices", nargs="+", default=[REPLY_VOICE])
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
     pairs = [json.loads(line) for line in args.pairs.read_text().splitlines()]
-    plan = make_plan(pairs, args.train_voices)
+    plan = make_plan(pairs, args.train_voices, args.reply_voices)
     wavs = args.output / "wavs"
     wavs.mkdir(parents=True, exist_ok=True)
     (args.output / "plan.jsonl").write_text("".join(json.dumps(p) + "\n" for p in plan))
     wanted = sorted(
         {(p["question"], p["voice"]) for p in plan}
-        | {(p["reply"], REPLY_VOICE) for p in plan},
+        | {(p["reply"], p["reply_voice"]) for p in plan},
         key=lambda job: job[1],
     )
     # Contiguous chunks keep each worker on a few voices; many chunks balance the load.

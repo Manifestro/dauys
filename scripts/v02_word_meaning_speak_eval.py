@@ -15,8 +15,10 @@ Decoding variants, so the decoding cannot hide the cause:
 - ``sample_low``: CB0 and depth sampled at low temperature.
 
 ``seed`` > 0 first teacher-forces that many true frames of the reply after the
-pause; only the frames generated afterwards are played. If seeding fixes the
-replies, the model fails at choosing how the reply starts, not at speaking.
+pause; by default only the frames generated afterwards are played. With
+``include_seed`` the teacher-forced frames are prepended to the audio as well.
+If seeding fixes the replies, the model fails at choosing how the reply starts,
+not at speaking.
 """
 
 import argparse
@@ -95,7 +97,18 @@ def judge(transcript: str, expected: str, alternatives: list[str]) -> bool:
 
 @torch.inference_mode()
 def speak(
-    model, codec, silence, a_codes, b_codes, *, seed, frames, decoding, gated, rng
+    model,
+    codec,
+    silence,
+    a_codes,
+    b_codes,
+    *,
+    seed,
+    frames,
+    decoding,
+    gated,
+    rng,
+    include_seed: bool = False,
 ):
     device = next(model.parameters()).device
     quiet = silence.to(device)[None]
@@ -116,6 +129,9 @@ def speak(
     if gated:
         speaking = torch.stack(active, dim=-1)[:, None]
         codes = torch.where(speaking, codes, quiet[:, :, None])
+    if include_seed and seed:
+        seed_codes = b_codes[:, :seed].long().to(device)[None]
+        codes = torch.cat((seed_codes, codes), dim=-1)
     return decode(codec, codes.long())[0, 0].float().cpu().numpy()
 
 
