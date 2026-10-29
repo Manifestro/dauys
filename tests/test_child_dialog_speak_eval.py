@@ -1,0 +1,137 @@
+"""Scoring checks for the child-dialogue spoken-reply eval."""
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+
+from child_dialog_speak_eval import best_answer, rescore, words
+
+
+def test_words_spells_numbers_from_digits():
+    assert words("before 9 comes 8") == words("before nine comes eight")
+    assert words("after 14 comes 15") == words("after fourteen comes fifteen")
+    assert words("2 +5 is 7") == {"two", "five", "seven"}
+    assert words("21") == {"twenty", "one"}
+    assert words("100") == {"one", "hundred"}
+
+
+def test_digit_transcript_matches_number_answer():
+    answers = {"Eight.": ["Eight."], "Fifteen.": ["Fifteen."]}
+    assert best_answer("before 9 comes 8", answers) == "Eight."
+    assert best_answer("after 14 comes 15", answers) == "Fifteen."
+
+
+def test_shared_answer_is_one_winner():
+    answers = {
+        "It is blue.": ["It is blue.", "The sky is blue."],
+        "It is green.": ["It is green."],
+    }
+    assert best_answer("It is blue.", answers) == "It is blue."
+    assert best_answer("The sky is blue.", answers) == "It is blue."
+
+
+def test_different_answers_are_distinguished():
+    answers = {
+        "A vegetable.": ["A vegetable.", "It is a vegetable."],
+        "A fruit.": ["A fruit.", "It is a fruit."],
+    }
+    assert best_answer("A vegetable.", answers) == "A vegetable."
+    assert best_answer("A fruit.", answers) == "A fruit."
+    assert best_answer("A rock.", answers) is None
+
+
+def test_rescore_reuses_saved_transcripts(tmp_path):
+    concepts = {
+        "c0000": {
+            "id": "c0000",
+            "group": "color",
+            "answer": "It is blue.",
+            "replies": ["It is blue.", "Blue."],
+        },
+        "c0001": {
+            "id": "c0001",
+            "group": "color",
+            "answer": "It is blue.",
+            "replies": ["The sky is blue."],
+        },
+        "c0002": {
+            "id": "c0002",
+            "group": "color",
+            "answer": "It is green.",
+            "replies": ["It is green."],
+        },
+    }
+    pairs = [
+        {
+            "question": "What color is the sky?",
+            "concept": "c0000",
+            "group": "color",
+            "split": "test",
+        },
+        {
+            "question": "What color is the grass?",
+            "concept": "c0002",
+            "group": "color",
+            "split": "test",
+        },
+    ]
+    previous = [
+        {
+            "variant": "greedy",
+            "examples": [
+                {
+                    "question": "What color is the sky?",
+                    "expected": "It is blue.",
+                    "heard": "It is blue.",
+                    "stopped": True,
+                },
+                {
+                    "question": "What color is the grass?",
+                    "expected": "It is green.",
+                    "heard": "It is blue.",
+                    "stopped": False,
+                },
+            ],
+        }
+    ]
+    concepts_path = tmp_path / "concepts.jsonl"
+    concepts_path.write_text(
+        "".join(json.dumps(concept) + "\n" for concept in concepts.values())
+    )
+    pairs_path = tmp_path / "pairs.jsonl"
+    pairs_path.write_text("".join(json.dumps(pair) + "\n" for pair in pairs))
+    previous_path = tmp_path / "previous.json"
+    previous_path.write_text(json.dumps(previous))
+
+    results = rescore(previous_path, pairs_path, concepts)
+
+    assert results == [
+        {
+            "variant": "greedy",
+            "items": 2,
+            "correct": 0.5,
+            "correct_first": 0.5,
+            "stopped": 0.5,
+            "chance": 0.5,
+            "examples": [
+                {
+                    "question": "What color is the sky?",
+                    "expected": "It is blue.",
+                    "heard": "It is blue.",
+                    "ok": True,
+                    "ok_first": True,
+                    "stopped": True,
+                },
+                {
+                    "question": "What color is the grass?",
+                    "expected": "It is green.",
+                    "heard": "It is blue.",
+                    "ok": False,
+                    "ok_first": False,
+                    "stopped": False,
+                },
+            ],
+        }
+    ]
