@@ -21,6 +21,9 @@ def test_select_questions_uses_seeded_shuffle_per_topic():
     chosen = select_questions(rows, 2)
     assert [row["id"] for row in chosen] == ["b2", "b3", "a1", "a3"]
     assert select_questions(rows, 2) == chosen
+    assert {row["id"] for row in select_questions(rows, 0)} == {
+        row["id"] for row in rows
+    }
 
 
 def test_collect_candidates_deduplicates_clips_and_normalizes_answers():
@@ -62,9 +65,43 @@ def test_score_matrix_tracks_top1_top3_chance_rank_and_prior():
         ["blue", "green", "red"],
         ["color", "color", "shape"],
         prior,
+        ["i1", "i2", "i3"],
+        ["q1", "q2", "q3"],
+        ["c1", "c2", "c3"],
     )
     assert result == {
-        "items": 3,
+        "items": [
+            {
+                "id": "i1",
+                "question": "q1",
+                "concept": "c1",
+                "family": "color",
+                "expected": "blue",
+                "predicted": "blue",
+                "top1": True,
+                "prior_predicted": "green",
+            },
+            {
+                "id": "i2",
+                "question": "q2",
+                "concept": "c2",
+                "family": "color",
+                "expected": "green",
+                "predicted": "red",
+                "top1": False,
+                "prior_predicted": "green",
+            },
+            {
+                "id": "i3",
+                "question": "q3",
+                "concept": "c3",
+                "family": "shape",
+                "expected": "red",
+                "predicted": "blue",
+                "top1": False,
+                "prior_predicted": "blue",
+            },
+        ],
         "top1": 0.333,
         "top3": 1.0,
         "chance": 0.333,
@@ -104,3 +141,5 @@ def test_score_matrix_without_prior_leaves_prior_metrics_empty():
     assert result["top1"] == 1.0
     assert result["top1_prior"] is None
     assert result["prior_agree"] is None
+    assert result["items"][0]["id"] is None
+    assert result["items"][0]["prior_predicted"] is None

@@ -11,7 +11,8 @@ chance and prior agreement should stay high.
 
 Reported: top1, top3 over distinct answers (the correct answer's 0-based rank
 is below 3), chance, the mean rank of the correct answer, prior top1, prior
-agreement, and a by-family split.
+agreement, a by-family split, and a per-question ``items`` list. A
+``--per-group`` value of zero uses every question in each group.
 """
 
 import argparse
@@ -32,10 +33,14 @@ from v02_word_meaning_eval import reply_nll
 
 
 def select_questions(rows: list[dict], per_group: int) -> list[dict]:
-    """Shuffle with seed 0 and take the first ``per_group`` rows per topic."""
+    """Shuffle with seed 0 and take up to ``per_group`` rows per topic."""
+    if per_group < 0:
+        raise ValueError("The per-group count cannot be negative")
     rng = random.Random(0)
     shuffled = list(rows)
     rng.shuffle(shuffled)
+    if per_group == 0:
+        return shuffled
     chosen, count = [], {}
     for row in shuffled:
         topic = row["topic"]
@@ -79,12 +84,22 @@ def score_matrix(
     expected: list[str],
     families: list[str],
     prior_nll: list[list[float]] | None = None,
+    ids: list[str] | None = None,
+    questions: list[str] | None = None,
+    concepts: list[str] | None = None,
 ) -> dict:
     """Aggregate ranking metrics from per-question candidate NLL rows."""
     if not (len(nll) == len(answers) == len(expected) == len(families)):
         raise ValueError("NLL rows, answers, expected and families must align")
     if prior_nll is not None and len(prior_nll) != len(nll):
         raise ValueError("Prior NLL rows must align with NLL rows")
+    for name, values in (
+        ("ids", ids),
+        ("questions", questions),
+        ("concepts", concepts),
+    ):
+        if values is not None and len(values) != len(nll):
+            raise ValueError(f"{name} must align with NLL rows")
     records = []
     for index, values in enumerate(nll):
         if len(values) != len(answers[index]):
@@ -106,8 +121,14 @@ def score_matrix(
             prior_agree = prior_best == best
         records.append(
             {
+                "id": ids[index] if ids is not None else None,
+                "question": questions[index] if questions is not None else None,
+                "concept": concepts[index] if concepts is not None else None,
                 "family": families[index],
+                "expected": correct,
+                "predicted": best,
                 "top1": best == correct,
+                "prior_predicted": prior_best,
                 "top3": correct in ranking and rank < 3,
                 "chance": 1 / len(set(answers[index])) if answers[index] else 0.0,
                 "rank": rank,
@@ -120,6 +141,22 @@ def score_matrix(
         family: _aggregate([record for record in records if record["family"] == family])
         for family in sorted({record["family"] for record in records})
     }
+    summary["items"] = [
+        {
+            key: record[key]
+            for key in (
+                "id",
+                "question",
+                "concept",
+                "family",
+                "expected",
+                "predicted",
+                "top1",
+                "prior_predicted",
+            )
+        }
+        for record in records
+    ]
     return summary
 
 
@@ -196,6 +233,7 @@ def main() -> None:
     for row in chosen:
         by_group.setdefault(row["topic"], []).append(row)
     nll, prior_nll, answers, expected, families = [], [], [], [], []
+    ids, question_texts, concept_ids = [], [], []
     for topic, questions in by_group.items():
         options = candidates[topic]
         replies = [clip(name) for name, _ in options]
@@ -234,7 +272,19 @@ def main() -> None:
             row.get("family") or concepts[row["concept"]].get("family") or row["topic"]
             for row in questions
         )
-    summary = score_matrix(nll, answers, expected, families, prior_nll)
+        ids.extend(row["id"] for row in questions)
+        question_texts.extend(row["question"] for row in questions)
+        concept_ids.extend(row["concept"] for row in questions)
+    summary = score_matrix(
+        nll,
+        answers,
+        expected,
+        families,
+        prior_nll,
+        ids,
+        question_texts,
+        concept_ids,
+    )
     print(
         json.dumps({k: v for k, v in summary.items() if k != "by_family"}),
         flush=True,
