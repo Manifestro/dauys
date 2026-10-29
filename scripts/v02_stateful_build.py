@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import random
 from collections import defaultdict
 from pathlib import Path
 
@@ -136,15 +137,102 @@ def build_split(
     return streams
 
 
+def build_pair_streams(
+    root: Path,
+    *,
+    chunk: int,
+    chunks: int,
+    seed: int = 0,
+    limit: int | None = None,
+) -> list[dict]:
+    """Pack shuffled child-dialogue pairs into fixed-length training streams."""
+    if chunk < 1 or chunks < 1:
+        raise ValueError("Chunk and chunk count must be positive")
+    if limit is not None and limit < 1:
+        raise ValueError("The stream limit must be positive")
+    rows = [
+        json.loads(line)
+        for line in (root / "manifest.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    random.Random(seed).shuffle(rows)
+    span = chunk * chunks
+    streams = []
+    current = None
+    for row in rows:
+        cached = torch.load(
+            root / str(row["tokens_path"]), map_location="cpu", weights_only=True
+        )
+        piece = {
+            key: cached[key].long()
+            for key in ("user", "target", "user_activity", "activity")
+        }
+        frames = piece["user"].shape[-1]
+        if (
+            piece["user"].shape != (8, frames)
+            or piece["target"].shape != (8, frames)
+            or piece["user_activity"].shape != (frames,)
+            or piece["activity"].shape != (frames,)
+        ):
+            raise ValueError(f"Pair token geometry is invalid: {row['id']}")
+        if current is None:
+            current = piece
+        else:
+            current = {
+                "user": torch.cat((current["user"], piece["user"]), dim=-1),
+                "target": torch.cat((current["target"], piece["target"]), dim=-1),
+                "user_activity": torch.cat(
+                    (current["user_activity"], piece["user_activity"])
+                ),
+                "activity": torch.cat((current["activity"], piece["activity"])),
+            }
+        if current["user"].shape[-1] >= span:
+            streams.append(
+                {
+                    "user": current["user"][:, :span].clone(),
+                    "target": current["target"][:, :span].clone(),
+                    "user_activity": current["user_activity"][:span].clone(),
+                    "activity": current["activity"][:span].clone(),
+                    "chapter": f"pairs-{len(streams)}",
+                    "speaker": "pairs",
+                }
+            )
+            current = None
+            if limit is not None and len(streams) >= limit:
+                break
+    return streams
+
+
+def parse_pairs(items: list[str]) -> list[tuple[str, Path]]:
+    """Parse NAME=DIR pair-split arguments and reject duplicates."""
+    result = []
+    names = set()
+    for item in items:
+        if "=" not in item:
+            raise ValueError(f"Pair split needs NAME=DIR, got {item}")
+        name, directory = item.split("=", 1)
+        if not name or not directory:
+            raise ValueError(f"Pair split needs NAME=DIR, got {item}")
+        if name in names:
+            raise ValueError(f"Duplicate pair split name: {name}")
+        names.add(name)
+        result.append((name, Path(directory)))
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--inputs", type=Path, nargs="+", required=True)
+    parser.add_argument("--inputs", type=Path, nargs="+", default=[])
+    parser.add_argument("--pairs", nargs="+", default=[], metavar="NAME=DIR")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--silence-codes", type=Path, required=True)
     parser.add_argument("--chunk", type=int, default=256)
     parser.add_argument("--chunks", type=int, default=8)
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
+    if not args.inputs and not args.pairs:
+        parser.error("At least one of --inputs or --pairs is required")
+    pairs = parse_pairs(args.pairs)
     if args.chunk < 1 or args.chunks < 1:
         raise ValueError("Chunk and chunk count must be positive")
     if args.limit is not None and args.limit < 1:
@@ -165,6 +253,23 @@ def main() -> None:
             limit=args.limit,
         )
         split = root.name or "split"
+        torch.save(streams, args.output / f"{split}.pt")
+        frames = sum(int(stream["user"].shape[-1]) for stream in streams)
+        by_split[split] = {
+            "streams": len(streams),
+            "frames": frames,
+            "hours": round(frames / FRAME_RATE / 3600, 4),
+        }
+        total_streams += len(streams)
+        total_frames += frames
+    for name, root in pairs:
+        streams = build_pair_streams(
+            root,
+            chunk=args.chunk,
+            chunks=args.chunks,
+            limit=args.limit,
+        )
+        split = f"{name}-pairs"
         torch.save(streams, args.output / f"{split}.pt")
         frames = sum(int(stream["user"].shape[-1]) for stream in streams)
         by_split[split] = {

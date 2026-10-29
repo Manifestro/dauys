@@ -1,16 +1,24 @@
 """Stateful stream assembly and TBPTT chunk-loop checks."""
 
 import json
+import random
 import sys
 import types
 from pathlib import Path
 
+import pytest
 import torch
 from torch import nn
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
-from v02_stateful_build import assemble_chapter, build_split, slice_stream
+from v02_stateful_build import (
+    assemble_chapter,
+    build_pair_streams,
+    build_split,
+    parse_pairs,
+    slice_stream,
+)
 from v02_stateful_eval import (
     aggregate_gains,
     foreign_stream_index,
@@ -18,7 +26,7 @@ from v02_stateful_eval import (
     shuffled_order,
     summarize_modes,
 )
-from v02_stateful_train import run_batch, stack_streams
+from v02_stateful_train import compose_batch, run_batch, stack_streams
 
 
 def _phrase(value: int, frames: int = 2) -> dict:
@@ -255,3 +263,79 @@ def test_mode_nlls_handles_real_stream_shapes_in_all_modes():
             assert all(states is None for *_, states in model.calls)
         else:
             assert all(isinstance(states, dict) for *_, states in model.calls)
+
+
+def test_parse_pairs_requires_names_and_rejects_duplicates():
+    pairs = parse_pairs(["v1=/data/v1/train", "w2=/data/w2/train"])
+    assert [(name, path.as_posix()) for name, path in pairs] == [
+        ("v1", "/data/v1/train"),
+        ("w2", "/data/w2/train"),
+    ]
+    with pytest.raises(ValueError, match="NAME=DIR"):
+        parse_pairs(["missing"])
+    with pytest.raises(ValueError, match="Duplicate"):
+        parse_pairs(["same=/a", "same=/b"])
+
+
+def test_build_pair_streams_cuts_and_drops_remainders(tmp_path):
+    tokens = tmp_path / "tokens"
+    tokens.mkdir()
+    rows = []
+    values = {}
+    for index, value in enumerate((11, 22, 33, 44)):
+        identity = f"pair-{index}"
+        values[identity] = value
+        torch.save(
+            {
+                "user": torch.full((8, 5), value, dtype=torch.short),
+                "target": torch.full((8, 5), value + 100, dtype=torch.short),
+                "user_activity": torch.ones(5, dtype=torch.uint8),
+                "activity": torch.ones(5, dtype=torch.uint8),
+            },
+            tokens / f"{identity}.pt",
+        )
+        rows.append({"id": identity, "tokens_path": f"tokens/{identity}.pt"})
+    (tmp_path / "manifest.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows)
+    )
+    shuffled = list(rows)
+    random.Random(0).shuffle(shuffled)
+    streams = build_pair_streams(tmp_path, chunk=4, chunks=2)
+    assert len(streams) == 2
+    for index, stream in enumerate(streams):
+        first = values[shuffled[2 * index]["id"]]
+        second = values[shuffled[2 * index + 1]["id"]]
+        assert stream["user"].shape == (8, 8)
+        assert stream["target"].shape == (8, 8)
+        assert stream["user"][:, :5].eq(first).all()
+        assert stream["user"][:, 5:].eq(second).all()
+        assert stream["target"][:, :5].eq(first + 100).all()
+        assert stream["target"][:, 5:].eq(second + 100).all()
+        assert stream["chapter"] == f"pairs-{index}"
+        assert stream["speaker"] == "pairs"
+    assert len(build_pair_streams(tmp_path, chunk=4, chunks=2, limit=1)) == 1
+
+
+def _stream(tag: str, frames: int = 4) -> dict:
+    return {
+        "user": torch.zeros(8, frames, dtype=torch.long),
+        "target": torch.zeros(8, frames, dtype=torch.long),
+        "user_activity": torch.zeros(frames, dtype=torch.long),
+        "activity": torch.zeros(frames, dtype=torch.long),
+        "tag": tag,
+    }
+
+
+def test_compose_batch_mixes_main_and_fixed_mix_rows():
+    train = [_stream(f"main{index}") for index in range(4)]
+    mix_a = [_stream(f"a{index}") for index in range(3)]
+    mix_b = [_stream(f"b{index}") for index in range(3)]
+    selected = compose_batch(train, [(mix_a, 1), (mix_b, 1)], 5, random.Random(0))
+    assert len(selected) == 5
+    assert sum(stream["tag"].startswith("main") for stream in selected) == 3
+    assert sum(stream["tag"].startswith("a") for stream in selected) == 1
+    assert sum(stream["tag"].startswith("b") for stream in selected) == 1
+    with pytest.raises(ValueError, match="main stream"):
+        compose_batch(train, [(mix_a, 5)], 5, random.Random(0))
+    with pytest.raises(ValueError, match="same length"):
+        compose_batch(train, [([_stream("long", 5)], 1)], 5, random.Random(0))

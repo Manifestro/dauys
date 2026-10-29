@@ -41,11 +41,30 @@ def _clip(root: Path, name: str) -> tuple[torch.Tensor, torch.Tensor]:
     return data["codes"].long(), data["activity"].bool()
 
 
+def combine_parts(cb0: torch.Tensor, depth: torch.Tensor, parts: str) -> torch.Tensor:
+    """Combine the per-frame CB0 and depth losses."""
+    if parts == "all":
+        return cb0 + depth
+    if parts == "cb0":
+        return cb0
+    if parts == "depth":
+        return depth
+    raise ValueError(f"Unknown NLL parts: {parts}")
+
+
 @torch.inference_mode()
 def reply_nll(
-    model, silence, pairs, *, batch: int = 32, onset: int = 0
+    model,
+    silence,
+    pairs,
+    *,
+    batch: int = 32,
+    onset: int = 0,
+    parts: str = "all",
 ) -> torch.Tensor:
-    """Mean CB0 + depth NLL over B's speech frames for each (A, B) clip pair."""
+    """Mean CB0/depth NLL over B's speech frames for each (A, B) clip pair."""
+    if parts not in ("all", "cb0", "depth"):
+        raise ValueError(f"Unknown NLL parts: {parts}")
     out = []
     for start in range(0, len(pairs), batch):
         chunk = pairs[start : start + batch]
@@ -73,7 +92,8 @@ def reply_nll(
             target[:, 1:].transpose(1, 2),
             reduction="none",
         ).mean(-1)
-        total = ((cb0 + depth) * speech).sum(1) / speech.sum(1).clamp_min(1)
+        total_loss = combine_parts(cb0, depth, parts)
+        total = (total_loss * speech).sum(1) / speech.sum(1).clamp_min(1)
         out.append(total.cpu())
     return torch.cat(out)
 

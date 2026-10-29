@@ -40,6 +40,30 @@ def stack_streams(streams: list[dict]) -> dict[str, torch.Tensor]:
     }
 
 
+def compose_batch(
+    train: list[dict],
+    mixes: list[tuple[list[dict], int]],
+    batch: int,
+    rng: random.Random,
+) -> list[dict]:
+    """Take main streams plus fixed-size samples from each mix set."""
+    mix_rows = sum(rows for _, rows in mixes)
+    main_rows = batch - mix_rows
+    if main_rows < 1:
+        raise ValueError("The batch needs at least one main stream")
+    lengths = {stream["user"].shape[-1] for stream in train}
+    for streams, rows in mixes:
+        if rows < 1:
+            raise ValueError("Each mix needs a positive stream count")
+        lengths |= {stream["user"].shape[-1] for stream in streams}
+    if len(lengths) != 1:
+        raise ValueError("All main and mixed streams must have the same length")
+    selected = list(rng.sample(train, main_rows))
+    for streams, rows in mixes:
+        selected.extend(rng.sample(streams, rows))
+    return selected
+
+
 def _batch_to(batch: dict[str, torch.Tensor], device: torch.device) -> dict:
     return {key: value.to(device) for key, value in batch.items()}
 
@@ -246,6 +270,9 @@ def main() -> None:
     parser.add_argument("--steps", type=int, required=True)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument(
+        "--mix", nargs="*", action="append", default=[], metavar="PATH:ROWS"
+    )
     parser.add_argument("--stateful", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=42)
@@ -258,6 +285,17 @@ def main() -> None:
     config = ModelConfig.from_yaml(args.config)
     train = load_streams(args.data)
     heldout = load_streams(args.heldout)
+    mix_specs = []
+    for group in args.mix:
+        for spec in group:
+            path, rows = spec.rsplit(":", 1)
+            count = int(rows)
+            if count < 1:
+                raise ValueError("Each mix needs a positive stream count")
+            mix_specs.append((Path(path), count))
+    mix_sets = [(load_streams(path), rows) for path, rows in mix_specs]
+    if args.batch - sum(rows for _, rows in mix_sets) < 1:
+        raise ValueError("The batch needs at least one main stream")
     git_sha, dirty = _git()
     if dirty and args.require_clean:
         raise ValueError("This run requires a clean checkout")
@@ -292,6 +330,7 @@ def main() -> None:
             "chunk": args.chunk,
             "checkpoint_interval": args.checkpoint_interval,
             "seed": args.seed,
+            "mix": [{"path": str(path), "rows": rows} for path, rows in mix_specs],
         },
         "model": asdict(config),
         "provenance": {
@@ -300,6 +339,9 @@ def main() -> None:
             "config_sha256": sha256(args.config),
             "data_sha256": sha256(args.data),
             "heldout_sha256": sha256(args.heldout),
+            "mix_sha256": [
+                {"path": str(path), "sha256": sha256(path)} for path, _ in mix_specs
+            ],
             "init_checkpoint": str(args.init_checkpoint or "none"),
         },
         "streams": len(train),
@@ -315,8 +357,10 @@ def main() -> None:
     validation_metrics: dict[str, float] = {}
     with (root / "metrics.jsonl").open("w", encoding="utf-8") as stream:
         while step < args.steps:
-            indices = rng.sample(range(len(train)), min(args.batch, len(train)))
-            batch = _batch_to(stack_streams([train[i] for i in indices]), device)
+            batch = _batch_to(
+                stack_streams(compose_batch(train, mix_sets, args.batch, rng)),
+                device,
+            )
             logs = []
 
             def after(index, log):

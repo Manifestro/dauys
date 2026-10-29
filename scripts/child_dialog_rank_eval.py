@@ -198,6 +198,8 @@ def main() -> None:
     parser.add_argument("--silence-codes", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True, help="encoded split dir")
     parser.add_argument("--concepts", type=Path, required=True)
+    parser.add_argument("--candidates", type=Path)
+    parser.add_argument("--score", choices=("all", "cb0", "depth"), default="all")
     parser.add_argument("--per-group", type=int, default=6)
     parser.add_argument("--batch", type=int, default=32)
     parser.add_argument(
@@ -215,7 +217,16 @@ def main() -> None:
         json.loads(line)
         for line in (args.data / "manifest.jsonl").read_text().splitlines()
     ]
-    candidates = collect_candidates(rows, concepts)
+    candidate_rows = (
+        rows
+        if args.candidates is None
+        else [
+            json.loads(line)
+            for line in args.candidates.read_text().splitlines()
+            if line.strip()
+        ]
+    )
+    candidates = collect_candidates(candidate_rows, concepts)
     chosen = select_questions(rows, args.per_group)
     silence = torch.tensor(json.loads(args.silence_codes.read_text()), dtype=torch.long)
     payload = load_research_checkpoint(args.checkpoint)
@@ -254,6 +265,7 @@ def main() -> None:
             normal_pairs,
             batch=args.batch,
             onset=args.onset_frames,
+            parts=args.score,
         ).reshape(len(questions), len(replies))
         prior = reply_nll(
             model,
@@ -261,6 +273,7 @@ def main() -> None:
             silent_pairs,
             batch=args.batch,
             onset=args.onset_frames,
+            parts=args.score,
         ).reshape(len(questions), len(replies))
         nll.extend(normal.tolist())
         prior_nll.extend(prior.tolist())
@@ -285,6 +298,7 @@ def main() -> None:
         question_texts,
         concept_ids,
     )
+    summary["score"] = args.score
     print(
         json.dumps({k: v for k, v in summary.items() if k != "by_family"}),
         flush=True,
