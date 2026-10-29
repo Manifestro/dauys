@@ -15,8 +15,10 @@ from child_dialog_curve_decide import (
 )
 
 
-def _items(pattern: list[bool]) -> list[dict]:
-    return [{"id": f"i{index}", "top1": value} for index, value in enumerate(pattern)]
+def _items(pattern: list[bool], prefix: str = "i") -> list[dict]:
+    return [
+        {"id": f"{prefix}{index}", "top1": value} for index, value in enumerate(pattern)
+    ]
 
 
 def test_decide_yes_and_missing_spreads_count_as_zero():
@@ -93,6 +95,28 @@ def test_compute_metrics_yes_from_paired_items():
     assert result["decision"] == "YES"
     assert result["conditions_failed"] == []
     assert result["memorization_flag"] is False
+
+
+def test_piper_and_kokoro_may_use_different_item_ids():
+    zero = [False] * 10
+    full = [True] * 10
+    half = [True] * 5 + [False] * 5
+    piper = {
+        "H200-s0": _items(zero, "p"),
+        "H200-s1": _items(zero, "p"),
+        "H500-s0": _items(full, "p"),
+        "H500-s1": _items(full, "p"),
+    }
+    kokoro = {
+        "H200-s0": _items(half, "k"),
+        "H200-s1": _items(half, "k"),
+        "H500-s0": _items(half, "k"),
+        "H500-s1": _items(half, "k"),
+    }
+    result = compute_metrics(piper, kokoro, samples=200)
+    assert result["runs"]["H200-s0"]["piper"]["items"] == 10
+    assert result["runs"]["H200-s0"]["kokoro"]["items"] == 10
+    assert result["decision"] == "YES"
 
 
 def test_memorization_flag_does_not_change_the_decision():

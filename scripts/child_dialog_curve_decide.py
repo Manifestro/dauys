@@ -88,6 +88,19 @@ def decide(
     return ("YES" if not failed else "NO"), failed
 
 
+def _shared_ids(
+    indexed: dict[str, tuple[dict[str, bool], float]], label: str
+) -> set[str] | None:
+    all_ids = None
+    for by_id, _ in indexed.values():
+        ids = set(by_id)
+        if all_ids is None:
+            all_ids = ids
+        elif ids != all_ids:
+            raise ValueError(f"All {label} results must use the same item ids")
+    return all_ids
+
+
 def compute_metrics(
     piper: dict[str, list[dict]],
     kokoro: dict[str, list[dict]],
@@ -100,14 +113,8 @@ def compute_metrics(
         raise ValueError("At least one result is required")
     piper_index = {name: index_items(items) for name, items in piper.items()}
     kokoro_index = {name: index_items(items) for name, items in kokoro.items()}
-    all_ids = None
-    for indexed, _ in [*piper_index.values(), *kokoro_index.values()]:
-        ids = set(indexed)
-        if all_ids is None:
-            all_ids = ids
-        elif ids != all_ids:
-            raise ValueError("All ranking results must use the same item ids")
-    assert all_ids is not None
+    piper_ids = _shared_ids(piper_index, "Piper")
+    _shared_ids(kokoro_index, "Kokoro")
     names = sorted(
         set(piper) | set(kokoro),
         key=lambda name: parse_name(name),
@@ -172,9 +179,10 @@ def compute_metrics(
         ]
         if not selected:
             return None
+        assert piper_ids is not None
         return {
             identity: sum(index[identity] for index in selected) / len(selected)
-            for identity in sorted(all_ids)
+            for identity in sorted(piper_ids)
         }
 
     h200_items = item_means(200)
@@ -183,7 +191,8 @@ def compute_metrics(
         []
         if h200_items is None or h500_items is None
         else [
-            h500_items[identity] - h200_items[identity] for identity in sorted(all_ids)
+            h500_items[identity] - h200_items[identity]
+            for identity in sorted(piper_ids)
         ]
     )
     bootstrap = paired_bootstrap(differences, samples=samples, seed=seed)
