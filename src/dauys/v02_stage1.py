@@ -546,6 +546,8 @@ class Stage1Weights:
     acoustic_dropout: float = 0.5
     label_smoothing: float = 0.05
     history_dropout: float = 0.0
+    self_feed: float = 0.0
+    self_feed_frames: float = 0.5
     listening_horizon: int = 1
 
 
@@ -612,6 +614,7 @@ class Stage1Loss:
     listening_activity: torch.Tensor
     intent: torch.Tensor
     intent_accuracy: torch.Tensor
+    self_fed_fraction: torch.Tensor
 
 
 def _hide_history(
@@ -637,6 +640,40 @@ def _hide_history(
     return torch.where(blank, silence, batch.output_codes), hidden
 
 
+def _predicted_codes(output: ModelOutput) -> torch.Tensor:
+    """Argmax [batch, 8, frames] codes from one teacher-forced pass."""
+    if output.depth_logits is None:
+        raise ValueError("Self-feeding requires depth logits")
+    depth = output.depth_logits.argmax(dim=-1).permute(0, 2, 1)
+    return torch.cat((output.cb0_logits.argmax(dim=-1)[:, None], depth), dim=1)
+
+
+def _self_feed_inputs(
+    inputs: torch.Tensor,
+    predicted: torch.Tensor,
+    hidden: torch.Tensor,
+    cut: torch.Tensor,
+    probability: float,
+    frame_probability: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Replace eligible B history frames with predicted codes."""
+    if predicted.shape != inputs.shape:
+        raise ValueError("Predicted and input codes must share their geometry")
+    batch_size, _, frames = inputs.shape
+    device = inputs.device
+    selected = (torch.rand(batch_size, device=device) < probability) & ~hidden
+    after = torch.arange(frames, device=device)[None] >= cut[:, None]
+    available = ~hidden[:, None] & after
+    replace = (
+        available
+        & selected[:, None]
+        & (torch.rand((batch_size, frames), device=device) < frame_probability)
+    )
+    mixed = torch.where(replace[:, None, :], predicted, inputs)
+    fraction = replace.sum().float() / available.sum().clamp_min(1).float()
+    return mixed, fraction
+
+
 def stage1_objective(
     model: DauysHybrid,
     batch: Stage1Batch,
@@ -650,11 +687,29 @@ def stage1_objective(
     inputs, hidden = _hide_history(
         batch, weights.history_dropout if model.training else 0.0
     )
+    self_fed_fraction = torch.zeros((), device=batch.output_codes.device)
+    acoustic_dropout = weights.acoustic_dropout if model.training else 0.0
+    if model.training and weights.self_feed > 0:
+        with torch.no_grad():
+            reference = model(
+                batch.user_codes,
+                inputs,
+                batch.initial_output_codes,
+                acoustic_dropout=acoustic_dropout,
+            )
+        inputs, self_fed_fraction = _self_feed_inputs(
+            inputs,
+            _predicted_codes(reference),
+            hidden,
+            batch.intent_frames + 1,
+            weights.self_feed,
+            weights.self_feed_frames,
+        )
     output = model(
         batch.user_codes,
         inputs,
         batch.initial_output_codes,
-        acoustic_dropout=weights.acoustic_dropout if model.training else 0.0,
+        acoustic_dropout=acoustic_dropout,
     )
     masks = stage1_masks(batch.valid_frames, batch.output_activity, batch.user_activity)
     batch_size, frames = batch.output_activity.shape
@@ -729,6 +784,7 @@ def stage1_objective(
         listening_activity=listening_activity,
         intent=intent_loss,
         intent_accuracy=intent_accuracy,
+        self_fed_fraction=self_fed_fraction,
     )
 
 
@@ -820,10 +876,7 @@ class Stage1BatchSource(torch.utils.data.Dataset[Stage1Batch]):
         if steps < 1:
             raise ValueError("A Stage 1 source needs at least one step")
         mixed_speakers = sum(k for _, k in mix)
-        if (
-            any(k < 1 or not corpus for corpus, k in mix)
-            or mixed_speakers >= speakers
-        ):
+        if any(k < 1 or not corpus for corpus, k in mix) or mixed_speakers >= speakers:
             raise ValueError(
                 "Each mixed corpus needs records and 0 < k; the sum < speakers"
             )

@@ -247,6 +247,18 @@ def main() -> None:
         default=0.0,
         help="Share of items whose B input after the cut is replaced by silence",
     )
+    parser.add_argument(
+        "--self-feed",
+        type=float,
+        default=0.0,
+        help="Share of items whose B history is replaced by model predictions",
+    )
+    parser.add_argument(
+        "--self-feed-frames",
+        type=float,
+        default=0.5,
+        help="Share of eligible B-history frames replaced within chosen items",
+    )
     parser.add_argument("--intent-weight", type=float, default=0.5)
     parser.add_argument(
         "--listening-horizon",
@@ -417,6 +429,8 @@ def main() -> None:
             "learning_rate": args.learning_rate,
             "seed": args.seed,
             "history_dropout": args.history_dropout,
+            "self_feed": args.self_feed,
+            "self_feed_frames": args.self_feed_frames,
             "intent_weight": args.intent_weight,
             "listening_horizon": args.listening_horizon,
             "listening_scale": args.listening_scale,
@@ -453,6 +467,8 @@ def main() -> None:
                     acoustic_dropout=args.acoustic_dropout,
                     intent=args.intent_weight,
                     history_dropout=args.history_dropout,
+                    self_feed=args.self_feed,
+                    self_feed_frames=args.self_feed_frames,
                     listening_horizon=args.listening_horizon,
                 )
                 optimizer.zero_grad(set_to_none=True)
@@ -476,6 +492,7 @@ def main() -> None:
                     "train/listening_cb0": float(losses.listening_cb0.detach()),
                     "train/intent": float(losses.intent.detach()),
                     "train/intent_accuracy": float(losses.intent_accuracy.detach()),
+                    "train/self_fed_fraction": float(losses.self_fed_fraction.detach()),
                     "train/lr": optimizer.param_groups[0]["lr"],
                 }
                 due = step % args.checkpoint_interval == 0 or step == args.steps

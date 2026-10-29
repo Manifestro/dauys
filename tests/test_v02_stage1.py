@@ -21,6 +21,7 @@ from dauys.v02_stage1 import (
     Stage1Weights,
     _hide_history,
     _load_tokens,
+    _predicted_codes,
     ab_layout,
     assert_stage1_pools,
     continuation_window,
@@ -258,6 +259,110 @@ def _tiny_config() -> ModelConfig:
         activity_ahead_horizon=0,
         max_trainable_parameters=10_000_000,
     )
+
+
+def _small_objective_batch(*, frames: int = 8, cuts=(2, 4)) -> Stage1Batch:
+    size = len(cuts)
+    return Stage1Batch(
+        user_codes=torch.randint(0, 2048, (size, 8, frames)),
+        output_codes=torch.randint(1, 2048, (size, 8, frames)),
+        user_activity=torch.ones((size, frames), dtype=torch.long),
+        output_activity=torch.ones((size, frames), dtype=torch.long),
+        valid_frames=torch.ones((size, frames), dtype=torch.bool),
+        initial_output_codes=torch.zeros((size, 8), dtype=torch.long),
+        silence_codes=torch.zeros((size, 8), dtype=torch.long),
+        intent_frames=torch.tensor(cuts) - 1,
+        candidate_codes=torch.randint(0, 2048, (size, 2, 8, INTENT_FRAMES)),
+        candidate_activity=torch.ones((size, 2, INTENT_FRAMES), dtype=torch.bool),
+        positive_index=torch.tensor([[0], [1]]),
+        speaker_index=torch.arange(size),
+        ids=tuple(f"b{index}" for index in range(size)),
+        speakers=tuple(f"s{index}" for index in range(size)),
+        candidate_ids=tuple((f"c{index}-0", f"c{index}-1") for index in range(size)),
+    )
+
+
+def _recording_forward(model, calls):
+    original = model.forward
+
+    def forward(user_codes, output_codes, initial_output_codes, **kwargs):
+        output = original(user_codes, output_codes, initial_output_codes, **kwargs)
+        calls.append(
+            {
+                "user_codes": user_codes.detach().clone(),
+                "history": output_codes.detach().clone(),
+                "output": output,
+            }
+        )
+        return output
+
+    return forward
+
+
+def test_self_feed_zero_keeps_one_unchanged_teacher_forced_pass(monkeypatch):
+    torch.manual_seed(0)
+    model = DauysHybrid(_tiny_config()).train()
+    intent = IntentModule(model, IntentConfig(horizon=2))
+    batch = _small_objective_batch()
+    inputs = batch.output_codes.clone()
+    user_codes = batch.user_codes.clone()
+    calls = []
+    monkeypatch.setattr(model, "forward", _recording_forward(model, calls))
+
+    losses = stage1_objective(model, batch, Stage1Weights(acoustic_dropout=0.0), intent)
+
+    assert len(calls) == 1
+    assert torch.equal(calls[0]["history"], inputs)
+    assert torch.equal(calls[0]["user_codes"], user_codes)
+    assert torch.equal(batch.output_codes, inputs)
+    assert float(losses.self_fed_fraction) == 0.0
+
+
+def test_self_feed_replaces_only_unhidden_history_after_the_cut(monkeypatch):
+    torch.manual_seed(0)
+    model = DauysHybrid(_tiny_config()).train()
+    intent = IntentModule(model, IntentConfig(horizon=2))
+    batch = _small_objective_batch()
+    labels = batch.output_codes.clone()
+    user_codes = batch.user_codes.clone()
+    hidden = torch.tensor([False, True])
+    cut = batch.intent_frames + 1
+    after = torch.arange(batch.output_codes.shape[-1])[None] >= cut[:, None]
+
+    def hidden_history(current, probability):
+        inputs = current.output_codes.clone()
+        silence = current.initial_output_codes[:, :, None]
+        blank = (hidden[:, None] & after)[:, None, :]
+        return torch.where(blank, silence, inputs), hidden.clone()
+
+    expected_inputs, _ = hidden_history(batch, 0.0)
+    monkeypatch.setattr("dauys.v02_stage1._hide_history", hidden_history)
+    calls = []
+    monkeypatch.setattr(model, "forward", _recording_forward(model, calls))
+
+    losses = stage1_objective(
+        model,
+        batch,
+        Stage1Weights(acoustic_dropout=0.0, self_feed=1.0, self_feed_frames=1.0),
+        intent,
+    )
+
+    assert len(calls) == 2
+    first, second = calls
+    assert torch.equal(first["history"], expected_inputs)
+    predicted = _predicted_codes(first["output"])
+    for row in range(len(hidden)):
+        end = int(cut[row])
+        assert torch.equal(
+            second["history"][row, :, :end], expected_inputs[row, :, :end]
+        )
+        if hidden[row]:
+            assert torch.equal(second["history"][row], expected_inputs[row])
+        else:
+            assert torch.equal(second["history"][row, :, end:], predicted[row, :, end:])
+    assert torch.equal(second["user_codes"], user_codes)
+    assert torch.equal(batch.output_codes, labels)
+    assert float(losses.self_fed_fraction) == 1.0
 
 
 def test_stage1_objective_trains_dialogue_and_intent_heads():
