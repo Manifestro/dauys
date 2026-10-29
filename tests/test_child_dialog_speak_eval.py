@@ -16,6 +16,7 @@ from child_dialog_speak_eval import (
     choose_candidate,
     pick_other_reply,
     rescore,
+    wav_targets,
     words,
 )
 
@@ -73,6 +74,8 @@ def test_parser_knows_rerank_scoring_arguments():
     )
     assert defaults.batch == 16
     assert defaults.onset_frames == 0
+    assert defaults.wav_limit == 12
+    assert defaults.wav_by_id is False
     explicit = parser.parse_args(
         [
             "--concepts",
@@ -83,10 +86,32 @@ def test_parser_knows_rerank_scoring_arguments():
             "4",
             "--onset-frames",
             "7",
+            "--wav-limit",
+            "0",
+            "--wav-by-id",
         ]
     )
     assert explicit.batch == 4
     assert explicit.onset_frames == 7
+    assert explicit.wav_limit == 0
+    assert explicit.wav_by_id is True
+
+
+def test_wav_targets_applies_limit_and_naming_mode():
+    rows = [
+        {"id": "a", "topic": "color", "word": "sky blue"},
+        {"id": "b", "topic": "color", "word": "sky blue"},
+        {"id": "c", "topic": "want", "word": "yes"},
+    ]
+    assert wav_targets(rows, 2, False) == [
+        (rows[0], "color-sky_blue.wav"),
+        (rows[1], "color-sky_blue.wav"),
+    ]
+    assert wav_targets(rows, 0, True) == [
+        (rows[0], "a.wav"),
+        (rows[1], "b.wav"),
+        (rows[2], "c.wav"),
+    ]
 
 
 def test_choose_candidate_handles_infinities_and_ties():

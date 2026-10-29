@@ -290,6 +290,22 @@ def rescore(
     return results
 
 
+def wav_targets(chosen: list[dict], limit: int, by_id: bool) -> list[tuple[dict, str]]:
+    """Rows to write and their file names under the chosen naming scheme."""
+    if limit < 0:
+        raise ValueError("The wav limit cannot be negative")
+    selected = chosen if limit == 0 else chosen[:limit]
+    return [
+        (
+            row,
+            f"{row['id']}.wav"
+            if by_id
+            else f"{row['topic']}-{row['word'].replace(' ', '_')}.wav",
+        )
+        for row in selected
+    ]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path)
@@ -320,6 +336,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--asr-model", default="openai/whisper-large-v3")
     parser.add_argument("--wavs", type=Path)
+    parser.add_argument("--wav-limit", type=int, default=12)
+    parser.add_argument("--wav-by-id", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -327,6 +345,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.wav_limit < 0:
+        raise ValueError("The wav limit cannot be negative")
     concepts = {
         c["id"]: c for c in map(json.loads, args.concepts.read_text().splitlines())
     }
@@ -536,11 +556,13 @@ def main() -> None:
                         f"-r{args.rerank}"
                     )
                     folder.mkdir(parents=True, exist_ok=True)
-                    for row, wave in list(zip(chosen, waves))[:12]:
+                    waves_by_id = {row["id"]: wave for row, wave in zip(chosen, waves)}
+                    for row, name in wav_targets(
+                        chosen, args.wav_limit, args.wav_by_id
+                    ):
                         soundfile.write(
-                            folder
-                            / f"{row['topic']}-{row['word'].replace(' ', '_')}.wav",
-                            wave,
+                            folder / name,
+                            waves_by_id[row["id"]],
                             24_000,
                         )
     args.output.write_text(json.dumps(results, indent=2) + "\n")
