@@ -125,26 +125,28 @@ def main() -> None:
             },
             token,
         )
-        manifests.setdefault(item["split"], []).append(
-            {
-                "id": item["id"],
-                "speaker": item["voice"],
-                "chapter": item["group"],
-                "topic": item["group"],
-                "word": item["key"],
-                "concept": item["concept"],
-                "family": item["family"],
-                "frame": item["frame"],
-                "frames": codes.shape[-1],
-                "cut_frame": cut,
-                "tokens_path": f"tokens/{item['id']}.pt",
-                "sha256": sha256(token),
-                "a_clip": "clips/" + item["a_wav"].removesuffix(".wav") + ".pt",
-                "b_clip": "clips/" + item["b_wav"].removesuffix(".wav") + ".pt",
-                "question": item["question"],
-                "reply": item["reply"],
-            }
-        )
+        row = {
+            "id": item["id"],
+            "speaker": item["voice"],
+            "chapter": item["group"],
+            "topic": item["group"],
+            "word": item["key"],
+            "concept": item["concept"],
+            "family": item["family"],
+            "frame": item["frame"],
+            "frames": codes.shape[-1],
+            "cut_frame": cut,
+            "tokens_path": f"tokens/{item['id']}.pt",
+            "sha256": sha256(token),
+            "a_clip": "clips/" + item["a_wav"].removesuffix(".wav") + ".pt",
+            "b_clip": "clips/" + item["b_wav"].removesuffix(".wav") + ".pt",
+            "question": item["question"],
+            "reply": item["reply"],
+        }
+        for key in ("rank", "voice", "speed"):
+            if key in item:
+                row[key] = item[key]
+        manifests.setdefault(item["split"], []).append(row)
     for split, rows in manifests.items():
         (args.output / split / "manifest.jsonl").write_text(
             "".join(json.dumps(r) + "\n" for r in rows)
