@@ -1,6 +1,7 @@
 """Scoring checks for the child-dialogue spoken-reply eval."""
 
 import json
+import random
 import sys
 from pathlib import Path
 
@@ -9,7 +10,12 @@ import torch
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
 import v02_word_meaning_speak_eval as speak_eval
-from child_dialog_speak_eval import best_answer, rescore, words
+from child_dialog_speak_eval import (
+    best_answer,
+    pick_other_reply,
+    rescore,
+    words,
+)
 
 
 def test_words_spells_numbers_from_digits():
@@ -43,6 +49,17 @@ def test_different_answers_are_distinguished():
     assert best_answer("A vegetable.", answers) == "A vegetable."
     assert best_answer("A fruit.", answers) == "A fruit."
     assert best_answer("A rock.", answers) is None
+
+
+def test_pick_other_reply_uses_a_different_answer_deterministically():
+    rows = [
+        {"id": "a", "topic": "want", "answer": "Yes.", "b_clip": "a.pt"},
+        {"id": "b", "topic": "want", "answer": "No.", "b_clip": "b.pt"},
+        {"id": "c", "topic": "want", "answer": "Yes.", "b_clip": "c.pt"},
+    ]
+    first = pick_other_reply(rows, rows[0], random.Random(0))
+    second = pick_other_reply(rows, rows[0], random.Random(0))
+    assert first == second == rows[1]
 
 
 def test_speak_can_include_teacher_forced_seed_frames(monkeypatch):
@@ -144,12 +161,15 @@ def test_rescore_reuses_saved_transcripts(tmp_path):
     assert results == [
         {
             "variant": "greedy",
+            "source": "true",
             "seed": 0,
             "items": 2,
             "correct": 0.5,
             "correct_first": 0.5,
             "stopped": 0.5,
             "chance": 0.5,
+            "follows_seed": 0.5,
+            "follows_seed_first": 0.5,
             "examples": [
                 {
                     "question": "What color is the sky?",
@@ -158,6 +178,9 @@ def test_rescore_reuses_saved_transcripts(tmp_path):
                     "ok": True,
                     "ok_first": True,
                     "stopped": True,
+                    "seed_answer": "It is blue.",
+                    "ok_seed_answer": True,
+                    "ok_first_seed_answer": True,
                 },
                 {
                     "question": "What color is the grass?",
@@ -166,6 +189,9 @@ def test_rescore_reuses_saved_transcripts(tmp_path):
                     "ok": False,
                     "ok_first": False,
                     "stopped": False,
+                    "seed_answer": "It is green.",
+                    "ok_seed_answer": False,
+                    "ok_first_seed_answer": False,
                 },
             ],
         }

@@ -10,11 +10,12 @@ scoring only.
 - ``correct_first``: the same, using only the transcript's first six words.
 - ``stopped``: the last second of the reply is silent.
 
-``--seeds`` prefixes that many true reply frames before free generation, giving
-one summary per decoding variant and seed; those seed frames are included in
-the audio scored by Whisper. ``--rescore`` reads a previous output and
-re-scores its transcripts with the same rules, without loading the model, Mimi
-or Whisper.
+``--seeds`` prefixes that many reply frames before free generation, giving one
+summary per decoding variant and seed; those seed frames are included in the
+audio scored by Whisper. ``--seed-source`` chooses the correct answer, another
+answer of the group, or only the correct seed frames without generation.
+``--rescore`` reads a previous output and re-scores its transcripts with the
+same rules, without loading the model, Mimi or Whisper.
 """
 
 import argparse
@@ -28,7 +29,7 @@ import numpy as np
 import torch
 
 from dauys.checkpoint import load_research_checkpoint
-from dauys.codec import load_mimi
+from dauys.codec import decode, load_mimi
 from dauys.config import ModelConfig
 from dauys.model import DauysHybrid
 from dauys.v02_pretrain_eval import WhisperTranscriber
@@ -118,8 +119,20 @@ def best_answer(transcript: str, answers: dict[str, list[str]]) -> str | None:
     return winners[0] if top > 0 and len(winners) == 1 else None
 
 
+def pick_other_reply(rows_of_group: list[dict], row: dict, rng: random.Random) -> dict:
+    """Pick a deterministic reply row whose answer differs from ``row``'s."""
+    current = answer_key(row["answer"])
+    candidates = [
+        other for other in rows_of_group if answer_key(other["answer"]) != current
+    ]
+    if not candidates:
+        raise ValueError(f"No other answer in group {row['topic']!r}")
+    return rng.choice(candidates)
+
+
 def _summary(
     variant: str,
+    source: str,
     seed: int,
     examples: list[dict],
     by_group: dict[str, dict[str, list[str]]],
@@ -128,6 +141,10 @@ def _summary(
     correct = sum(example["ok"] for example in examples)
     first = sum(example["ok_first"] for example in examples)
     stopped = sum(example["stopped"] for example in examples)
+    follows = sum(bool(example.get("ok_seed_answer")) for example in examples)
+    follows_first = sum(
+        bool(example.get("ok_first_seed_answer")) for example in examples
+    )
     n = len(examples)
     chance = (
         float(
@@ -143,12 +160,15 @@ def _summary(
     )
     return {
         "variant": variant,
+        "source": source,
         "seed": seed,
         "items": n,
         "correct": round(correct / n, 3) if n else 0.0,
         "correct_first": round(first / n, 3) if n else 0.0,
         "stopped": round(stopped / n, 3) if n else 0.0,
         "chance": round(chance, 3),
+        "follows_seed": round(follows / n, 3) if n else 0.0,
+        "follows_seed_first": round(follows_first / n, 3) if n else 0.0,
         "examples": examples,
     }
 
@@ -173,25 +193,33 @@ def rescore(
     results = []
     for previous in json.loads(path.read_text()):
         examples = []
+        source = str(previous.get("source", "true"))
         for example in previous["examples"]:
             pair = pairs[example["question"]]
             concept = concepts[pair["concept"]]
             expected = concept["answer"]
             heard = example["heard"]
             answers = by_group[pair["group"]]
+            heard_answer = best_answer(heard, answers)
+            heard_first = best_answer(" ".join(heard.split()[:6]), answers)
+            seed_answer = example.get("seed_answer", expected)
+            seed_key = answer_key(seed_answer)
             examples.append(
                 {
                     "question": example["question"],
                     "expected": example.get("expected", expected),
                     "heard": heard,
-                    "ok": best_answer(heard, answers) == answer_key(expected),
-                    "ok_first": best_answer(" ".join(heard.split()[:6]), answers)
-                    == answer_key(expected),
+                    "ok": heard_answer == answer_key(expected),
+                    "ok_first": heard_first == answer_key(expected),
                     "stopped": bool(example["stopped"]),
+                    "seed_answer": seed_answer,
+                    "ok_seed_answer": heard_answer == seed_key,
+                    "ok_first_seed_answer": heard_first == seed_key,
                 }
             )
         summary = _summary(
             previous["variant"],
+            source,
             int(previous.get("seed", 0)),
             examples,
             by_group,
@@ -215,6 +243,11 @@ def main() -> None:
     parser.add_argument("--per-group", type=int, default=6)
     parser.add_argument("--variants", nargs="+", default=["greedy"])
     parser.add_argument("--seeds", nargs="+", type=int, default=[0])
+    parser.add_argument(
+        "--seed-source",
+        choices=("true", "other", "only"),
+        default="true",
+    )
     parser.add_argument("--frames", type=int, default=50)
     parser.add_argument("--asr-model", default="openai/whisper-large-v3")
     parser.add_argument("--wavs", type=Path)
@@ -242,11 +275,17 @@ def main() -> None:
             "generation mode requires "
             + ", ".join("--" + name.replace("_", "-") for name in missing)
         )
+    if args.seed_source == "only" and any(seed <= 0 for seed in args.seeds):
+        parser.error("--seed-source only requires positive --seeds")
     by_group = answer_groups(concepts)
-    rows = [
-        json.loads(line)
-        for line in (args.data / "manifest.jsonl").read_text().splitlines()
-    ]
+    rows = []
+    for line in (args.data / "manifest.jsonl").read_text().splitlines():
+        row = json.loads(line)
+        row["answer"] = concepts[row["concept"]]["answer"]
+        rows.append(row)
+    rows_by_group: dict[str, list[dict]] = {}
+    for row in rows:
+        rows_by_group.setdefault(row["topic"], []).append(row)
     rng = random.Random(0)
     rng.shuffle(rows)
     chosen, count = [], {}
@@ -259,12 +298,20 @@ def main() -> None:
     model = DauysHybrid(ModelConfig.from_yaml(args.config))
     model.load_state_dict(payload["model"])
     model = model.cuda().eval()
+    device = next(model.parameters()).device
     codec = load_mimi(args.mimi_checkpoint, "cuda")
     asr = WhisperTranscriber(args.asr_model, "cuda")
     pairs = {
         row["question"]: {"concept": row["concept"], "group": row["topic"]}
         for row in chosen
     }
+    others = {}
+    if args.seed_source == "other":
+        seed_rng = random.Random(0)
+        for row in chosen:
+            others[row["id"]] = pick_other_reply(
+                rows_by_group[row["topic"]], row, seed_rng
+            )
     results = []
     for variant in args.variants:
         decoding, gated = VARIANTS[variant]
@@ -274,13 +321,22 @@ def main() -> None:
             for row in chosen:
                 a = torch.load(args.data / row["a_clip"], weights_only=True)["codes"]
                 b = torch.load(args.data / row["b_clip"], weights_only=True)["codes"]
-                waves.append(
-                    speak(
+                if args.seed_source == "only":
+                    codes = b[:, :seed].long().to(device)[None]
+                    wave = decode(codec, codes)[0, 0].float().cpu().numpy()
+                else:
+                    seed_b = b
+                    if args.seed_source == "other":
+                        seed_b = torch.load(
+                            args.data / others[row["id"]]["b_clip"],
+                            weights_only=True,
+                        )["codes"]
+                    wave = speak(
                         model,
                         codec,
                         silence,
                         a,
-                        b,
+                        seed_b,
                         seed=seed,
                         frames=args.frames,
                         decoding=decoding,
@@ -288,31 +344,44 @@ def main() -> None:
                         rng=generator,
                         include_seed=True,
                     )
-                )
+                waves.append(wave)
             texts = asr(waves)
             examples = []
             for row, text, wave in zip(chosen, texts, waves):
                 answers = by_group[row["topic"]]
-                expected = answer_key(concepts[row["concept"]]["answer"])
+                expected_answer = concepts[row["concept"]]["answer"]
+                expected = answer_key(expected_answer)
+                seed_answer = (
+                    others[row["id"]]["answer"]
+                    if args.seed_source == "other"
+                    else expected_answer
+                )
+                seed_key = answer_key(seed_answer)
+                heard_answer = best_answer(text, answers)
+                heard_first = best_answer(" ".join(text.split()[:6]), answers)
                 quiet = float(np.sqrt(np.mean(wave[-24_000:] ** 2))) < QUIET_RMS
                 examples.append(
                     {
                         "question": row["question"],
-                        "expected": concepts[row["concept"]]["answer"],
+                        "expected": expected_answer,
                         "heard": text,
-                        "ok": best_answer(text, answers) == expected,
-                        "ok_first": best_answer(" ".join(text.split()[:6]), answers)
-                        == expected,
+                        "ok": heard_answer == expected,
+                        "ok_first": heard_first == expected,
                         "stopped": quiet,
+                        "seed_answer": seed_answer,
+                        "ok_seed_answer": heard_answer == seed_key,
+                        "ok_first_seed_answer": heard_first == seed_key,
                     }
                 )
-            summary = _summary(variant, seed, examples, by_group, pairs)
+            summary = _summary(
+                variant, args.seed_source, seed, examples, by_group, pairs
+            )
             _print_summary(summary)
             results.append(summary)
             if args.wavs:
                 import soundfile
 
-                folder = args.wavs / f"{variant}-s{seed}"
+                folder = args.wavs / f"{variant}-s{seed}-{args.seed_source}"
                 folder.mkdir(parents=True, exist_ok=True)
                 for row, wave in list(zip(chosen, waves))[:12]:
                     soundfile.write(
