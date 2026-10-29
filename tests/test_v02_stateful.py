@@ -11,6 +11,13 @@ from torch import nn
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
 from v02_stateful_build import assemble_chapter, build_split, slice_stream
+from v02_stateful_eval import (
+    aggregate_gains,
+    foreign_stream_index,
+    mode_nlls,
+    shuffled_order,
+    summarize_modes,
+)
 from v02_stateful_train import run_batch, stack_streams
 
 
@@ -150,3 +157,101 @@ def test_run_batch_resets_states_without_stateful():
     assert len(logs) == 3
     assert optimizer.steps == 3
     assert all(call is None for call in model.calls)
+
+
+def test_foreign_stream_round_robin_skips_the_same_speaker():
+    streams = [
+        {"speaker": "a", "user": torch.zeros(8, 8)},
+        {"speaker": "a", "user": torch.zeros(8, 8)},
+        {"speaker": "b", "user": torch.zeros(8, 8)},
+        {"speaker": "a", "user": torch.zeros(8, 8)},
+        {"speaker": "b", "user": torch.zeros(8, 8)},
+    ]
+    assert foreign_stream_index(streams, 0) == 2
+    assert foreign_stream_index(streams, 2) == 3
+    assert foreign_stream_index(streams, 4) == 0
+
+
+def test_shuffled_order_is_a_deterministic_permutation():
+    assert shuffled_order(0, 0, 0) == []
+    assert shuffled_order(1, 0, 0) == [0]
+    order = shuffled_order(5, 7, 3)
+    assert sorted(order) == list(range(5))
+    assert order == shuffled_order(5, 7, 3)
+
+
+def test_aggregate_gains_and_k2plus_summary():
+    constant = aggregate_gains([0.5, 0.5])
+    assert constant == {
+        "items": 2,
+        "mean": 0.5,
+        "ci95_low": 0.5,
+        "ci95_high": 0.5,
+        "positive_rate": 1.0,
+    }
+    assert aggregate_gains([])["items"] == 0
+    nll = {
+        "carry": [[0.6, 0.5, 0.4, 0.3], [0.7, 0.6, 0.5, 0.4]],
+        "reset": [[0.7, 0.7, 0.7, 0.7], [0.8, 0.8, 0.8, 0.8]],
+        "shuffled": [[0.6, 0.5, 0.45, 0.4], [0.7, 0.6, 0.55, 0.5]],
+        "foreign": [[0.6, 0.55, 0.5, 0.45], [0.7, 0.65, 0.6, 0.55]],
+    }
+    summary = summarize_modes(nll)
+    assert summary["by_chunk"]["1"]["gain_carry"]["mean"] == 0.2
+    assert summary["by_chunk"]["1"]["gain_foreign"]["mean"] == 0.15
+    assert summary["by_chunk"]["1"]["order"]["mean"] == 0.0
+    assert summary["k2plus"]["gain_carry"]["mean"] == 0.35
+    assert summary["k2plus"]["gain_shuffled"]["mean"] == 0.275
+    assert summary["k2plus"]["specific"]["mean"] == 0.125
+
+
+class _ChunkModel(nn.Module):
+    def __init__(self, vocab: int = 5):
+        super().__init__()
+        self.config = types.SimpleNamespace(vocab_size=vocab)
+        self.weight = nn.Parameter(torch.zeros(()))
+        self.calls = []
+
+    def __call__(self, user, target, initial, mamba_states=None):
+        self.calls.append((user.shape, target.shape, initial.shape, mamba_states))
+        batch, frames = target.shape[0], target.shape[-1]
+        return types.SimpleNamespace(
+            cb0_logits=torch.zeros(batch, frames, self.config.vocab_size)
+        )
+
+
+def test_mode_nlls_handles_real_stream_shapes_in_all_modes():
+    frames, chunk = 16, 4
+    streams = [
+        {
+            "user": torch.zeros(8, frames, dtype=torch.long),
+            "target": torch.zeros(8, frames, dtype=torch.long),
+            "user_activity": torch.ones(frames, dtype=torch.long),
+            "activity": torch.ones(frames, dtype=torch.long),
+            "chapter": "c1",
+            "speaker": "s1",
+        },
+        {
+            "user": torch.zeros(8, frames, dtype=torch.long),
+            "target": torch.zeros(8, frames, dtype=torch.long),
+            "user_activity": torch.ones(frames, dtype=torch.long),
+            "activity": torch.ones(frames, dtype=torch.long),
+            "chapter": "c2",
+            "speaker": "s2",
+        },
+    ]
+    for mode in ("carry", "reset", "shuffled", "foreign"):
+        model = _ChunkModel()
+        matrix = mode_nlls(model, streams, mode, chunk=chunk, seed=0)
+        assert len(matrix) == 2
+        assert all(len(row) == frames // chunk for row in matrix)
+        assert all(
+            user_shape == (1, 8, chunk)
+            and target_shape == (1, 8, chunk)
+            and initial_shape == (1, 8)
+            for user_shape, target_shape, initial_shape, _ in model.calls
+        )
+        if mode == "reset":
+            assert all(states is None for *_, states in model.calls)
+        else:
+            assert all(isinstance(states, dict) for *_, states in model.calls)
