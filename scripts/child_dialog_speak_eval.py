@@ -161,6 +161,8 @@ def _rerank_scores(
     silent_active = torch.zeros(a_codes.shape[-1], dtype=torch.bool)
     normal_pairs, prior_pairs = [], []
     for candidate in candidates:
+        if candidate.ndim != 2 or candidate.shape[0] != 8:
+            raise ValueError("Rerank candidates must have shape [8, frames]")
         active = candidate[0].ne(silence[0])
         normal_pairs.append(((a_codes, a_active), (candidate, active)))
         prior_pairs.append(((silent_a, silent_active), (candidate, active)))

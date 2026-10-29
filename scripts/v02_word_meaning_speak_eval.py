@@ -149,7 +149,7 @@ def speak_codes(
     if gated:
         speaking = torch.stack(active, dim=-1)[:, None]
         codes = torch.where(speaking, codes, quiet[:, :, None])
-    return codes.long().cpu()
+    return codes[0].long().cpu()
 
 
 @torch.inference_mode()
@@ -179,7 +179,7 @@ def speak(
         decoding=decoding,
         gated=gated,
         rng=rng,
-    ).to(device)
+    ).to(device)[None]
     if include_seed and seed:
         seed_codes = b_codes[:, :seed].long().to(device)[None]
         codes = torch.cat((seed_codes, codes), dim=-1)

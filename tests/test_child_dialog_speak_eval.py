@@ -137,6 +137,37 @@ def test_speak_can_include_teacher_forced_seed_frames(monkeypatch):
     assert seeded.tolist() == [9.0, 9.0, 2.0, 2.0, 2.0, 2.0]
 
 
+def test_speak_codes_returns_unbatched_code_rows():
+    class _Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.parameter = torch.nn.Parameter(torch.zeros(()))
+
+        def prefill_teacher(self, user, output, quiet):
+            return None
+
+        def generate_step(self, user, state, decoding, rng):
+            return torch.full((1, 8), 2), torch.ones(1, dtype=torch.bool)
+
+    silence = torch.zeros(8, dtype=torch.long)
+    a = torch.zeros(8, 3, dtype=torch.long)
+    b = torch.full((8, 5), 9, dtype=torch.long)
+    codes = speak_eval.speak_codes(
+        _Model(),
+        None,
+        silence,
+        a,
+        b,
+        seed=2,
+        frames=4,
+        decoding=None,
+        gated=False,
+        rng=None,
+    )
+    assert codes.shape == (8, 4)
+    assert codes.dtype == torch.long
+
+
 def test_rescore_reuses_saved_transcripts(tmp_path):
     concepts = {
         "c0000": {
