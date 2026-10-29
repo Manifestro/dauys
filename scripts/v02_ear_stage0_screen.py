@@ -17,11 +17,13 @@ utterances, units and linear probes, so its numbers compare directly with the
 earlier rows (CB0 buffer, ear fix1).
 
 A cell is ``inputs:objective[:horizon[:width]]``: ``cb0`` or ``all8``;
-``c1``, ``c1mem`` or ``c1memhist`` (memory plus the unit histogram of the last
-two seconds); the memory horizon in frames (8 by default); the ear width
-(512 by default). Two probes test what no cell is trained on: the units of
-frames t+12 and t+25 (``unit@-12``, ``unit@-25``, the next 1–2 s), and the
-unit histogram of the last two seconds (``hist2s_r2``, ridge R²).
+``c1``, ``c1mem``, ``c1memhist`` (memory plus the unit histogram of the last
+two seconds) or ``c1memmimi`` (the same lags but Mimi CB0 codes as the memory
+target, so training needs no HuBERT); the memory horizon in frames (8 by
+default); the ear width (512 by default). HuBERT units are still attached for
+the probes. Two probes test what no cell is trained on: the units of frames
+t+12 and t+25 (``unit@-12``, ``unit@-25``, the next 1–2 s), and the unit
+histogram of the last two seconds (``hist2s_r2``, ridge R²).
 """
 
 import argparse
@@ -67,8 +69,11 @@ class Ear(nn.Module):
         lags: tuple[int, ...],
         width: int,
         histogram: bool = False,
+        memory_target: str = "units",
     ):
         super().__init__()
+        if memory_target not in ("units", "cb0"):
+            raise ValueError(f"Unknown memory target {memory_target}")
         self.codebooks = codebooks
         self.embeddings = nn.ModuleList(
             nn.Embedding(config.vocab_size, config.embedding_dim)
@@ -87,7 +92,11 @@ class Ear(nn.Module):
         self.norm = nn.RMSNorm(width)
         self.next_head = nn.Linear(width, config.vocab_size)
         self.lags = lags
-        self.memory_head = nn.Linear(width, clusters * len(lags)) if lags else None
+        self.memory_target = memory_target
+        self.memory_classes = config.vocab_size if memory_target == "cb0" else clusters
+        self.memory_head = (
+            nn.Linear(width, self.memory_classes * len(lags)) if lags else None
+        )
         self.histogram_head = nn.Linear(width, clusters) if histogram else None
         self.clusters = clusters
 
@@ -145,16 +154,21 @@ def losses(ear: Ear, codes, units, speech):
     memory = torch.zeros((), device=codes.device)
     if ear.memory_head is not None:
         logits = ear.memory_head(normed).reshape(
-            batch, frames, len(ear.lags), ear.clusters
+            batch, frames, len(ear.lags), ear.memory_classes
         )
         terms = []
         for index, lag in enumerate(ear.lags):
             view = logits[:, lag:, index]
+            target = (
+                codes[:, 0, : frames - lag]
+                if ear.memory_target == "cb0"
+                else units[:, : frames - lag]
+            )
             terms.append(
                 _masked(
                     F.cross_entropy(
-                        view.reshape(-1, ear.clusters),
-                        units[:, : frames - lag].reshape(-1),
+                        view.reshape(-1, ear.memory_classes),
+                        target.reshape(-1),
                         reduction="none",
                     ).reshape(batch, frames - lag),
                     speech[:, : frames - lag],
@@ -173,13 +187,19 @@ def parse_cell(cell: str) -> dict:
     inputs, objective = parts[0], parts[1]
     horizon = int(parts[2]) if len(parts) > 2 else 8
     width = int(parts[3]) if len(parts) > 3 else 512
-    if inputs not in ("cb0", "all8") or objective not in ("c1", "c1mem", "c1memhist"):
+    if inputs not in ("cb0", "all8") or objective not in (
+        "c1",
+        "c1mem",
+        "c1memhist",
+        "c1memmimi",
+    ):
         raise ValueError(f"Unknown cell {cell}")
     return {
         "name": f"ear_{inputs}_{objective}_h{horizon}_w{width}",
         "codebooks": 1 if inputs == "cb0" else 8,
         "lags": memory_lags(horizon) if objective != "c1" else (),
         "histogram": objective == "c1memhist",
+        "memory_target": "cb0" if objective == "c1memmimi" else "units",
         "width": width,
     }
 
@@ -195,6 +215,7 @@ def train_cell(config, cell, train, silence, args, log):
             cell["lags"],
             cell["width"],
             cell["histogram"],
+            memory_target=cell.get("memory_target", "units"),
         )
         .cuda()
         .train()
