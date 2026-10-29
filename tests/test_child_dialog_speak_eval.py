@@ -18,6 +18,19 @@ from child_dialog_speak_eval import (
 )
 
 
+def test_combine_guidance_endpoints_match_the_chosen_distribution():
+    cond = torch.tensor([[1.0, 2.0, 3.0]])
+    uncond = torch.tensor([[3.0, 2.0, 1.0]])
+    assert torch.equal(
+        speak_eval.combine_guidance(cond, uncond, 1.0),
+        torch.log_softmax(cond, dim=-1),
+    )
+    assert torch.equal(
+        speak_eval.combine_guidance(cond, uncond, 0.0),
+        torch.log_softmax(uncond, dim=-1),
+    )
+
+
 def test_words_spells_numbers_from_digits():
     assert words("before 9 comes 8") == words("before nine comes eight")
     assert words("after 14 comes 15") == words("after fourteen comes fifteen")
@@ -163,6 +176,7 @@ def test_rescore_reuses_saved_transcripts(tmp_path):
             "variant": "greedy",
             "source": "true",
             "seed": 0,
+            "guidance": 1.0,
             "items": 2,
             "correct": 0.5,
             "correct_first": 0.5,

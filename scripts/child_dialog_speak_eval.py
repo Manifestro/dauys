@@ -35,7 +35,7 @@ from dauys.model import DauysHybrid
 from dauys.v02_pretrain_eval import WhisperTranscriber
 
 sys.path.insert(0, str(Path(__file__).parent))
-from v02_word_meaning_speak_eval import VARIANTS, content, speak
+from v02_word_meaning_speak_eval import VARIANTS, content, speak, speak_cfg
 
 QUIET_RMS = 0.01
 ONES = (
@@ -134,6 +134,7 @@ def _summary(
     variant: str,
     source: str,
     seed: int,
+    guidance: float,
     examples: list[dict],
     by_group: dict[str, dict[str, list[str]]],
     pairs: dict[str, dict],
@@ -162,6 +163,7 @@ def _summary(
         "variant": variant,
         "source": source,
         "seed": seed,
+        "guidance": guidance,
         "items": n,
         "correct": round(correct / n, 3) if n else 0.0,
         "correct_first": round(first / n, 3) if n else 0.0,
@@ -221,6 +223,7 @@ def rescore(
             previous["variant"],
             source,
             int(previous.get("seed", 0)),
+            float(previous.get("guidance", 1.0)),
             examples,
             by_group,
             pairs,
@@ -248,6 +251,7 @@ def main() -> None:
         choices=("true", "other", "only"),
         default="true",
     )
+    parser.add_argument("--guidance", nargs="+", type=float, default=[1.0])
     parser.add_argument("--frames", type=int, default=50)
     parser.add_argument("--asr-model", default="openai/whisper-large-v3")
     parser.add_argument("--wavs", type=Path)
@@ -316,79 +320,109 @@ def main() -> None:
     for variant in args.variants:
         decoding, gated = VARIANTS[variant]
         for seed in args.seeds:
-            generator = torch.Generator(device="cuda").manual_seed(0)
-            waves = []
-            for row in chosen:
-                a = torch.load(args.data / row["a_clip"], weights_only=True)["codes"]
-                b = torch.load(args.data / row["b_clip"], weights_only=True)["codes"]
-                if args.seed_source == "only":
-                    codes = b[:, :seed].long().to(device)[None]
-                    wave = decode(codec, codes)[0, 0].float().cpu().numpy()
-                else:
-                    seed_b = b
-                    if args.seed_source == "other":
-                        seed_b = torch.load(
-                            args.data / others[row["id"]]["b_clip"],
-                            weights_only=True,
-                        )["codes"]
-                    wave = speak(
-                        model,
-                        codec,
-                        silence,
-                        a,
-                        seed_b,
-                        seed=seed,
-                        frames=args.frames,
-                        decoding=decoding,
-                        gated=gated,
-                        rng=generator,
-                        include_seed=True,
+            for guidance in args.guidance:
+                generator = torch.Generator(device="cuda").manual_seed(0)
+                waves = []
+                for row in chosen:
+                    a = torch.load(args.data / row["a_clip"], weights_only=True)[
+                        "codes"
+                    ]
+                    b = torch.load(args.data / row["b_clip"], weights_only=True)[
+                        "codes"
+                    ]
+                    if args.seed_source == "only":
+                        codes = b[:, :seed].long().to(device)[None]
+                        wave = decode(codec, codes)[0, 0].float().cpu().numpy()
+                    else:
+                        seed_b = b
+                        if args.seed_source == "other":
+                            seed_b = torch.load(
+                                args.data / others[row["id"]]["b_clip"],
+                                weights_only=True,
+                            )["codes"]
+                        if guidance == 1.0:
+                            wave = speak(
+                                model,
+                                codec,
+                                silence,
+                                a,
+                                seed_b,
+                                seed=seed,
+                                frames=args.frames,
+                                decoding=decoding,
+                                gated=gated,
+                                rng=generator,
+                                include_seed=True,
+                            )
+                        else:
+                            wave = speak_cfg(
+                                model,
+                                codec,
+                                silence,
+                                a,
+                                seed_b,
+                                seed=seed,
+                                frames=args.frames,
+                                decoding=decoding,
+                                gated=gated,
+                                rng=generator,
+                                guidance=guidance,
+                                include_seed=True,
+                            )
+                    waves.append(wave)
+                texts = asr(waves)
+                examples = []
+                for row, text, wave in zip(chosen, texts, waves):
+                    answers = by_group[row["topic"]]
+                    expected_answer = concepts[row["concept"]]["answer"]
+                    expected = answer_key(expected_answer)
+                    seed_answer = (
+                        others[row["id"]]["answer"]
+                        if args.seed_source == "other"
+                        else expected_answer
                     )
-                waves.append(wave)
-            texts = asr(waves)
-            examples = []
-            for row, text, wave in zip(chosen, texts, waves):
-                answers = by_group[row["topic"]]
-                expected_answer = concepts[row["concept"]]["answer"]
-                expected = answer_key(expected_answer)
-                seed_answer = (
-                    others[row["id"]]["answer"]
-                    if args.seed_source == "other"
-                    else expected_answer
+                    seed_key = answer_key(seed_answer)
+                    heard_answer = best_answer(text, answers)
+                    heard_first = best_answer(" ".join(text.split()[:6]), answers)
+                    quiet = float(np.sqrt(np.mean(wave[-24_000:] ** 2))) < QUIET_RMS
+                    examples.append(
+                        {
+                            "question": row["question"],
+                            "expected": expected_answer,
+                            "heard": text,
+                            "ok": heard_answer == expected,
+                            "ok_first": heard_first == expected,
+                            "stopped": quiet,
+                            "seed_answer": seed_answer,
+                            "ok_seed_answer": heard_answer == seed_key,
+                            "ok_first_seed_answer": heard_first == seed_key,
+                        }
+                    )
+                summary = _summary(
+                    variant,
+                    args.seed_source,
+                    seed,
+                    guidance,
+                    examples,
+                    by_group,
+                    pairs,
                 )
-                seed_key = answer_key(seed_answer)
-                heard_answer = best_answer(text, answers)
-                heard_first = best_answer(" ".join(text.split()[:6]), answers)
-                quiet = float(np.sqrt(np.mean(wave[-24_000:] ** 2))) < QUIET_RMS
-                examples.append(
-                    {
-                        "question": row["question"],
-                        "expected": expected_answer,
-                        "heard": text,
-                        "ok": heard_answer == expected,
-                        "ok_first": heard_first == expected,
-                        "stopped": quiet,
-                        "seed_answer": seed_answer,
-                        "ok_seed_answer": heard_answer == seed_key,
-                        "ok_first_seed_answer": heard_first == seed_key,
-                    }
-                )
-            summary = _summary(
-                variant, args.seed_source, seed, examples, by_group, pairs
-            )
-            _print_summary(summary)
-            results.append(summary)
-            if args.wavs:
-                import soundfile
+                _print_summary(summary)
+                results.append(summary)
+                if args.wavs:
+                    import soundfile
 
-                folder = args.wavs / f"{variant}-s{seed}-{args.seed_source}"
-                folder.mkdir(parents=True, exist_ok=True)
-                for row, wave in list(zip(chosen, waves))[:12]:
-                    soundfile.write(
-                        folder / f"{row['topic']}-{row['word'].replace(' ', '_')}.wav",
-                        wave,
-                        24_000,
+                    folder = (
+                        args.wavs / f"{variant}-s{seed}-{args.seed_source}-g{guidance}"
                     )
+                    folder.mkdir(parents=True, exist_ok=True)
+                    for row, wave in list(zip(chosen, waves))[:12]:
+                        soundfile.write(
+                            folder
+                            / f"{row['topic']}-{row['word'].replace(' ', '_')}.wav",
+                            wave,
+                            24_000,
+                        )
     args.output.write_text(json.dumps(results, indent=2) + "\n")
 
 

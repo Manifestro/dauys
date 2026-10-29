@@ -29,11 +29,18 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.nn import functional as F
 
 from dauys.checkpoint import load_research_checkpoint
 from dauys.codec import decode, load_mimi
 from dauys.config import ModelConfig
-from dauys.decoding import DecodingConfig
+from dauys.decoding import (
+    ActivityState,
+    DecodingConfig,
+    activity_decision,
+    cb0_decision,
+    sample_logits,
+)
 from dauys.model import DauysHybrid
 from dauys.v02_pretrain_eval import WhisperTranscriber
 
@@ -95,6 +102,19 @@ def judge(transcript: str, expected: str, alternatives: list[str]) -> bool:
     )
 
 
+def combine_guidance(cond_logits, uncond_logits, guidance):
+    """Classifier-free guidance in probability space, returned as log-probs."""
+    if cond_logits.shape != uncond_logits.shape:
+        raise ValueError("Conditional and unconditional logits must align")
+    if guidance == 1.0:
+        return F.log_softmax(cond_logits, dim=-1)
+    if guidance == 0.0:
+        return F.log_softmax(uncond_logits, dim=-1)
+    cond = F.log_softmax(cond_logits, dim=-1)
+    uncond = F.log_softmax(uncond_logits, dim=-1)
+    return uncond + guidance * (cond - uncond)
+
+
 @torch.inference_mode()
 def speak(
     model,
@@ -124,6 +144,98 @@ def speak(
     for _ in range(frames):
         step, speaking = model.generate_step(quiet, state, decoding, rng)
         codes.append(step)
+        active.append(speaking)
+    codes = torch.stack(codes, dim=-1)
+    if gated:
+        speaking = torch.stack(active, dim=-1)[:, None]
+        codes = torch.where(speaking, codes, quiet[:, :, None])
+    if include_seed and seed:
+        seed_codes = b_codes[:, :seed].long().to(device)[None]
+        codes = torch.cat((seed_codes, codes), dim=-1)
+    return decode(codec, codes.long())[0, 0].float().cpu().numpy()
+
+
+@torch.inference_mode()
+def speak_cfg(
+    model,
+    codec,
+    silence,
+    a_codes,
+    b_codes,
+    *,
+    seed,
+    frames,
+    decoding,
+    gated,
+    rng,
+    guidance,
+    include_seed=False,
+):
+    """Generate with classifier-free guidance over the conditional ear."""
+    if guidance == 1.0:
+        return speak(
+            model,
+            codec,
+            silence,
+            a_codes,
+            b_codes,
+            seed=seed,
+            frames=frames,
+            decoding=decoding,
+            gated=gated,
+            rng=rng,
+            include_seed=include_seed,
+        )
+    device = next(model.parameters()).device
+    quiet = silence.to(device)[None]
+    a = a_codes.long().to(device)[None]
+    prefix = a.shape[-1] + PAUSE + seed
+    user = quiet[:, :, None].expand(1, 8, prefix).clone()
+    user[:, :, : a.shape[-1]] = a
+    silent_user = quiet[:, :, None].expand(1, 8, prefix).clone()
+    output = quiet[:, :, None].expand(1, 8, prefix).clone()
+    if seed:
+        output[:, :, -seed:] = b_codes[:, :seed].long().to(device)[None]
+    state_c = model.prefill_teacher(user, output, quiet)
+    state_u = model.prefill_teacher(silent_user, output, quiet)
+    codes, active = [], []
+    for _ in range(frames):
+        cb0_c, activity_c, context_c = model.stream_step_teacher(
+            quiet, state_c.previous_output, state_c
+        )
+        cb0_u, _, _ = model.stream_step_teacher(quiet, state_u.previous_output, state_u)
+        logits = combine_guidance(cb0_c, cb0_u, guidance)
+        if decoding is None:
+            generated = [logits.argmax(dim=-1)]
+            speaking = activity_c
+        else:
+            decoding.validate()
+            if state_c.activity_state is None:
+                state_c.activity_state = ActivityState.silent(
+                    cb0_c.shape[0], cb0_c.device
+                )
+            speaking = activity_decision(
+                activity_c, decoding, state_c.activity_state, rng
+            )
+            generated = [cb0_decision(logits, speaking, decoding, rng)]
+        for _target in range(1, 8):
+            prefix_codes = torch.stack(generated, dim=-1)[:, None]
+            depth_logits = model.depth(prefix_codes, context_c)[:, 0, -1]
+            if decoding is not None and decoding.depth_mode == "sample":
+                generated.append(
+                    sample_logits(
+                        depth_logits,
+                        decoding.depth_temperature,
+                        decoding.depth_top_k,
+                        rng,
+                    )
+                )
+            else:
+                generated.append(depth_logits.argmax(dim=-1))
+        generated_codes = torch.stack(generated, dim=1)
+        state_c.previous_output = generated_codes
+        state_u.previous_output = generated_codes
+        codes.append(generated_codes)
         active.append(speaking)
     codes = torch.stack(codes, dim=-1)
     if gated:
