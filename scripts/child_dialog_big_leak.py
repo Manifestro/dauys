@@ -20,6 +20,13 @@ def _spec_voices(spec: str) -> list[str]:
     return [spec] if spec else []
 
 
+def _group_key(row: dict) -> str:
+    key = row.get("group") or row.get("topic") or row.get("chapter")
+    if key is None or str(key) == "":
+        raise ValueError("A frame row needs group, topic or chapter")
+    return str(key)
+
+
 def _frame_groups(rows: list[dict], split: str | None = None) -> dict[str, set[int]]:
     groups: dict[str, set[int]] = {}
     for row in rows:
@@ -27,7 +34,7 @@ def _frame_groups(rows: list[dict], split: str | None = None) -> dict[str, set[i
             continue
         if "frame" not in row:
             continue
-        groups.setdefault(str(row.get("group", "")), set()).add(int(row["frame"]))
+        groups.setdefault(_group_key(row), set()).add(int(row["frame"]))
     return groups
 
 

@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
 from child_dialog_big_leak import check_leaks
@@ -83,3 +85,57 @@ def test_check_leaks_accepts_clean_train_rows():
     assert result["piper_voice_specs"] == []
     assert result["frame_overlap"] == {}
     assert result["ok"] is True
+
+
+def test_topic_grouping_does_not_mix_families_but_catches_real_overlap():
+    train = [
+        {"question": "q1", "voice": "af_sky", "topic": "color", "frame": 0},
+        {"question": "q2", "voice": "af_sky", "topic": "want", "frame": 2},
+    ]
+    clean = [
+        {
+            "question": "t1",
+            "voice": "af_nova",
+            "topic": "color",
+            "frame": 1,
+            "split": "test",
+        },
+        {
+            "question": "t2",
+            "voice": "af_nova",
+            "topic": "want",
+            "frame": 0,
+            "split": "test",
+        },
+    ]
+    result = check_leaks(train, clean)
+    assert result["frame_overlap"] == {}
+    assert result["ok"] is True
+
+    overlap = [
+        {
+            "question": "t1",
+            "voice": "af_nova",
+            "topic": "color",
+            "frame": 0,
+            "split": "test",
+        },
+        {
+            "question": "t2",
+            "voice": "af_nova",
+            "topic": "want",
+            "frame": 3,
+            "split": "test",
+        },
+    ]
+    result = check_leaks(train, overlap)
+    assert result["frame_overlap"] == {"color": [0]}
+    assert result["ok"] is False
+
+
+def test_frame_rows_without_a_group_key_raise():
+    with pytest.raises(ValueError, match="group, topic or chapter"):
+        check_leaks(
+            [{"question": "q", "voice": "af_sky", "frame": 0}],
+            [],
+        )
