@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+from pathlib import Path
 
 import torch
 
@@ -21,6 +22,7 @@ def main() -> None:
     parser.add_argument("--chunk", type=int, default=64)
     parser.add_argument("--threshold", type=float, default=1e-3)
     parser.add_argument("--hybrid", action="store_true")
+    parser.add_argument("--config", type=Path, help="model config for --hybrid")
     args = parser.parse_args()
     if args.frames % args.chunk:
         raise ValueError("Frames must be divisible by the chunk size")
@@ -46,7 +48,12 @@ def main() -> None:
             from dauys.config import ModelConfig
             from dauys.model import DauysHybrid
 
-            model = DauysHybrid(ModelConfig.v02_stage1()).to(device).eval()
+            config = (
+                ModelConfig.v02_stage1()
+                if args.config is None
+                else ModelConfig.from_yaml(args.config)
+            )
+            model = DauysHybrid(config).to(device).eval()
             codes = torch.randint(0, 2048, (args.batch, 8, args.frames), device=device)
             full = model.encode_listening(codes)
             states = {}

@@ -777,8 +777,6 @@ class DauysHybrid(nn.Module):
         if mamba_states is not None:
             if self.config.self_hearing != "none":
                 raise ValueError("Stateful training does not support self-hearing")
-            if self.config.ear_embeddings != "shared":
-                raise ValueError("Stateful training does not support separate ears")
             if initial_user_codes is not None:
                 raise ValueError("Stateful forward does not support initial user codes")
         own_previous = previous_frames(

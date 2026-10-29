@@ -11,7 +11,7 @@ import torch
 from torch import nn
 
 from dauys.config import ModelConfig
-from dauys.model import DauysHybrid
+from dauys.model import DauysHybrid, MambaBlock
 from dauys.v02_runner import load_initial_weights
 from dauys.v03_intent import IntentConfig, IntentModule
 
@@ -119,6 +119,21 @@ def test_separate_ear_uses_its_own_embeddings_without_role_or_dropout():
 def test_separate_ear_rejects_self_hearing():
     with pytest.raises(ValueError, match="self-hearing"):
         DauysHybrid(_config(ear_embeddings="separate", self_hearing="mixed"))
+
+
+def test_separate_ear_accepts_mamba_states(monkeypatch):
+    def fake_forward_with_state(self, x, state):
+        return x, None
+
+    monkeypatch.setattr(MambaBlock, "forward_with_state", fake_forward_with_state)
+    model = DauysHybrid(_config(ear_embeddings="separate")).eval()
+    user, output, initial = _codes(frames=4)
+    states = {}
+    with torch.no_grad():
+        result = model(user, output, initial, mamba_states=states)
+    assert result.cb0_logits.shape == (2, 4, 2048)
+    assert ("ear", 0) in states
+    assert ("dialogue", 0) in states
 
 
 def test_freeze_ear_drops_ear_gradients_and_keeps_blocks_in_eval():
