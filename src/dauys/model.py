@@ -156,6 +156,111 @@ class MambaBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.residual_dropout(self.mixer(self.norm(x)))
 
+    def forward_with_state(
+        self,
+        x: torch.Tensor,
+        state: tuple[torch.Tensor, torch.Tensor] | None,
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        """Mamba2's continuous path with an explicit convolution/SSM carry."""
+        from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
+
+        mixer = self.mixer
+        residual = x
+        normed = self.norm(x)
+        batch, frames, _ = normed.shape
+        zxbcdt = mixer.in_proj(normed)
+        d_mlp = (
+            zxbcdt.shape[-1]
+            - 2 * mixer.d_ssm
+            - 2 * mixer.ngroups * mixer.d_state
+            - mixer.nheads
+        ) // 2
+        z0, x0, z, xBC, dt = torch.split(
+            zxbcdt,
+            [
+                d_mlp,
+                d_mlp,
+                mixer.d_ssm,
+                mixer.d_ssm + 2 * mixer.ngroups * mixer.d_state,
+                mixer.nheads,
+            ],
+            dim=-1,
+        )
+        conv_dim = mixer.d_ssm + 2 * mixer.ngroups * mixer.d_state
+        if state is None:
+            conv_tail = normed.new_zeros(batch, conv_dim, mixer.d_conv - 1)
+            ssm_state = normed.new_zeros(
+                batch, mixer.nheads, mixer.headdim, mixer.d_state
+            )
+        else:
+            conv_tail, ssm_state = state
+            if conv_tail.shape != (batch, conv_dim, mixer.d_conv - 1):
+                raise ValueError("Mamba convolution state has the wrong shape")
+            if ssm_state.shape != (
+                batch,
+                mixer.nheads,
+                mixer.headdim,
+                mixer.d_state,
+            ):
+                raise ValueError("Mamba SSM state has the wrong shape")
+            conv_tail = conv_tail.to(device=normed.device, dtype=normed.dtype)
+            ssm_state = ssm_state.to(device=normed.device, dtype=normed.dtype)
+        conv_input = torch.cat((conv_tail, xBC.transpose(1, 2)), dim=-1)
+        convolved = F.conv1d(
+            conv_input,
+            mixer.conv1d.weight,
+            mixer.conv1d.bias,
+            padding=mixer.d_conv - 1,
+            groups=conv_dim,
+        )
+        convolved = convolved[:, :, mixer.d_conv - 1 : mixer.d_conv - 1 + frames]
+        xBC = mixer.act(convolved.transpose(1, 2))
+        new_conv_tail = conv_input[:, :, -(mixer.d_conv - 1) :].detach()
+        x_ssm, B, C = torch.split(
+            xBC,
+            [mixer.d_ssm, mixer.ngroups * mixer.d_state, mixer.ngroups * mixer.d_state],
+            dim=-1,
+        )
+        dt_limit_kwargs = (
+            {}
+            if mixer.dt_limit == (0.0, float("inf"))
+            else {"dt_limit": mixer.dt_limit}
+        )
+        y, final_state = mamba_chunk_scan_combined(
+            x_ssm.reshape(batch, frames, mixer.nheads, mixer.headdim),
+            dt,
+            -torch.exp(mixer.A_log.float()),
+            B.reshape(batch, frames, mixer.ngroups, mixer.d_state),
+            C.reshape(batch, frames, mixer.ngroups, mixer.d_state),
+            chunk_size=mixer.chunk_size,
+            D=(
+                mixer.D.reshape(mixer.nheads, mixer.headdim)
+                if mixer.D_has_hdim
+                else mixer.D
+            ),
+            z=(
+                z.reshape(batch, frames, mixer.nheads, mixer.headdim)
+                if not mixer.rmsnorm
+                else None
+            ),
+            dt_bias=mixer.dt_bias,
+            dt_softplus=True,
+            seq_idx=None,
+            initial_states=ssm_state,
+            return_final_states=True,
+            **dt_limit_kwargs,
+        )
+        y = y.reshape(batch, frames, mixer.d_ssm)
+        if mixer.rmsnorm:
+            y = mixer.norm(y, z)
+        if d_mlp > 0:
+            y = torch.cat([F.silu(z0) * x0, y], dim=-1)
+        y = mixer.out_proj(y)
+        return residual + self.residual_dropout(y), (
+            new_conv_tail,
+            final_state.detach(),
+        )
+
     def step(
         self, x: torch.Tensor, state: tuple[torch.Tensor, torch.Tensor]
     ) -> torch.Tensor:
@@ -585,6 +690,7 @@ class DauysHybrid(nn.Module):
         acoustic_dropout_items: torch.Tensor | None = None,
         acoustic_keep_mask: torch.Tensor | None = None,
         own_previous_codes: torch.Tensor | None = None,
+        mamba_states: dict | None = None,
     ) -> torch.Tensor:
         listening = self.ear_input(
             self._ear_embed(
@@ -595,8 +701,13 @@ class DauysHybrid(nn.Module):
             ),
             own_previous_codes,
         )
-        for block in self.listening:
-            listening = block(listening)
+        for index, block in enumerate(self.listening):
+            if mamba_states is None:
+                listening = block(listening)
+            else:
+                listening, mamba_states[("ear", index)] = block.forward_with_state(
+                    listening, mamba_states.get(("ear", index))
+                )
         return listening
 
     def run_dialogue(
@@ -606,6 +717,7 @@ class DauysHybrid(nn.Module):
         initial_output_codes: torch.Tensor,
         history_codes: torch.Tensor | None = None,
         fusion_off_blocks: frozenset[int] = frozenset(),
+        mamba_states: dict | None = None,
     ) -> torch.Tensor:
         if output_codes.ndim != 3 or output_codes.shape[1] != 8:
             raise ValueError("Output codes must have shape [batch, 8, frames]")
@@ -626,7 +738,12 @@ class DauysHybrid(nn.Module):
         positions = torch.arange(frames, device=x.device)
         for index, block in enumerate(self.dialogue):
             if isinstance(block, MambaBlock):
-                x = block(x)
+                if mamba_states is None:
+                    x = block(x)
+                else:
+                    x, mamba_states[("dialogue", index)] = block.forward_with_state(
+                        x, mamba_states.get(("dialogue", index))
+                    )
             else:
                 x = block(
                     x,
@@ -649,6 +766,7 @@ class DauysHybrid(nn.Module):
         acoustic_dropout_items: torch.Tensor | None = None,
         acoustic_keep_mask: torch.Tensor | None = None,
         fusion_off_blocks: frozenset[int] = frozenset(),
+        mamba_states: dict | None = None,
     ) -> ModelOutput:
         """Teacher-forced prediction of B_t using A_<=t and B_<t."""
         if user_codes.shape != output_codes.shape:
@@ -656,6 +774,13 @@ class DauysHybrid(nn.Module):
         batch, _, frames = user_codes.shape
         if frames < 1 or initial_output_codes.shape != (batch, 8):
             raise ValueError("An initial valid silence frame is required")
+        if mamba_states is not None:
+            if self.config.self_hearing != "none":
+                raise ValueError("Stateful training does not support self-hearing")
+            if self.config.ear_embeddings != "shared":
+                raise ValueError("Stateful training does not support separate ears")
+            if initial_user_codes is not None:
+                raise ValueError("Stateful forward does not support initial user codes")
         own_previous = previous_frames(
             output_codes if history_codes is None else history_codes,
             initial_output_codes,
@@ -666,6 +791,7 @@ class DauysHybrid(nn.Module):
             acoustic_dropout_items,
             acoustic_keep_mask,
             own_previous,
+            mamba_states,
         )
         dialogue_listening = listening
         if detach_listening is not None:
@@ -682,6 +808,7 @@ class DauysHybrid(nn.Module):
             initial_output_codes,
             history_codes,
             fusion_off_blocks,
+            mamba_states,
         )
         user_cb0_logits = None
         user_depth_logits = None
