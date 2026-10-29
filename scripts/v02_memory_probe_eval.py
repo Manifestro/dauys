@@ -3,7 +3,6 @@
 import argparse
 import json
 import random
-import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -13,9 +12,7 @@ from torch.nn import functional as F
 from dauys.checkpoint import load_research_checkpoint
 from dauys.config import ModelConfig
 from dauys.model import DauysHybrid
-
-sys.path.insert(0, str(Path(__file__).parent))
-from v02_stateful_train import chunk_slice, load_streams, stack_streams
+from dauys.v02_stateful import chunk_slice, load_streams, stack_streams
 
 
 def bootstrap_ci(

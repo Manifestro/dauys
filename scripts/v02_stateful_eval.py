@@ -3,7 +3,6 @@
 import argparse
 import json
 import random
-import sys
 from pathlib import Path
 
 import torch
@@ -12,9 +11,7 @@ from torch.nn import functional as F
 from dauys.checkpoint import load_research_checkpoint
 from dauys.config import ModelConfig
 from dauys.model import DauysHybrid
-
-sys.path.insert(0, str(Path(__file__).parent))
-from v02_stateful_train import chunk_nlls, load_streams
+from dauys.v02_stateful import chunk_nlls, load_streams
 
 MODES = ("carry", "reset", "shuffled", "foreign")
 GAINS = {

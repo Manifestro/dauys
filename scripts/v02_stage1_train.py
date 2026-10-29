@@ -59,6 +59,13 @@ from dauys.v02_stage1_eval import (
     speech_cb0_runs,
     speech_frame_scores,
 )
+from dauys.v02_stateful import (
+    StreamCursor,
+    chunk_loss,
+    load_streams,
+    stateful_validation,
+    validate_streams,
+)
 from dauys.v02_wandb import start_private_run
 from dauys.v03_intent import IntentConfig, IntentModule
 
@@ -232,6 +239,60 @@ def _final_evaluation(
     return result
 
 
+def optimize_step(
+    model,
+    intent,
+    optimizer,
+    batch,
+    weights,
+    *,
+    trainable,
+    stream_cursor: StreamCursor | None = None,
+    stream_weight: float = 1.0,
+    max_grad_norm: float = 1.0,
+    scheduler=None,
+    device: torch.device | None = None,
+):
+    """One optimizer step, optionally adding the stateful stream side batch."""
+    if device is None:
+        device = next(model.parameters()).device
+    optimizer.zero_grad(set_to_none=True)
+    stream_loss = None
+    stream_cb0 = None
+    stream_chunk = None
+    with torch.autocast(
+        device.type,
+        dtype=torch.bfloat16,
+        enabled=device.type == "cuda",
+    ):
+        losses = stage1_objective(model, batch, weights, intent)
+        if stream_cursor is not None:
+            user, target, _, activity, initial = stream_cursor.next_chunk()
+            stream_chunk = stream_cursor.last_index
+            output = model(
+                user,
+                target,
+                initial,
+                mamba_states=stream_cursor.states,
+            )
+            stream_loss, stream_cb0, _, _ = chunk_loss(
+                model,
+                output,
+                target,
+                activity,
+                weights.label_smoothing,
+            )
+            total = losses.total + stream_weight * stream_loss
+        else:
+            total = losses.total
+    total.backward()
+    torch.nn.utils.clip_grad_norm_(trainable, max_grad_norm)
+    optimizer.step()
+    if scheduler is not None:
+        scheduler.step()
+    return total, losses, stream_loss, stream_cb0, stream_chunk
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
@@ -327,6 +388,19 @@ def main() -> None:
         default=[],
         help="Speaker groups per batch drawn from each further corpus",
     )
+    parser.add_argument(
+        "--stream-data",
+        type=Path,
+        help="Stateful streams .pt used as a synchronous side batch",
+    )
+    parser.add_argument(
+        "--stream-heldout",
+        type=Path,
+        help="Optional stateful held-out split for carry/reset evaluation",
+    )
+    parser.add_argument("--stream-rows", type=int, default=0)
+    parser.add_argument("--stream-chunk", type=int, default=256)
+    parser.add_argument("--stream-weight", type=float, default=1.0)
     parser.add_argument("--run-name", default="")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--wandb", action="store_true")
@@ -337,6 +411,26 @@ def main() -> None:
     if args.m8_words is not None and not 0 <= args.m8_words <= 8:
         raise ValueError("M8 is the count of recognisable items out of eight")
     config = ModelConfig.from_yaml(args.config)
+    if args.stream_rows < 0:
+        raise ValueError("Stream rows cannot be negative")
+    if args.stream_chunk < 1:
+        raise ValueError("The stream chunk must be positive")
+    if args.stream_rows > 0 and args.stream_data is None:
+        raise ValueError("--stream-data is required with --stream-rows")
+    if (args.stream_rows > 0 or args.stream_heldout is not None) and (
+        config.self_hearing != "none"
+    ):
+        raise ValueError("Stateful streams require self_hearing: none")
+    stream_train = []
+    stream_heldout = []
+    if args.stream_rows > 0:
+        stream_train = load_streams(args.stream_data)
+        validate_streams(stream_train, args.stream_chunk)
+        if args.stream_rows > len(stream_train):
+            raise ValueError("Stream rows exceed the training split size")
+    if args.stream_heldout is not None:
+        stream_heldout = load_streams(args.stream_heldout)
+        validate_streams(stream_heldout, args.stream_chunk)
     records = load_stage1_corpus(args.cache_root, args.manifest)
     heldout = _grouped(
         load_stage1_corpus(args.heldout_root, args.heldout_manifest),
@@ -359,6 +453,16 @@ def main() -> None:
     if dirty and args.require_clean and not args.smoke:
         raise ValueError("This run requires a clean checkout")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    stream_cursor = None
+    if args.stream_rows > 0:
+        # The stream cursor restarts from a fresh sample on --resume.
+        stream_cursor = StreamCursor(
+            stream_train,
+            rows=args.stream_rows,
+            chunk=args.stream_chunk,
+            seed=args.seed,
+            device=device,
+        )
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     model = DauysHybrid(config)
@@ -515,6 +619,18 @@ def main() -> None:
         "records": len(records),
         "heldout": len(heldout),
     }
+    if args.stream_rows > 0 or args.stream_heldout is not None:
+        metadata["plan"]["stream"] = {
+            "data": str(args.stream_data or ""),
+            "heldout": str(args.stream_heldout or ""),
+            "rows": args.stream_rows,
+            "chunk": args.stream_chunk,
+            "weight": args.stream_weight,
+        }
+        if args.stream_data is not None:
+            provenance["stream_data_sha256"] = sha256(args.stream_data)
+        if args.stream_heldout is not None:
+            provenance["stream_heldout_sha256"] = sha256(args.stream_heldout)
     if not args.resume:
         (root / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     run = (
@@ -543,21 +659,22 @@ def main() -> None:
                     self_feed_frames=args.self_feed_frames,
                     listening_horizon=args.listening_horizon,
                 )
-                optimizer.zero_grad(set_to_none=True)
-                with torch.autocast(
-                    device.type,
-                    dtype=torch.bfloat16,
-                    enabled=device.type == "cuda",
-                ):
-                    losses = stage1_objective(model, batch, weights, intent)
-                losses.total.backward()
-                torch.nn.utils.clip_grad_norm_(trainable, 1.0)
-                optimizer.step()
-                scheduler.step()
+                total, losses, stream_loss, stream_cb0, stream_chunk = optimize_step(
+                    model,
+                    intent,
+                    optimizer,
+                    batch,
+                    weights,
+                    trainable=trainable,
+                    stream_cursor=stream_cursor,
+                    stream_weight=args.stream_weight,
+                    scheduler=scheduler,
+                    device=device,
+                )
                 intent.target.update(model, intent_config.ema_decay(progress))
                 log: dict[str, float] = {
                     "step": float(step),
-                    "train/total": float(losses.total.detach()),
+                    "train/total": float(total.detach()),
                     "train/cb0": float(losses.cb0.detach()),
                     "train/depth": float(losses.depth.detach()),
                     "train/activity": float(losses.activity.detach()),
@@ -567,6 +684,12 @@ def main() -> None:
                     "train/self_fed_fraction": float(losses.self_fed_fraction.detach()),
                     "train/lr": optimizer.param_groups[0]["lr"],
                 }
+                if stream_cursor is not None:
+                    assert stream_loss is not None
+                    assert stream_cb0 is not None and stream_chunk is not None
+                    log["train/stream_loss"] = float(stream_loss.detach())
+                    log["train/stream_cb0"] = float(stream_cb0.detach())
+                    log["train/stream_chunk"] = float(stream_chunk)
                 due = step % args.checkpoint_interval == 0 or step == args.steps
                 if due:
                     model.eval()
@@ -581,6 +704,17 @@ def main() -> None:
                             batch_size=args.speakers * args.anchors,
                             train_sample=train_sample,
                         )
+                        if args.stream_heldout is not None:
+                            metrics.update(
+                                stateful_validation(
+                                    model,
+                                    stream_heldout,
+                                    chunk=args.stream_chunk,
+                                    batch_size=args.speakers * args.anchors,
+                                    prefix="eval/stream_",
+                                    gain=True,
+                                )
+                            )
                     model.train()
                     log.update(metrics)
                     reason = early_abort(step, metrics)

@@ -26,7 +26,10 @@ from v02_stateful_eval import (
     shuffled_order,
     summarize_modes,
 )
-from v02_stateful_train import compose_batch, run_batch, stack_streams
+from v02_stateful_train import compose_batch, run_batch
+
+import dauys.v02_stateful as stateful_module
+from dauys.v02_stateful import StreamCursor, stack_streams, stateful_validation
 
 
 def _phrase(value: int, frames: int = 2) -> dict:
@@ -339,3 +342,89 @@ def test_compose_batch_mixes_main_and_fixed_mix_rows():
         compose_batch(train, [(mix_a, 5)], 5, random.Random(0))
     with pytest.raises(ValueError, match="same length"):
         compose_batch(train, [([_stream("long", 5)], 1)], 5, random.Random(0))
+
+
+def _cursor_streams() -> list[dict]:
+    streams = []
+    for index in range(3):
+        frames = 16
+        streams.append(
+            {
+                "user": torch.full((8, frames), index + 1, dtype=torch.long),
+                "target": torch.full((8, frames), index + 101, dtype=torch.long),
+                "user_activity": torch.ones(frames, dtype=torch.long),
+                "activity": torch.ones(frames, dtype=torch.long),
+            }
+        )
+    return streams
+
+
+def test_stream_cursor_advances_resets_and_is_seed_deterministic():
+    streams = _cursor_streams()
+    cursor = StreamCursor(streams, rows=2, chunk=4, seed=0)
+    other = StreamCursor(streams, rows=2, chunk=4, seed=0)
+    assert torch.equal(cursor.batch["user"], other.batch["user"])
+    for index in range(4):
+        cursor.states["seen"] = index
+        other.states["seen"] = index
+        user, target, user_activity, activity, initial = cursor.next_chunk()
+        other.next_chunk()
+        assert user.shape == (2, 8, 4)
+        assert target.shape == (2, 8, 4)
+        assert user_activity.shape == (2, 4)
+        assert activity.shape == (2, 4)
+        assert initial.shape == (2, 8)
+        assert cursor.last_index == index
+        assert torch.equal(cursor.batch["user"], other.batch["user"])
+    assert cursor.index == cursor.chunks == 4
+    assert cursor.states == {"seen": 3}
+    rng = random.Random(1)
+    rng.sample(streams, 2)
+    expected = rng.sample(streams, 2)
+    cursor.next_chunk()
+    assert cursor.index == 1
+    assert cursor.last_index == 0
+    assert cursor.states == {}
+    assert torch.equal(
+        cursor.batch["user"], torch.stack([stream["user"] for stream in expected])
+    )
+
+
+def test_stateful_validation_uses_stream_prefix_and_k2_gain(monkeypatch):
+    def fake_chunk_nlls(model, streams, *, chunk, batch_size, stateful):
+        return {
+            0: 1.0,
+            1: 0.9,
+            2: 0.4 if stateful else 0.7,
+            3: 0.3 if stateful else 0.5,
+        }
+
+    monkeypatch.setattr(stateful_module, "chunk_nlls", fake_chunk_nlls)
+    metrics = stateful_validation(
+        None,
+        [],
+        chunk=4,
+        batch_size=2,
+        prefix="eval/stream_",
+        gain=True,
+    )
+    assert metrics["eval/stream_carry_cb0_k2"] == 0.4
+    assert metrics["eval/stream_reset_cb0_k2"] == 0.7
+    assert metrics["eval/stream_carry_cb0_mean"] == (1.0 + 0.9 + 0.4 + 0.3) / 4
+    assert metrics["eval/stream_reset_cb0_mean"] == (1.0 + 0.9 + 0.7 + 0.5) / 4
+    assert metrics["eval/stream_gain"] == ((0.7 - 0.4) + (0.5 - 0.3)) / 2
+
+
+def test_stream_cursor_rejects_bad_geometry():
+    streams = _cursor_streams()
+    with pytest.raises(ValueError, match="exceeds"):
+        StreamCursor(streams, rows=4, chunk=4, seed=0)
+    streams[0] = {
+        **streams[0],
+        "user": streams[0]["user"][:, :7],
+        "target": streams[0]["target"][:, :7],
+        "user_activity": streams[0]["user_activity"][:7],
+        "activity": streams[0]["activity"][:7],
+    }
+    with pytest.raises(ValueError, match="same length"):
+        StreamCursor(streams, rows=2, chunk=4, seed=0)

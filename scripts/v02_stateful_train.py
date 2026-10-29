@@ -9,7 +9,6 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from torch.nn import functional as F
 
 from dauys.config import ModelConfig
 from dauys.model import DauysHybrid
@@ -20,24 +19,17 @@ from dauys.v02_runner import (
     optimizer_groups,
 )
 from dauys.v02_stage1 import Stage1Weights
-from dauys.v02_training import masked_mean
+from dauys.v02_stateful import (
+    _batch_to,
+    chunk_loss,
+    chunk_slice,
+    load_streams,
+    stack_streams,
+    stateful_validation,
+)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from v02_stage1_train import _git
-
-
-def load_streams(path: str | Path) -> list[dict]:
-    streams = torch.load(Path(path), map_location="cpu", weights_only=True)
-    if not isinstance(streams, list) or not streams:
-        raise ValueError("A stateful split must be a non-empty list of streams")
-    return streams
-
-
-def stack_streams(streams: list[dict]) -> dict[str, torch.Tensor]:
-    return {
-        key: torch.stack([stream[key] for stream in streams])
-        for key in ("user", "target", "user_activity", "activity")
-    }
 
 
 def compose_batch(
@@ -62,63 +54,6 @@ def compose_batch(
     for streams, rows in mixes:
         selected.extend(rng.sample(streams, rows))
     return selected
-
-
-def _batch_to(batch: dict[str, torch.Tensor], device: torch.device) -> dict:
-    return {key: value.to(device) for key, value in batch.items()}
-
-
-def chunk_slice(
-    batch: dict[str, torch.Tensor], chunk: int, index: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    start = index * chunk
-    end = start + chunk
-    initial = (
-        batch["target"][:, :, 0] if index == 0 else batch["target"][:, :, start - 1]
-    )
-    return (
-        batch["user"][:, :, start:end],
-        batch["target"][:, :, start:end],
-        batch["user_activity"][:, start:end],
-        batch["activity"][:, start:end],
-        initial,
-    )
-
-
-def chunk_loss(
-    model: DauysHybrid,
-    output,
-    target: torch.Tensor,
-    activity: torch.Tensor,
-    label_smoothing: float,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    batch, frames = target.shape[0], target.shape[-1]
-    vocab = model.config.vocab_size
-    speech = activity.bool()
-    cb0_values = F.cross_entropy(
-        output.cb0_logits.reshape(-1, vocab),
-        target[:, 0].reshape(-1),
-        reduction="none",
-        label_smoothing=label_smoothing,
-    ).reshape(batch, frames)
-    assert output.depth_logits is not None
-    depth_values = F.cross_entropy(
-        output.depth_logits.reshape(-1, vocab),
-        target[:, 1:].transpose(1, 2).reshape(-1),
-        reduction="none",
-    ).reshape(batch, frames, 7)
-    activity_values = F.cross_entropy(
-        output.activity_logits.reshape(-1, 2),
-        activity.reshape(-1).long(),
-        reduction="none",
-    ).reshape(batch, frames)
-    cb0 = masked_mean(cb0_values, speech)
-    depth = masked_mean(depth_values.mean(-1), speech)
-    activity_loss = masked_mean(
-        activity_values, torch.ones_like(activity, dtype=torch.bool)
-    )
-    loss = cb0 + depth + 0.2 * activity_loss
-    return loss, cb0, depth, activity_loss
 
 
 def train_chunk(
@@ -203,62 +138,6 @@ def run_batch(
         if step_callback is not None:
             step_callback(index, log)
     return logs
-
-
-@torch.inference_mode()
-def chunk_nlls(
-    model: DauysHybrid,
-    streams: list[dict],
-    *,
-    chunk: int,
-    batch_size: int = 16,
-    stateful: bool,
-) -> dict[int, float]:
-    device = next(model.parameters()).device
-    chunks = streams[0]["user"].shape[-1] // chunk
-    totals = torch.zeros(chunks, dtype=torch.float64)
-    counts = torch.zeros(chunks, dtype=torch.float64)
-    vocab = model.config.vocab_size
-    for start in range(0, len(streams), batch_size):
-        batch = _batch_to(stack_streams(streams[start : start + batch_size]), device)
-        states = {} if stateful else None
-        for index in range(chunks):
-            user, target, _, activity, initial = chunk_slice(batch, chunk, index)
-            output = model(
-                user,
-                target,
-                initial,
-                mamba_states=states if stateful else None,
-            )
-            speech = activity.bool()
-            values = F.cross_entropy(
-                output.cb0_logits.reshape(-1, vocab),
-                target[:, 0].reshape(-1),
-                reduction="none",
-            ).reshape(target.shape[0], target.shape[-1])
-            totals[index] += float((values * speech).sum())
-            counts[index] += float(speech.sum())
-    return {
-        index: float(totals[index] / counts[index].clamp_min(1))
-        for index in range(chunks)
-    }
-
-
-def _validation(
-    model: DauysHybrid, heldout: list[dict], *, chunk: int, batch_size: int
-) -> dict:
-    carry = chunk_nlls(
-        model, heldout, chunk=chunk, batch_size=batch_size, stateful=True
-    )
-    reset = chunk_nlls(
-        model, heldout, chunk=chunk, batch_size=batch_size, stateful=False
-    )
-    metrics = {f"eval/carry_cb0_k{index}": value for index, value in carry.items()} | {
-        f"eval/reset_cb0_k{index}": value for index, value in reset.items()
-    }
-    metrics["eval/carry_cb0_mean"] = sum(carry.values()) / len(carry)
-    metrics["eval/reset_cb0_mean"] = sum(reset.values()) / len(reset)
-    return metrics
 
 
 def main() -> None:
@@ -368,7 +247,7 @@ def main() -> None:
                 step += 1
                 if step % args.checkpoint_interval == 0 or step == args.steps:
                     model.eval()
-                    metrics = _validation(
+                    metrics = stateful_validation(
                         model,
                         heldout,
                         chunk=args.chunk,
