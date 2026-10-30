@@ -78,3 +78,22 @@ def test_single_stream_prefers_the_cheaper_item():
     ]
     result = run.single_stream(Fake(), pairs, batch=3)
     assert result["accuracy_sum"] == 1.0 and result["pairs"] == 2
+
+
+def test_sblimp_keys_include_the_subtype(tmp_path):
+    split = tmp_path / "syntactic" / "dev"
+    split.mkdir(parents=True)
+    (split / "gold.csv").write_text(
+        "id,filename,voice,type,subtype,correct,transcription\n"
+        "1,a,A,t,s1,0,X\n1,b,A,t,s1,1,Y\n1,c,A,t,s2,0,X\n1,d,A,t,s2,1,Y\n"
+    )
+    assert len(data.slm21_pairs(tmp_path, "syntactic")) == 2
+
+
+def test_storycloze_pairs_by_story_id(tmp_path):
+    for name in ("0_abc_correct.wav", "7_abc_incorrect.wav", "3_xyz_correct.wav"):
+        (tmp_path / name).write_bytes(b"")
+    (tmp_path / "._0_abc_correct.wav").write_bytes(b"")
+    pairs = data.storycloze_pairs(tmp_path)
+    assert [p["id"] for p in pairs] == ["abc"]
+    assert pairs[0]["bad"].name == "7_abc_incorrect.wav"

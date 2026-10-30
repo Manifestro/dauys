@@ -35,7 +35,10 @@ def prepare(args) -> None:
     mimi = data.load_mimi()
     cache = Path(args.cache)
     cache.mkdir(parents=True, exist_ok=True)
-    conversations = data.hohere_conversations(args.hohere_revision)
+    only = set(args.only or ("hohere", "swuggy", "sblimp", "tstorycloze"))
+    conversations = (
+        data.hohere_conversations(args.hohere_revision) if "hohere" in only else []
+    )
     rows = []
     for item in conversations:
         a, b = data.encode(mimi, item["audio_a"]), data.encode(mimi, item["audio_b"])
@@ -49,7 +52,8 @@ def prepare(args) -> None:
                 "activity_b": item["activity_b"][:frames],
             }
         )
-    torch.save(rows, cache / "hohere.pt")
+    if rows:
+        torch.save(rows, cache / "hohere.pt")
     silence = data.encode(mimi, np.zeros(data.FRAME_SAMPLES * 4, dtype=np.float32))
     torch.save(silence[:, -1], cache / "silence.pt")
     print({"hohere": len(rows), "silence": silence[:, -1].tolist()}, flush=True)
@@ -60,6 +64,8 @@ def prepare(args) -> None:
     if args.storycloze:
         sets["tstorycloze"] = data.storycloze_pairs(Path(args.storycloze))
     for name, pairs in sets.items():
+        if name not in only:
+            continue
         encoded = [
             {
                 "id": pair["id"],
@@ -363,6 +369,9 @@ def main() -> None:
     prep.add_argument("--hohere-revision", default="v0.2.0")
     prep.add_argument("--slm21")
     prep.add_argument("--storycloze")
+    prep.add_argument(
+        "--only", nargs="+", choices=("hohere", "swuggy", "sblimp", "tstorycloze")
+    )
     run = sub.add_parser("score")
     run.add_argument("--cache", required=True)
     run.add_argument("--out", required=True)

@@ -99,18 +99,19 @@ def hohere_conversations(revision: str = "v0.2.0") -> list[dict]:
 def slm21_pairs(root: Path, task: str) -> list[dict]:
     """sWUGGY (``lexical``) or sBLIMP (``syntactic``) dev pairs.
 
-    Each (id, voice) group holds one correct and one incorrect recording.
+    Each (id, voice) group holds one correct and one incorrect recording; in
+    sBLIMP an id repeats across subtypes, so the subtype is part of the key.
     """
     split = root / task / "dev"
-    groups: dict[tuple[str, str], dict] = defaultdict(dict)
+    groups: dict[tuple[str, ...], dict] = defaultdict(dict)
     with (split / "gold.csv").open() as stream:
         for row in csv.DictReader(stream):
-            key = (row["id"], row["voice"])
+            key = (row["id"], row["voice"], row.get("subtype") or "")
             side = "good" if row["correct"] == "1" else "bad"
             groups[key][side] = split / f"{row['filename']}.wav"
             groups[key].setdefault("kind", row.get("type") or row.get("frequency"))
     return [
-        {"id": f"{key[0]}-{key[1]}", **value}
+        {"id": "-".join(part for part in key if part), **value}
         for key, value in sorted(groups.items())
         if "good" in value and "bad" in value
     ]
@@ -119,16 +120,21 @@ def slm21_pairs(root: Path, task: str) -> list[dict]:
 def storycloze_pairs(root: Path) -> list[dict]:
     """tStoryCloze: each story read with its true ending and a random one.
 
-    The release names files ``<story>_correct.wav`` and ``<story>_incorrect.wav``.
+    The release names files ``<n>_<story>_correct.wav`` and
+    ``<m>_<story>_incorrect.wav``: the story id, not the number, links them.
     """
-    pairs = []
-    for good in sorted(root.rglob("*_correct.wav")):
-        bad = good.with_name(good.name.replace("_correct.wav", "_incorrect.wav"))
-        if bad.exists():
-            pairs.append(
-                {"id": good.stem[: -len("_correct")], "good": good, "bad": bad}
-            )
-    return pairs
+    sides: dict[str, dict] = defaultdict(dict)
+    for path in root.rglob("*.wav"):
+        if path.name.startswith("."):
+            continue
+        _, story, ending = path.stem.split("_", 2)
+        if ending in ("correct", "incorrect"):
+            sides[story]["good" if ending == "correct" else "bad"] = path
+    return [
+        {"id": story, **pair}
+        for story, pair in sorted(sides.items())
+        if "good" in pair and "bad" in pair
+    ]
 
 
 def save_json(path: Path, value) -> None:
