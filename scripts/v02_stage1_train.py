@@ -239,6 +239,11 @@ def _final_evaluation(
     return result
 
 
+def stream_active(step: int, until: int) -> bool:
+    """Whether the stream side batch runs at ``step``; ``until`` 0 means always."""
+    return until <= 0 or step <= until
+
+
 def optimize_step(
     model,
     intent,
@@ -414,6 +419,12 @@ def main() -> None:
     parser.add_argument("--stream-rows", type=int, default=0)
     parser.add_argument("--stream-chunk", type=int, default=256)
     parser.add_argument("--stream-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--stream-until",
+        type=int,
+        default=0,
+        help="Last step with the stream side batch; 0 keeps it on every step",
+    )
     parser.add_argument("--run-name", default="")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--wandb", action="store_true")
@@ -428,6 +439,8 @@ def main() -> None:
         raise ValueError("Stream rows cannot be negative")
     if args.stream_chunk < 1:
         raise ValueError("The stream chunk must be positive")
+    if args.stream_until < 0:
+        raise ValueError("--stream-until cannot be negative")
     if args.stream_rows > 0 and args.stream_data is None:
         raise ValueError("--stream-data is required with --stream-rows")
     if (args.stream_rows > 0 or args.stream_heldout is not None) and (
@@ -652,6 +665,7 @@ def main() -> None:
             "rows": args.stream_rows,
             "chunk": args.stream_chunk,
             "weight": args.stream_weight,
+            "until": args.stream_until,
         }
         if args.stream_data is not None:
             provenance["stream_data_sha256"] = sha256(args.stream_data)
@@ -692,7 +706,11 @@ def main() -> None:
                     batch,
                     weights,
                     trainable=trainable,
-                    stream_cursor=stream_cursor,
+                    stream_cursor=(
+                        stream_cursor
+                        if stream_active(step, args.stream_until)
+                        else None
+                    ),
                     stream_weight=args.stream_weight,
                     scheduler=scheduler,
                     device=device,
@@ -710,8 +728,7 @@ def main() -> None:
                     "train/self_fed_fraction": float(losses.self_fed_fraction.detach()),
                     "train/lr": optimizer.param_groups[0]["lr"],
                 }
-                if stream_cursor is not None:
-                    assert stream_loss is not None
+                if stream_loss is not None:
                     assert stream_cb0 is not None and stream_chunk is not None
                     log["train/stream_loss"] = float(stream_loss.detach())
                     log["train/stream_cb0"] = float(stream_cb0.detach())

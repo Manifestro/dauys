@@ -165,3 +165,11 @@ def test_stream_rows_zero_keeps_the_stage1_loss_unchanged():
     assert stream_loss is None
     assert stream_cb0 is None
     assert stream_chunk is None
+
+
+def test_stream_side_batch_stops_after_its_last_step():
+    from v02_stage1_train import stream_active
+
+    assert stream_active(1, 0) and stream_active(50_000, 0)
+    assert stream_active(20_000, 20_000)
+    assert not stream_active(20_001, 20_000)
