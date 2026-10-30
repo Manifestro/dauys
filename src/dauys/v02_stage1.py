@@ -855,6 +855,10 @@ class Stage1BatchSource(torch.utils.data.Dataset[Stage1Batch]):
     Each ``(records, speakers)`` pair in ``mix`` supplies that many of the
     batch's speaker groups from its own corpus; the main corpus fills the rest.
     Small targeted sets can so be trained on without forgetting the main one.
+
+    ``final_start`` opens a final phase: from that step on, ``final_mix`` gives
+    the per-corpus counts instead, so a short tail of the schedule can lean on
+    the targeted corpora. ``None`` keeps every step on the normal counts.
     """
 
     def __init__(
@@ -872,6 +876,8 @@ class Stage1BatchSource(torch.utils.data.Dataset[Stage1Batch]):
         min_before: int = math.ceil(SECONDS_BEFORE * FRAME_RATE),
         min_after: int = math.ceil(SECONDS_AFTER * FRAME_RATE),
         mix: Sequence[tuple[Sequence[Stage1Record], int]] = (),
+        final_start: int | None = None,
+        final_mix: Sequence[int] = (),
     ) -> None:
         if steps < 1:
             raise ValueError("A Stage 1 source needs at least one step")
@@ -880,6 +886,19 @@ class Stage1BatchSource(torch.utils.data.Dataset[Stage1Batch]):
             raise ValueError(
                 "Each mixed corpus needs records and 0 < k; the sum < speakers"
             )
+        final_counts = tuple(final_mix)
+        if final_start is None:
+            if final_counts:
+                raise ValueError("Final mix counts need a final phase start")
+        else:
+            if len(final_counts) != len(mix):
+                raise ValueError("Give one final count per mixed corpus")
+            if any(k < 1 for k in final_counts):
+                raise ValueError("Each final mix count must be at least 1")
+            if sum(final_counts) >= speakers:
+                raise ValueError("The final mix must leave speakers for the main one")
+            if not 0 <= final_start <= steps:
+                raise ValueError("The final phase must start inside the plan")
         if not 0 <= start <= steps:
             raise ValueError("The Stage 1 start step must lie inside the plan")
         self.records = list(records)
@@ -899,21 +918,32 @@ class Stage1BatchSource(torch.utils.data.Dataset[Stage1Batch]):
         for corpus, k in mix:
             self.mix_spans.append((len(self.records), len(corpus), k))
             self.records += list(corpus)
+        self.final_start = final_start
+        self.final_mix = final_counts
 
     def __len__(self) -> int:
         return self.steps - self.start
 
+    def mix_counts(self, step: int) -> list[int]:
+        """Speaker groups drawn from each mixed corpus at ``step``."""
+        if self.final_start is not None and step >= self.final_start:
+            return list(self.final_mix)
+        return [k for _, _, k in self.mix_spans]
+
     def __getitem__(self, index: int) -> Stage1Batch:
         step = self.start + index
+        counts = self.mix_counts(step)
         spec = make_batch_spec(
             self.records[: self.main_count],
             step,
             seed=self.seed,
-            speakers=self.speakers - self.mixed_speakers,
+            speakers=self.speakers - sum(counts),
             anchors=self.anchors,
             pool=self.pool,
         )
-        for number, (offset, count, k) in enumerate(self.mix_spans, start=1):
+        for number, ((offset, count, _), k) in enumerate(
+            zip(self.mix_spans, counts), start=1
+        ):
             mixed = make_batch_spec(
                 self.records[offset : offset + count],
                 step,

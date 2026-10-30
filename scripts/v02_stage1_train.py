@@ -389,6 +389,19 @@ def main() -> None:
         help="Speaker groups per batch drawn from each further corpus",
     )
     parser.add_argument(
+        "--final-phase-steps",
+        type=int,
+        default=0,
+        help="Last steps whose batches draw the final speaker mix",
+    )
+    parser.add_argument(
+        "--final-mix-speakers",
+        type=int,
+        nargs="*",
+        default=[],
+        help="Speaker groups per batch from each further corpus in the final phase",
+    )
+    parser.add_argument(
         "--stream-data",
         type=Path,
         help="Stateful streams .pt used as a synchronous side batch",
@@ -448,6 +461,15 @@ def main() -> None:
         assert_speakers_disjoint(mix_records, heldout)
         assert_stage1_pools(mix_records, speakers=k, pool=args.pool)
         mix.append((mix_records, k))
+    final_start = None
+    final_mix: tuple[int, ...] = ()
+    if args.final_phase_steps > 0:
+        if len(args.final_mix_speakers) != len(mix):
+            raise ValueError(
+                "--final-mix-speakers needs one count per --mix-speakers entry"
+            )
+        final_start = args.steps - args.final_phase_steps
+        final_mix = tuple(args.final_mix_speakers)
     silence = _silence(args.silence_codes)
     git_sha, dirty = _git()
     if dirty and args.require_clean and not args.smoke:
@@ -572,6 +594,8 @@ def main() -> None:
         crop_frames=args.crop_frames,
         start=start_step,
         mix=mix,
+        final_start=final_start,
+        final_mix=final_mix,
     )
     loader = DataLoader(
         source,
@@ -602,6 +626,8 @@ def main() -> None:
             "crop_frames": args.crop_frames,
             "mix_manifests": [str(m) for m in args.mix_manifest],
             "mix_speakers": args.mix_speakers,
+            "final_phase_steps": args.final_phase_steps,
+            "final_mix_speakers": list(args.final_mix_speakers),
             "learning_rate": args.learning_rate,
             "seed": args.seed,
             "history_dropout": args.history_dropout,
