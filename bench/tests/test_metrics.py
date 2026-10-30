@@ -97,3 +97,13 @@ def test_storycloze_pairs_by_story_id(tmp_path):
     pairs = data.storycloze_pairs(tmp_path)
     assert [p["id"] for p in pairs] == ["abc"]
     assert pairs[0]["bad"].name == "7_abc_incorrect.wav"
+
+
+def test_splice_timed_keeps_target_timing():
+    source = torch.arange(8 * 6).reshape(8, 6)
+    source_activity = torch.tensor([0, 1, 1, 0, 1, 0]).bool()
+    target_activity = torch.tensor([1, 1, 0, 0, 1, 1, 1]).bool()
+    silence = torch.full((8,), -5)
+    out = metrics.splice_timed(source, source_activity, target_activity, silence)
+    assert out.shape == (8, 7)
+    assert out[0].tolist() == [1, 2, -5, -5, 4, 1, 2]

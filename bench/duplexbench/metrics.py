@@ -52,6 +52,29 @@ def fit_length(codes: torch.Tensor, frames: int, silence: torch.Tensor) -> torch
     return torch.cat((codes, pad), dim=-1)
 
 
+def splice_timed(
+    source: torch.Tensor,
+    source_activity: torch.Tensor,
+    target_activity: torch.Tensor,
+    silence: torch.Tensor,
+) -> torch.Tensor:
+    """Another speaker's speech placed exactly where the target speaker spoke.
+
+    The source's speech frames, in order (cycled when short), fill the target
+    activity mask; every other frame is the silence frame. This keeps turn
+    timing and replaces only content and voice.
+    """
+    frames = target_activity.shape[-1]
+    speech = source[:, source_activity[: source.shape[-1]].bool()]
+    out = silence[:, None].expand(-1, frames).clone().to(source)
+    slots = target_activity.bool().nonzero().flatten()
+    if speech.shape[-1] == 0 or slots.numel() == 0:
+        return out
+    picks = torch.arange(slots.numel()) % speech.shape[-1]
+    out[:, slots] = speech[:, picks]
+    return out
+
+
 def ngrams(tokens: Sequence[int], n: int) -> list[tuple[int, ...]]:
     return [tuple(tokens[index : index + n]) for index in range(len(tokens) - n + 1)]
 

@@ -97,13 +97,22 @@ def contingency(adapter, rows: list[dict], max_frames: int, seed: int) -> dict:
         frames = min(row["a"].shape[-1], max_frames)
         own = row["b"][:, :frames]
         speech = row["activity_b"][:frames]
+        partner = rows[partners[index]]
+        timing = row["activity_a"][:frames]
         heard = {
             "true": row["a"][:, :frames],
-            "swap": metrics.fit_length(rows[partners[index]]["a"], frames, silence),
+            "swap": metrics.fit_length(partner["a"], frames, silence),
             "silence": silence[:, None].expand(-1, frames).clone(),
+            # Same turn timing, true vs another speaker's words and voice.
+            "true_timed": metrics.splice_timed(
+                row["a"], row["activity_a"], timing, silence
+            ),
+            "swap_timed": metrics.splice_timed(
+                partner["a"], partner["activity_a"], timing, silence
+            ),
         }
         users = torch.stack(list(heard.values()))
-        cb0, acoustic = adapter.frame_nll(users, own[None].expand(3, -1, -1))
+        cb0, acoustic = adapter.frame_nll(users, own[None].expand(len(heard), -1, -1))
         result = {
             "id": row["id"],
             "skill": row["skill"],
@@ -115,13 +124,18 @@ def contingency(adapter, rows: list[dict], max_frames: int, seed: int) -> dict:
         per.append(result)
     summary = {}
     for stream in ("cb0", "acoustic"):
-        for name in ("true", "swap", "silence"):
+        for name in ("true", "swap", "silence", "true_timed", "swap_timed"):
             summary[f"{stream}_{name}"] = metrics.bootstrap_ci(
                 [r[f"{stream}_{name}"] for r in per], seed=seed
             )
-        for name in ("swap", "silence"):
+        for name, base in (
+            ("swap", "true"),
+            ("silence", "true"),
+            ("swap_timed", "true_timed"),
+        ):
             summary[f"{stream}_gap_{name}"] = metrics.bootstrap_ci(
-                [r[f"{stream}_{name}"] - r[f"{stream}_true"] for r in per], seed=seed
+                [r[f"{stream}_{name}"] - r[f"{stream}_{base}"] for r in per],
+                seed=seed,
             )
     return {"summary": summary, "conversations": per}
 
