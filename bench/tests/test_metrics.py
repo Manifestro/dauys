@@ -7,7 +7,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from duplexbench import data, metrics, run  # noqa: E402
+from duplexbench import data, metrics, run
 
 
 def test_partners_are_never_self_and_similar_in_length():

@@ -74,9 +74,12 @@ def prepare(args) -> None:
 
 
 def _adapter(args):
-    silence = torch.load(Path(args.cache) / "silence.pt")
     if args.model == "moshi":
+        # Moshi learned silence as Mimi's encoding of digital silence.
+        silence = torch.load(Path(args.cache) / "silence.pt")
         return MoshiAdapter.load(silence, args.moshi_repo)
+    # Dauys pads, starts and mutes with the silence frame it was trained on.
+    silence = torch.tensor(args.dauys_silence)
     return DauysAdapter.load(args.dauys_config, args.dauys_checkpoint, silence)
 
 
@@ -367,6 +370,12 @@ def main() -> None:
     run.add_argument("--moshi-repo", default="kyutai/moshiko-pytorch-bf16")
     run.add_argument("--dauys-config")
     run.add_argument("--dauys-checkpoint")
+    run.add_argument(
+        "--dauys-silence",
+        type=int,
+        nargs=8,
+        default=[1049, 1700, 1626, 546, 306, 1443, 1871, 2008],
+    )
     run.add_argument(
         "--tests",
         nargs="+",
