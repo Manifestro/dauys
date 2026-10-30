@@ -351,6 +351,9 @@ def score(args) -> None:
     for name in ("swuggy", "sblimp", "tstorycloze"):
         if name in args.tests and (cache / f"{name}.pt").exists():
             pairs = torch.load(cache / f"{name}.pt")
+            if not pairs:
+                print({name: "no pairs, skipped"}, flush=True)
+                continue
             if args.limit:
                 pairs = pairs[: args.limit * 20]
             result = single_stream(adapter, pairs, args.batch)
