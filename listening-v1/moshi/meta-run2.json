@@ -1,0 +1,7 @@
+{
+ "model": "moshi",
+ "commit": "8b0cffbc4bbca283d6e1d240106075191b7121b9",
+ "seed": 0,
+ "conversations": 267,
+ "repo": "kyutai/moshiko-pytorch-bf16"
+}
