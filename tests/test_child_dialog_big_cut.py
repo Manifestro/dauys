@@ -107,3 +107,31 @@ def test_select_cuts_accepts_two_id_tagged_pools_together(tmp_path):
         "pool1/enc/train/tokens/a.pt",
         "pool2/enc/train/tokens/b.pt",
     ]
+
+
+def test_balance_answers_evens_out_add_sums_and_is_stable():
+    from collections import Counter
+
+    from child_dialog_big_cut import balance_answers
+
+    answers = {
+        ("add", "one one"): "Two.",
+        ("add", "five five"): "Ten.",
+        ("add", "four six"): "Ten.",
+        ("add", "three seven"): "Ten.",
+    }
+    rows = [
+        {"id": f"{word}-{i}", "family": "add", "word": word}
+        for _, word in answers
+        for i in range(2000)
+    ]
+    rows += [{"id": f"cat-{i}", "family": "color", "word": "cat"} for i in range(50)]
+    kept = balance_answers(rows, answers, ["add"])
+    by_answer = Counter(
+        answers[("add", row["word"])] for row in kept if row["family"] == "add"
+    )
+    assert by_answer["Two."] == 2000
+    assert abs(by_answer["Ten."] - 2000) < 150
+    assert sum(row["family"] == "color" for row in kept) == 50
+    assert kept == balance_answers(rows, answers, ["add"])
+    assert balance_answers(rows, answers, []) == rows

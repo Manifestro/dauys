@@ -1,8 +1,10 @@
 """Cut nested child-dialogue training manifests by cumulative audio hours."""
 
 import argparse
+import hashlib
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 FRAME_RATE = 12.5
@@ -29,6 +31,55 @@ def apply_speaker_key(rows: list[dict], key: str) -> list[dict]:
         row["voice"] = spec
         row["speaker"] = base_speaker(spec) if key == "base" else spec
     return rows
+
+
+def _keep_score(identity: str) -> float:
+    """A stable number in [0, 1) per row, so balancing is reproducible."""
+    return int(hashlib.sha1(identity.encode()).hexdigest()[:12], 16) / 16**12
+
+
+def balance_answers(
+    rows: list[dict], answers: dict[tuple[str, str], str], families: list[str]
+) -> list[dict]:
+    """Thin each family so every answer is as common as its rarest answer.
+
+    Without this the v2 add family is mostly sums 7-10, and models learn to
+    answer "ten" whatever they hear. Rows are dropped by a stable hash of their
+    ID, so every cut keeps the same rows.
+    """
+    family_set = set(families)
+    if not family_set:
+        return rows
+
+    def answer(row: dict) -> str:
+        key = (str(row["family"]), str(row["word"]))
+        if key not in answers:
+            raise ValueError(f"No answer for {key}")
+        return answers[key]
+
+    counts: dict[str, Counter] = {family: Counter() for family in family_set}
+    for row in rows:
+        if row.get("family") in family_set:
+            counts[row["family"]][answer(row)] += 1
+    kept = []
+    for row in rows:
+        family = row.get("family")
+        if family in family_set:
+            share = min(counts[family].values()) / counts[family][answer(row)]
+            if _keep_score(str(row["id"])) >= share:
+                continue
+        kept.append(row)
+    return kept
+
+
+def load_answers(path: Path) -> dict[tuple[str, str], str]:
+    """Map (family, key) to the spoken answer from a concepts JSONL file."""
+    answers = {}
+    for line in path.read_text().splitlines():
+        if line.strip():
+            concept = json.loads(line)
+            answers[(concept["family"], concept["key"])] = concept["answer"]
+    return answers
 
 
 def select_rows(rows: list[dict], hours: float) -> list[dict]:
@@ -62,6 +113,8 @@ def select_cuts(
     root: Path | None,
     *,
     speaker_key: str = "base",
+    answers: dict[tuple[str, str], str] | None = None,
+    balance_families: list[str] = (),
 ) -> list[dict]:
     """Select a cut and rewrite tokens paths next to their source manifests."""
     rows = []
@@ -71,6 +124,8 @@ def select_cuts(
             row["_source"] = str(manifest.parent)
             row["_tokens"] = str((manifest.parent / str(item["tokens_path"])).resolve())
             rows.append(row)
+    if balance_families:
+        rows = balance_answers(rows, answers or {}, list(balance_families))
     selected = select_rows(rows, hours)
     root_path = None if root is None else Path(root).resolve()
     for row in selected:
@@ -89,7 +144,19 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--root", type=Path)
     parser.add_argument("--speaker-key", choices=("spec", "base"), default="base")
+    parser.add_argument(
+        "--balance-families",
+        nargs="*",
+        default=["add"],
+        help="Families thinned so every answer is equally common (none: pass no names)",
+    )
+    parser.add_argument(
+        "--concepts",
+        type=Path,
+        default=Path(__file__).with_name("child_dialog_concepts_v2.jsonl"),
+    )
     args = parser.parse_args()
+    answers = load_answers(args.concepts) if args.balance_families else None
     manifests = []
     for path in args.manifests:
         rows = [
@@ -103,6 +170,8 @@ def main() -> None:
             hours,
             args.root,
             speaker_key=args.speaker_key,
+            answers=answers,
+            balance_families=args.balance_families,
         )
         path = args.output / f"train-{hours:g}h.jsonl"
         path.write_text("".join(json.dumps(row) + "\n" for row in rows))
