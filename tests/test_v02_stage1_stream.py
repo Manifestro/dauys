@@ -173,3 +173,14 @@ def test_stream_side_batch_stops_after_its_last_step():
     assert stream_active(1, 0) and stream_active(50_000, 0)
     assert stream_active(20_000, 20_000)
     assert not stream_active(20_001, 20_000)
+
+
+def test_bigram_baseline_samples_large_corpora_reproducibly():
+    from v02_stage1_train import bigram_sample
+
+    records = list(range(1_000))
+    assert bigram_sample(records, 0, 0) == records
+    assert bigram_sample(records, 5_000, 0) == records
+    sample = bigram_sample(records, 100, 3)
+    assert len(set(sample)) == 100
+    assert sample == bigram_sample(records, 100, 3)

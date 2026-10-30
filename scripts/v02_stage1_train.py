@@ -239,6 +239,17 @@ def _final_evaluation(
     return result
 
 
+def bigram_sample(records: list, limit: int, seed: int) -> list:
+    """Records for the CB0 bigram baseline: all of them, or a seeded sample.
+
+    Fitting reads every token file in one process, which takes about 20
+    minutes on the full book set; the baseline only needs a fair sample.
+    """
+    if limit <= 0 or len(records) <= limit:
+        return list(records)
+    return random.Random(seed).sample(list(records), limit)
+
+
 def stream_active(step: int, until: int) -> bool:
     """Whether the stream side batch runs at ``step``; ``until`` 0 means always."""
     return until <= 0 or step <= until
@@ -420,6 +431,12 @@ def main() -> None:
     parser.add_argument("--stream-chunk", type=int, default=256)
     parser.add_argument("--stream-weight", type=float, default=1.0)
     parser.add_argument(
+        "--bigram-records",
+        type=int,
+        default=100_000,
+        help="Records sampled to fit the CB0 bigram baseline; 0 uses all of them",
+    )
+    parser.add_argument(
         "--stream-until",
         type=int,
         default=0,
@@ -439,6 +456,8 @@ def main() -> None:
         raise ValueError("Stream rows cannot be negative")
     if args.stream_chunk < 1:
         raise ValueError("The stream chunk must be positive")
+    if args.bigram_records < 0:
+        raise ValueError("--bigram-records cannot be negative")
     if args.stream_until < 0:
         raise ValueError("--stream-until cannot be negative")
     if args.stream_rows > 0 and args.stream_data is None:
@@ -618,7 +637,9 @@ def main() -> None:
         prefetch_factor=2 if args.workers else None,
     )
     train_sample = _spread(records, args.train_sample)
-    bigram = Cb0Bigram.fit(speech_cb0_runs(records))
+    bigram = Cb0Bigram.fit(
+        speech_cb0_runs(bigram_sample(records, args.bigram_records, args.seed))
+    )
     heldout_runs = speech_cb0_runs(heldout)
     provenance = {
         "git_sha": git_sha,
