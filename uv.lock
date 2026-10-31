@@ -84,6 +84,29 @@ wheels = [
 ]
 
 [[package]]
+name = "airon"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/c5/af7e0456e439cba256916988d8a7b089a6b78bc79c4cb919e89ae78d6c2a/airon-0.1.0.tar.gz", hash = "sha256:0c617d0d0d920e9c425e0fe5ac8bfffa587b568d306b9416d5698efed787d76d", size = 70479, upload-time = "2026-10-31T19:33:37.736Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/e5/dfa013acb7d7669fe5733d2e66c11dd326ea940bc97a55b94f727739ad76/airon-0.1.0-py3-none-any.whl", hash = "sha256:05878d0a447a2e1f2d843a9be2891e3f1583266e456342b5dda674eb91ab0e96", size = 43906, upload-time = "2026-10-31T19:33:36.266Z" },
+]
+
+[package.optional-dependencies]
+gpu = [
+    { name = "nvidia-ml-py" },
+]
+
+[[package]]
+name = "annotated-doc"
+version = "0.0.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/8e/38aa427ed5402449e226975b649c5dc73ccadfefeb95e6aecb8f8ea4b6b6/annotated_doc-0.0.5.tar.gz", hash = "sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb", size = 10758, upload-time = "2026-07-28T13:50:58.129Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/30/e900b21425a860e195f32e37657aa1f7c7f2b1bfb26f03ca209b90933c06/annotated_doc-0.0.5-py3-none-any.whl", hash = "sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101", size = 5302, upload-time = "2026-07-28T13:50:57.239Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -409,6 +432,7 @@ name = "dauys"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "airon" },
     { name = "pyyaml" },
     { name = "torch" },
 ]
@@ -417,6 +441,9 @@ dependencies = [
 codec = [
     { name = "moshi" },
 ]
+data = [
+    { name = "hohere" },
+]
 eval = [
     { name = "cmudict" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -424,11 +451,13 @@ eval = [
     { name = "transformers" },
 ]
 gpu = [
+    { name = "airon", extra = ["gpu"] },
     { name = "causal-conv1d" },
     { name = "mamba-ssm", version = "2.3.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
     { name = "mamba-ssm", version = "2.3.2.post1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin' or sys_platform == 'emscripten' or sys_platform == 'win32'" },
 ]
 test = [
+    { name = "hohere" },
     { name = "numpy" },
     { name = "pytest" },
 ]
@@ -448,9 +477,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "airon", specifier = ">=0.1.0" },
+    { name = "airon", extras = ["gpu"], marker = "extra == 'gpu'", specifier = ">=0.1.0" },
     { name = "causal-conv1d", marker = "extra == 'gpu'", specifier = ">=1.4" },
     { name = "cmudict", marker = "extra == 'eval'", specifier = ">=1.0" },
     { name = "datasets", marker = "extra == 'train'", specifier = ">=3.0" },
+    { name = "hohere", marker = "extra == 'data'", git = "https://github.com/Manifestro/hohere?rev=60fc0689610e4180cee1cb2f388f8496d54e9380" },
+    { name = "hohere", marker = "extra == 'test'", git = "https://github.com/Manifestro/hohere?rev=60fc0689610e4180cee1cb2f388f8496d54e9380" },
     { name = "huggingface-hub", marker = "extra == 'train'", specifier = ">=0.24" },
     { name = "mamba-ssm", marker = "extra == 'gpu'", specifier = ">=2.2" },
     { name = "moshi", marker = "extra == 'codec'", specifier = ">=0.2.5" },
@@ -463,7 +496,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'eval'", specifier = ">=4.45" },
     { name = "wandb", marker = "extra == 'train'", specifier = ">=0.22" },
 ]
-provides-extras = ["codec", "gpu", "eval", "test", "train"]
+provides-extras = ["codec", "data", "gpu", "eval", "test", "train"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -598,6 +631,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6c/dc/03a21b89f118664a0926ff25b0f8e44a519bf22724a6a8fc7a9abbc188b6/hf_xet-1.7.0-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:0a9e802f33bf50c851abe45fc5380e61f959e2d369647d6742b79ad9d6c27cab", size = 4418814, upload-time = "2026-10-06T20:18:37.888Z" },
     { url = "https://files.pythonhosted.org/packages/4d/59/b35106dfa71b6eef605dc88bd038fe99c7f86fb132a15b60d0bf2f235b2c/hf_xet-1.7.0-cp38-abi3-win_amd64.whl", hash = "sha256:2b7bb5727889b0f2436dbaaad8fc4c3e66b8240d992716989e0c086b4278b1bc", size = 3822644, upload-time = "2026-10-06T20:18:40.052Z" },
     { url = "https://files.pythonhosted.org/packages/48/cd/072313585f74fe9d441e2eb5e0a4703c30586cd709810ea369675f61b74e/hf_xet-1.7.0-cp38-abi3-win_arm64.whl", hash = "sha256:acc3851cf2576a8fb2ae926da863f4efabe21303cf292e9a44332802ab0dcc6a", size = 3662436, upload-time = "2026-10-06T20:18:42.205Z" },
+]
+
+[[package]]
+name = "hohere"
+version = "2.0.0.dev0"
+source = { git = "https://github.com/Manifestro/hohere?rev=60fc0689610e4180cee1cb2f388f8496d54e9380#60fc0689610e4180cee1cb2f388f8496d54e9380" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "soundfile" },
+    { name = "typer" },
 ]
 
 [[package]]
@@ -782,6 +826,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/af/48/aa7bec0efc7453fa0512276c0069c854bf684219050294266534bfef34bb/mamba_ssm-2.3.2.post1.tar.gz", hash = "sha256:104cc47e9101e5401a675fa2b784f2952b9b037f3b1dd83b5ac544394e95d028", size = 216439, upload-time = "2026-05-09T12:47:51.797Z" }
 
 [[package]]
+name = "markdown-it-py"
+version = "4.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mdurl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/06/ff/7841249c247aa650a76b9ee4bbaeae59370dc8bfd2f6c01f3630c35eb134/markdown_it_py-4.2.0.tar.gz", hash = "sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49", size = 82454, upload-time = "2026-05-07T12:08:28.36Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/81/4da04ced5a082363ecfa159c010d200ecbd959ae410c10c0264a38cac0f5/markdown_it_py-4.2.0-py3-none-any.whl", hash = "sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a", size = 91687, upload-time = "2026-05-07T12:08:27.182Z" },
+]
+
+[[package]]
 name = "markupsafe"
 version = "3.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -817,6 +873,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/52/7632a53360671a9b750cdbabaf9cdd89f18b42248b8e4cb42c0b0296e459/markupsafe-3.0.4-cp312-cp312-win32.whl", hash = "sha256:f0ec3b750b59375eab5b0fb2b9254810c00a3375be6d789899f1055a1d556237", size = 14108, upload-time = "2026-10-02T23:05:05.513Z" },
     { url = "https://files.pythonhosted.org/packages/3f/bf/62495e180b7000aaf30000fff849e933f74264638057176cf46852500adc/markupsafe-3.0.4-cp312-cp312-win_amd64.whl", hash = "sha256:11935df9bf455ed0c04eb87bcd720f02b1fe5e02128a9430f23aed6f93336fc7", size = 14303, upload-time = "2026-10-02T23:05:06.538Z" },
     { url = "https://files.pythonhosted.org/packages/c5/8e/4c24208776a65878d656996945aacfbfe010d3720d1a98fc0eb8491fc03b/markupsafe-3.0.4-cp312-cp312-win_arm64.whl", hash = "sha256:a4bbd2d87dd233b9fc5812160c3d0ffbe42edc22a26ce0469f58479ede633fe9", size = 14174, upload-time = "2026-10-02T23:05:07.617Z" },
+]
+
+[[package]]
+name = "mdurl"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
 ]
 
 [[package]]
@@ -1189,6 +1254,15 @@ dependencies = [
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/fd/142c9cf6e3683dc97ac433adf56d31a3dfe1fd91500788e058ae6750b59d/nvidia_cutlass_dsl_libs_cu12-4.8.1-cp311-cp311-win_amd64.whl", hash = "sha256:bf7fc30af28cd73f0f3be95d67286dca7752993d9f1c019cd69897572c961ffd", size = 74234837, upload-time = "2026-10-16T10:41:06.578Z" },
     { url = "https://files.pythonhosted.org/packages/54/24/1caa4db1286ac4c9df7e048e6129a9ac3c9264eca46d5ed0409fe1868e7f/nvidia_cutlass_dsl_libs_cu12-4.8.1-cp312-cp312-win_amd64.whl", hash = "sha256:519a7c5e87894b13f69a769a27a37f80b3c61d6e4a55a1f37af5f6494c7dc4bc", size = 74240049, upload-time = "2026-10-16T10:42:13.353Z" },
+]
+
+[[package]]
+name = "nvidia-ml-py"
+version = "13.615.71"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fd/30/b25216758be3d3e2834825d8193609e2d71c770a8bd7984438c058c90268/nvidia_ml_py-13.615.71.tar.gz", hash = "sha256:bebe4e48f51b1dc75028c0815cb7bfa14a31a5bb80be70c9d980c6036953fc3d", size = 57485, upload-time = "2026-09-25T15:15:28.226Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/53/a1/1681dfa1c904d4e3e72e51b55a0ff012d50b766843ef832d584abe2113c6/nvidia_ml_py-13.615.71-py3-none-any.whl", hash = "sha256:959bf4adf6fe1308e4bd739e722236b0d1ec8392e2cefad33ff70c311380b9b6", size = 58132, upload-time = "2026-09-25T15:15:26.54Z" },
 ]
 
 [[package]]
@@ -1703,6 +1777,19 @@ wheels = [
 ]
 
 [[package]]
+name = "rich"
+version = "15.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+    { name = "pygments" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c0/8f/0722ca900cc807c13a6a0c696dacf35430f72e0ec571c4275d2371fca3e9/rich-15.0.0.tar.gz", hash = "sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36", size = 230680, upload-time = "2026-04-12T08:24:00.75Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl", hash = "sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb", size = 310654, upload-time = "2026-04-12T08:24:02.83Z" },
+]
+
+[[package]]
 name = "ruff"
 version = "0.17.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1842,6 +1929,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/70/b3/c19426f783614d625699a4b247faf628ea9ab1db228674491767b417f9e1/setuptools-84.2.1.tar.gz", hash = "sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc", size = 1230289, upload-time = "2026-10-20T19:01:37.742Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl", hash = "sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2", size = 876263, upload-time = "2026-10-20T19:01:35.678Z" },
+]
+
+[[package]]
+name = "shellingham"
+version = "1.5.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/58/15/8b3609fd3830ef7b27b655beb4b4e9c62313a4e8da8c676e142cc210d58e/shellingham-1.5.4.tar.gz", hash = "sha256:8dbca0739d487e5bd35ab3ca4b36e11c4078f3a234bfce294b0a0291363404de", size = 10310, upload-time = "2023-10-24T04:13:40.426Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/f9/0595336914c5619e5f28a1fb793285925a8cd4b432c9da0a987836c7f822/shellingham-1.5.4-py2.py3-none-any.whl", hash = "sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686", size = 9755, upload-time = "2023-10-24T04:13:38.866Z" },
 ]
 
 [[package]]
@@ -2086,6 +2182,21 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform == 'darwin'",
     "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform == 'emscripten'",
+]
+
+[[package]]
+name = "typer"
+version = "0.27.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "rich" },
+    { name = "shellingham" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/03/51/d33db42cc72ffd8c30777547b42d01f0cbf9d95a770457698d0174b3ed71/typer-0.27.3.tar.gz", hash = "sha256:d0396f770a560ab1b0a8504e13b5f254b728cedb05c61cf0359e944e50ce8901", size = 205303, upload-time = "2026-10-06T17:24:16.61Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/ea/2e31b67051e91a133189e9c000c222502ddc6969856416de0d095de4c0b0/typer-0.27.3-py3-none-any.whl", hash = "sha256:e50022f28b82a86313e54501317a1db64bf8f8d036ff8cfe5ca7e47675454aff", size = 123312, upload-time = "2026-10-06T17:24:15.054Z" },
 ]
 
 [[package]]

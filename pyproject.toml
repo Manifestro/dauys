@@ -10,15 +10,21 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = "Apache-2.0"
 dependencies = [
+  "airon>=0.1.0",
   "torch>=2.8,<2.9",
   "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
 codec = ["moshi>=0.2.5"]
-gpu = ["mamba-ssm>=2.2", "causal-conv1d>=1.4"]
+data = ["hohere @ git+https://github.com/Manifestro/hohere@60fc0689610e4180cee1cb2f388f8496d54e9380"]
+gpu = ["mamba-ssm>=2.2", "causal-conv1d>=1.4", "airon[gpu]>=0.1.0"]
 eval = ["transformers>=4.45", "cmudict>=1.0", "scipy>=1.11"]
-test = ["pytest>=8.0", "numpy>=1.26"]
+test = [
+  "pytest>=8.0",
+  "numpy>=1.26",
+  "hohere @ git+https://github.com/Manifestro/hohere@60fc0689610e4180cee1cb2f388f8496d54e9380",
+]
 train = ["datasets>=3.0", "soundfile>=0.12", "huggingface-hub>=0.24", "wandb>=0.22"]
 
 [dependency-groups]

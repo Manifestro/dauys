@@ -1,0 +1,29 @@
+model:
+  name: dauys-v1.0-step1
+  # Five Mamba-2 blocks then one self-attention block, repeated three times.
+  # Tuned so the measured trainable count lands in the planned 140-160M band.
+  width: 1024
+  repeats: 3
+  units: 8192
+  mamba_d_state: 64
+  attention_heads: 16
+  ffn_dimension: 2736
+  max_trainable_parameters: 160000000
+
+codec:
+  name: mimi
+  frozen: true
+  sample_rate: 24000
+  frame_rate: 12.5
+  codebooks: 8
+  vocab_size: 2048
+
+streaming:
+  native_full_duplex: false
+  frame_ms: 80
+  attention_window_frames: 1000
+  causal: true
+
+regularization:
+  dropout: 0.1
+  attention_dropout: 0.1

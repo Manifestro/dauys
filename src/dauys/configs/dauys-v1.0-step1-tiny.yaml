@@ -1,0 +1,28 @@
+model:
+  name: dauys-v1.0-step1-tiny
+  # Test-only geometry: same 5 + 1 pattern, a few million parameters.
+  width: 128
+  repeats: 2
+  units: 32
+  mamba_d_state: 64
+  attention_heads: 4
+  ffn_dimension: 320
+  max_trainable_parameters: 5000000
+
+codec:
+  name: mimi
+  frozen: true
+  sample_rate: 24000
+  frame_rate: 12.5
+  codebooks: 8
+  vocab_size: 2048
+
+streaming:
+  native_full_duplex: false
+  frame_ms: 80
+  attention_window_frames: 1000
+  causal: true
+
+regularization:
+  dropout: 0.0
+  attention_dropout: 0.0
