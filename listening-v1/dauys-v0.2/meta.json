@@ -1,0 +1,7 @@
+{
+ "model": "dauys",
+ "commit": "07d09887d95f5436e9ca2357066aa0449f919fca",
+ "seed": 0,
+ "conversations": 267,
+ "checkpoint": "/root/runs/stage2/latest.pt"
+}

@@ -1,0 +1,11 @@
+{
+ "pairs": 40000,
+ "accuracy_sum": 0.584175,
+ "accuracy_sum_ci": {
+  "mean": 0.584175,
+  "low": 0.5793,
+  "high": 0.58885,
+  "n": 40000
+ },
+ "accuracy_mean": 0.588925
+}

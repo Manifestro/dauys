@@ -1,4 +1,4 @@
-# Listening bench v1: Moshi
+# Listening bench v1: Moshi and Dauys v0.2
 
 Run 2026-10-30/31 on one A40. Kept here for later comparison with Dauys v0.2; not a report.
 
@@ -58,3 +58,30 @@ Gaps, 95% bootstrap over conversations:
 | tStoryCloze | 1,871 | **65.4%** [63.3, 67.5] | 79.3% |
 
 Chance is 50% for all three. Moshi normally reads its own text stream while it speaks; here that stream is its own greedy guess, so these numbers are Moshi's audio stream, not Moshi with reference text.
+
+# Dauys v0.2, end of Stage 2
+
+Run 2026-11-01 on one A40, same cached test sets. Checkpoint HF `manifestro/dauys-runs` `full1-stage2/stage2-final.pt`; files in `dauys-v0.2/`. Dauys gets its own silence frame; items are scored as for Moshi. One seed. Full account: AIron, project `dauys`.
+
+Added for both models: `onset-*.json`, contingency on the first 2 s of each model turn.
+
+| CB0 NLL gap | Dauys v0.2 | Moshi |
+| --- | ---: | ---: |
+| Plain swap, all speech | +0.013 [0.002, 0.025] | +0.796 [0.772, 0.822] |
+| Silence, all speech | -0.007 [-0.028, +0.016] | +0.320 [0.309, 0.332] |
+| Timed swap, all speech | +0.009 [0.001, 0.017] | +0.337 [0.324, 0.350] |
+| Plain swap, first 2 s | +0.077 [0.065, 0.090] | +0.827 [0.796, 0.858] |
+| Silence, first 2 s | +0.044 [0.026, 0.063] | +0.523 [0.502, 0.545] |
+| Timed swap, first 2 s | +0.019 [0.010, 0.028] | +0.475 [0.454, 0.497] |
+
+| Measure | Dauys v0.2 | Moshi |
+| --- | ---: | ---: |
+| sWUGGY | 58.4% [57.9, 58.9] | 60.9% [60.4, 61.3] |
+| sBLIMP | 53.0% [52.3, 53.6] | 57.0% [56.4, 57.6] |
+| tStoryCloze | 48.8% [46.5, 51.2] | 65.4% [63.3, 67.5] |
+| Speech in a 60 s generation | 45.0 s | 17.5 s |
+| Excess echo | +0.04% [-0.02, +0.10] | +0.34% [0.23, 0.46] |
+| Voice copy | +0.001 [-0.027, +0.029] | +0.013 [-0.015, +0.040] |
+| Voice cosine to the dataset's assistant | 0.979 | 0.366 |
+
+Neither model's numbers are comparable with the literature on the sLM21 and tStoryCloze tests: items sit on the model's own channel. Moshi was trained on conversations with its text stream; Dauys on this mix. Dauys's voice cosine is high because hohere's assistant voice `af_heart` is the voice it was trained to speak.
