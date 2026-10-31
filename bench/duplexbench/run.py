@@ -140,6 +140,81 @@ def contingency(adapter, rows: list[dict], max_frames: int, seed: int) -> dict:
     return {"summary": summary, "conversations": per}
 
 
+def history_erased(
+    adapter, rows: list[dict], context: int, length: int, seed: int
+) -> dict:
+    """Contingency on the first frames of a model turn, with own past kept or erased.
+
+    Scores the first and the last eligible turn of each conversation. Erasing
+    replaces the model's channel before the turn with silence, which is what a
+    single question and reply looks like to it.
+    """
+    partners = metrics.length_matched_partners([row["a"].shape[-1] for row in rows])
+    silence = adapter.silence
+    per: list[dict[str, float]] = []
+    for index, row in enumerate(rows):
+        frames = min(row["a"].shape[-1], row["b"].shape[-1])
+        onsets = [
+            onset
+            for onset in metrics.reply_onsets(row["activity_b"][:frames])
+            if onset + length <= frames
+            and row["activity_a"][max(0, onset - context) : onset].any()
+        ]
+        partner = rows[partners[index]]
+        swapped = metrics.splice_timed(
+            partner["a"], partner["activity_a"], row["activity_a"][:frames], silence
+        )
+        spliced = metrics.splice_timed(
+            row["a"], row["activity_a"], row["activity_a"][:frames], silence
+        )
+        values: dict[str, list[float]] = {}
+        for onset in sorted({onsets[0], onsets[-1]}) if onsets else []:
+            start, end = max(0, onset - context), onset + length
+            heard = {
+                "true": spliced[:, start:end],
+                "swap_timed": swapped[:, start:end],
+                "silence": silence[:, None].expand(-1, end - start).clone(),
+            }
+            own = row["b"][:, start:end]
+            history = {
+                "kept": own,
+                "erased": metrics.erase_before(own, onset - start, silence),
+            }
+            for kept, own_codes in history.items():
+                cb0, _ = adapter.frame_nll(
+                    torch.stack(list(heard.values())),
+                    own_codes[None].expand(len(heard), -1, -1),
+                )
+                scored = cb0[:, onset - start :]
+                for slot, name in enumerate(heard):
+                    values.setdefault(f"{kept}_{name}", []).append(
+                        float(scored[slot].nanmean())
+                    )
+        if values:
+            per.append(
+                {"id": row["id"], **{k: sum(v) / len(v) for k, v in values.items()}}
+            )
+    summary = {}
+    for kept in ("kept", "erased"):
+        for name in ("true", "swap_timed", "silence"):
+            summary[f"{kept}_{name}"] = metrics.bootstrap_ci(
+                [r[f"{kept}_{name}"] for r in per], seed=seed
+            )
+            if name != "true":
+                summary[f"{kept}_gap_{name}"] = metrics.bootstrap_ci(
+                    [r[f"{kept}_{name}"] - r[f"{kept}_true"] for r in per], seed=seed
+                )
+    summary["erased_minus_kept_gap_swap_timed"] = metrics.bootstrap_ci(
+        [
+            (r["erased_swap_timed"] - r["erased_true"])
+            - (r["kept_swap_timed"] - r["kept_true"])
+            for r in per
+        ],
+        seed=seed,
+    )
+    return {"summary": summary, "conversations": per}
+
+
 def _speech_mask(audio: np.ndarray, frames: int) -> torch.Tensor:
     audio = np.pad(audio, (0, max(0, frames * data.FRAME_SAMPLES - len(audio))))
     chunks = audio[: frames * data.FRAME_SAMPLES].reshape(frames, data.FRAME_SAMPLES)
@@ -346,6 +421,13 @@ def score(args) -> None:
                 "contingency": result["summary"]["cb0_gap_swap"],
                 "seconds": round(time.time() - started),
             },
+            flush=True,
+        )
+    if "history" in args.tests:
+        result = history_erased(adapter, rows, 500, 25, args.seed)
+        data.save_json(out / "history.json", result)
+        print(
+            {"history": result["summary"]["erased_gap_swap_timed"]},
             flush=True,
         )
     for name in ("swuggy", "sblimp", "tstorycloze"):

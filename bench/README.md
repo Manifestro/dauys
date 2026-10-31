@@ -13,6 +13,8 @@ Existing full-duplex benchmarks (Full-Duplex-Bench v1/v1.5/v2, MTR-DuplexBench) 
 | Voice similarity | Does the model copy its partner's voice? | Speaker-embedding cosine (WavLM-base-plus-sv) between the model's generated speech and its partner's voice, against other partners' voices. Voice copy = user − other user. |
 | sWUGGY, sBLIMP, tStoryCloze | Does the semantic stream know words, grammar, story sense? | The item is spoken on the model's own channel after 0.5 s of silence, with silence on the partner channel. Pairwise accuracy of summed CB0 log-likelihood (mean-normalized as a second view). |
 
+`--tests history` repeats the timed swap on the first 2 s of model turns, with the model's own past kept or replaced by silence, to see whether its own past hides the partner.
+
 All intervals are 95% bootstrap intervals over conversations or pairs.
 
 ## Data

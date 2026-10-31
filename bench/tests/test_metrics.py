@@ -107,3 +107,40 @@ def test_splice_timed_keeps_target_timing():
     out = metrics.splice_timed(source, source_activity, target_activity, silence)
     assert out.shape == (8, 7)
     assert out[0].tolist() == [1, 2, -5, -5, 4, 1, 2]
+
+
+def test_reply_onsets_need_a_pause_before_speech():
+    activity = torch.tensor([0] * 6 + [1, 1, 0, 0, 1] + [0] * 6 + [1]).bool()
+    assert metrics.reply_onsets(activity) == [6, 17]
+
+
+def test_erase_before_keeps_the_turn():
+    codes = torch.arange(8 * 4).reshape(8, 4)
+    out = metrics.erase_before(codes, 2, torch.full((8,), -1))
+    assert (out[:, :2] == -1).all() and (out[:, 2:] == codes[:, 2:]).all()
+
+
+def test_history_erased_reports_a_gap_for_each_history():
+    class Fake:
+        silence = torch.zeros(8, dtype=torch.long)
+
+        def frame_nll(self, user, own):
+            cost = (user[:, 0] != own[:, 0]).float() + own[:, 0].eq(0).float()
+            return cost, cost
+
+    activity_a = torch.tensor([0, 1, 1, 1] + [0] * 6 + [0] * 20).bool()
+    activity_b = torch.tensor([0] * 10 + [1] * 20).bool()
+    rows = [
+        {
+            "id": str(i),
+            "a": torch.full((8, 30), i + 1),
+            "b": torch.full((8, 30), 5),
+            "activity_a": activity_a,
+            "activity_b": activity_b,
+        }
+        for i in range(2)
+    ]
+    result = run.history_erased(Fake(), rows, 100, 5, 0)
+    assert len(result["conversations"]) == 2
+    assert result["summary"]["erased_gap_swap_timed"]["n"] == 2
+    assert "kept_gap_silence" in result["summary"]

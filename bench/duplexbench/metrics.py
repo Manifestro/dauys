@@ -75,6 +75,25 @@ def splice_timed(
     return out
 
 
+def reply_onsets(activity: torch.Tensor, *, min_pause: int = 6) -> list[int]:
+    """Frames where the model starts speaking after at least ``min_pause`` silent."""
+    active = activity.bool()
+    onsets = []
+    for frame in range(min_pause, active.shape[-1]):
+        if active[frame] and not active[frame - min_pause : frame].any():
+            onsets.append(frame)
+    return onsets
+
+
+def erase_before(
+    codes: torch.Tensor, frame: int, silence: torch.Tensor
+) -> torch.Tensor:
+    """[K, T] codes with everything before ``frame`` replaced by the silence frame."""
+    out = codes.clone()
+    out[:, :frame] = silence[:, None].to(codes)
+    return out
+
+
 def ngrams(tokens: Sequence[int], n: int) -> list[tuple[int, ...]]:
     return [tuple(tokens[index : index + n]) for index in range(len(tokens) - n + 1)]
 
