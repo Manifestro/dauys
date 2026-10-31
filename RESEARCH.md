@@ -1,5 +1,7 @@
 # Research protocol
 
+This is the protocol of the v0.1 baseline, which is complete. Its evidence standard still applies to later work. Current status is in the [README](README.md).
+
 ## Question
 
 Can a compact, audio-native model learn useful spoken interaction from synchronized conversations without text supervision?

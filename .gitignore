@@ -29,3 +29,6 @@ mlruns/
 .env.*
 !.env.example
 .DS_Store
+
+# Local agent sessions
+.dsh-session*
