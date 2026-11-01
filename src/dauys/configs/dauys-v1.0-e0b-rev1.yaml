@@ -1,0 +1,29 @@
+model:
+  name: dauys-v1.0-e0b-rev1
+  scheme: rev1
+  # The tower of rev2, narrower, plus a jointly trained three-block ear and a
+  # cross block after every third tower layer. All of the partner goes through the ear.
+  width: 416
+  repeats: 3
+  mamba_d_state: 64
+  attention_heads: 8
+  ffn_dimension: 1400
+  ear_layers: 3
+  cross_every: 3
+  depth_dim: 256
+  depth_heads: 8
+  depth_layers: 2
+  max_trainable_parameters: 50000000
+
+codec:
+  name: mimi
+  frozen: true
+  sample_rate: 24000
+  frame_rate: 12.5
+  codebooks: 8
+  vocab_size: 2048
+
+streaming:
+  frame_ms: 80
+  attention_window_frames: 1024
+  causal: true

@@ -1,0 +1,27 @@
+model:
+  name: dauys-v1.0-e0b-rev2
+  scheme: rev2
+  # Three Mamba-2 blocks then one self-attention block, repeated three times.
+  # rev1 is tuned to this size: parameters and rough FLOPs within 5%.
+  width: 512
+  repeats: 3
+  mamba_d_state: 64
+  attention_heads: 8
+  ffn_dimension: 1368
+  depth_dim: 256
+  depth_heads: 8
+  depth_layers: 2
+  max_trainable_parameters: 50000000
+
+codec:
+  name: mimi
+  frozen: true
+  sample_rate: 24000
+  frame_rate: 12.5
+  codebooks: 8
+  vocab_size: 2048
+
+streaming:
+  frame_ms: 80
+  attention_window_frames: 1024
+  causal: true

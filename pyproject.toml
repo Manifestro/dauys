@@ -19,7 +19,7 @@ dependencies = [
 codec = ["moshi>=0.2.5"]
 data = ["hohere @ git+https://github.com/Manifestro/hohere@60fc0689610e4180cee1cb2f388f8496d54e9380"]
 gpu = ["mamba-ssm>=2.2", "causal-conv1d>=1.4", "airon[gpu]>=0.1.0"]
-eval = ["transformers>=4.45", "cmudict>=1.0", "scipy>=1.11"]
+eval = ["transformers>=4.45", "cmudict>=1.0", "scipy>=1.11", "matplotlib>=3.8"]
 test = [
   "pytest>=8.0",
   "numpy>=1.26",
