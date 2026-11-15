@@ -115,7 +115,7 @@ def main() -> None:
     model = Tower(cfg).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
     sampler = TrainSampler(train, K, 16, 8, seed=0)
-    for step in range(600):
+    for step in range(2000):
         batch = {k_: v.to(device) for k_, v in sampler().items()}
         loss, logs = model.loss(batch)
         opt.zero_grad()
