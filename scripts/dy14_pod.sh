@@ -15,6 +15,7 @@ KZ_COMMIT=8be51925ecb872cf4894deafee716a317eb93516
 STAGE=${STAGE:-all}
 until [[ -s /etc/airon.env ]]; do sleep 5; done
 set -a; . /etc/airon.env; set +a
+GITHUB_API=${GITHUB_API:-${GH_TOKEN:-}}  # the AWS instances name the GitHub token GH_TOKEN
 for v in GITHUB_API HF_TOKEN AIRON_API_KEY AIRON_URL; do
   [[ -n "${!v:-}" ]] || { echo "secret $v is not set; not starting"; exit 1; }
 done
