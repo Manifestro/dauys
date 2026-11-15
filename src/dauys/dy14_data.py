@@ -49,6 +49,7 @@ class Conv:
         self.valid = (self.window_units >= MIN_UNITS) & (t + GAP + WIN <= self.length)[
             None
         ]
+        self.starts = [np.flatnonzero(self.valid[c]) for c in range(2)]
         # next own unit within OWN_AHEAD frames, -100 if none
         self.next_unit = np.full((2, self.length), -100, np.int64)
         for ch in range(2):
@@ -85,7 +86,19 @@ def pad_windows(windows: list[np.ndarray], k: int) -> tuple[torch.Tensor, torch.
 
 
 def hard_negatives(conv: Conv, ch: int, t: int, rng: np.random.Generator) -> list[int]:
-    starts = np.flatnonzero(conv.valid[ch])
+    """NEGATIVES distinct valid window starts of ``ch`` at least MIN_DIST from ``t``.
+
+    Rejection sampling: ``rng.choice`` without replacement permutes every start of the
+    conversation for each anchor, which made the sampler the bottleneck.
+    """
+    starts = conv.starts[ch]
+    picked: set[int] = set()
+    for _ in range(20 * NEGATIVES):
+        s = int(starts[rng.integers(len(starts))]) if len(starts) else t
+        if abs(s - t) >= MIN_DIST:
+            picked.add(s)
+            if len(picked) == NEGATIVES:
+                return sorted(picked)
     far = starts[np.abs(starts - t) >= MIN_DIST]
     if len(far) < NEGATIVES:
         return []
@@ -107,6 +120,23 @@ def sequence(
             )
         ),
     }
+
+
+class TrainStream(torch.utils.data.IterableDataset):
+    """Endless TrainSampler batches; each DataLoader worker draws with its own seed."""
+
+    def __init__(
+        self, convs: list[Conv], k: int, batch: int, anchors: int, seed: int
+    ) -> None:
+        self.args = (convs, k, batch, anchors, seed)
+
+    def __iter__(self):
+        convs, k, batch, anchors, seed = self.args
+        info = torch.utils.data.get_worker_info()
+        worker = info.id if info else 0
+        sampler = TrainSampler(convs, k, batch, anchors, seed=seed * 1000 + worker)
+        while True:
+            yield sampler()
 
 
 class TrainSampler:

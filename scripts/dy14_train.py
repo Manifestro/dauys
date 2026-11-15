@@ -19,7 +19,7 @@ from pathlib import Path
 import airon
 import torch
 
-from dauys.dy14_data import TrainSampler, build_eval_anchors, load_convs
+from dauys.dy14_data import TrainStream, build_eval_anchors, load_convs
 from dauys.dy14_eval import correct_per_anchor, summarize
 from dauys.dy14_model import Tower, TowerConfig
 
@@ -52,6 +52,9 @@ def main() -> None:
         "--peer", default="", help="status file of the other seed for the stop rule"
     )
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument(
+        "--workers", type=int, default=6, help="CPU workers building batches"
+    )
     p.add_argument("--tracking", default="on", choices=["on", "off"])
     args = p.parse_args()
 
@@ -83,7 +86,6 @@ def main() -> None:
         lr=args.lr,
         betas=(0.9, 0.95),
     )
-    sampler = TrainSampler(train, args.k, args.batch, args.anchors, seed=args.seed)
 
     meta_path = out / "metadata.json"
     start, best = 0, -1.0
@@ -92,7 +94,6 @@ def main() -> None:
         model.load_state_dict(state["model"])
         opt.load_state_dict(state["opt"])
         start, best = state["step"], state["best"]
-        sampler.rng = state["rng"]
         meta = json.loads(meta_path.read_text())
     else:
         meta = {
@@ -131,12 +132,26 @@ def main() -> None:
         resume="allow",
         mode="disabled" if args.tracking == "off" else None,
     )
+    # batches are built on CPU workers; a resumed run draws new batches (seed + step)
+    stream = TrainStream(
+        train, args.k, args.batch, args.anchors, seed=args.seed + start
+    )
+    loader = iter(
+        torch.utils.data.DataLoader(
+            stream,
+            batch_size=None,
+            num_workers=args.workers,
+            pin_memory=device.type == "cuda",
+            prefetch_factor=4 if args.workers else None,
+            persistent_workers=bool(args.workers),
+        )
+    )
     model.train()
     t0 = time.time()
     for step in range(start, args.steps):
         for group in opt.param_groups:
             group["lr"] = lr_at(step, args.steps, args.lr, args.warmup)
-        batch = sampler()
+        batch = next(loader)
         if len(batch["anchor_row"]) == 0:
             continue
         batch = {key: v.to(device, non_blocking=True) for key, v in batch.items()}
@@ -176,7 +191,6 @@ def main() -> None:
                 "opt": opt.state_dict(),
                 "step": step + 1,
                 "best": max(best, res["acc_all"]),
-                "rng": sampler.rng,
                 "cfg": vars(cfg),
             }
             if res["acc_all"] > best:
