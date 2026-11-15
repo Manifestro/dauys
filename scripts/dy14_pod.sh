@@ -16,6 +16,7 @@ STAGE=${STAGE:-all}
 until [[ -s /etc/airon.env ]]; do sleep 5; done
 set -a; . /etc/airon.env; set +a
 GITHUB_API=${GITHUB_API:-${GH_TOKEN:-}}  # the AWS instances name the GitHub token GH_TOKEN
+AIRON_URL=${AIRON_URL%/v1}  # AWS gives the URL with /v1; the airon client adds /v1 itself
 for v in GITHUB_API HF_TOKEN AIRON_API_KEY AIRON_URL; do
   [[ -n "${!v:-}" ]] || { echo "secret $v is not set; not starting"; exit 1; }
 done
