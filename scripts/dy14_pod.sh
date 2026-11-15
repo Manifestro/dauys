@@ -56,6 +56,8 @@ if ! done_ data; then
   }
   export -f one; export S3
   awk '$2 ~ /^oy16-/ {print $2}' /data/manifest_stage1.txt | xargs -P 6 -n 1 bash -c 'one "$0"' || { echo "download failed"; exit 1; }
+  # the ready set names folders conv_conv_<id>; the split names them conv_<id>
+  for d in /data/oy16/conv_conv_*; do ln -sfn "$d" "/data/oy16/${d#/data/oy16/conv_}"; done
   python - <<EOF || exit 1
 import json, pathlib
 s = json.load(open("$SPLIT"))
