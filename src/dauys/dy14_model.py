@@ -43,6 +43,11 @@ def rope(x: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
     return torch.cat([a * cos - b * sin, a * sin + b * cos], -1)
 
 
+def top1(scores: torch.Tensor) -> torch.Tensor:
+    """True window strictly above every other; ties and NaN count as wrong."""
+    return scores[:, 0] > scores[:, 1:].max(1).values
+
+
 class Block(nn.Module):
     def __init__(self, d: int, heads: int, ffn: int) -> None:
         super().__init__()
@@ -142,7 +147,10 @@ class Tower(nn.Module):
         )
         scale = self.log_scale.clamp(max=4.6052).exp()
         eye = torch.eye(len(hard), device=hard.device, dtype=torch.bool)
-        logits = torch.cat([hard, inbatch.masked_fill(eye, float("-inf"))], 1) * scale
+        # mask after scaling: -inf times the learned scale gives a NaN gradient
+        logits = torch.cat(
+            [hard * scale, (inbatch * scale).masked_fill(eye, float("-inf"))], 1
+        )
         nce = F.cross_entropy(
             logits, torch.zeros(len(hard), dtype=torch.long, device=hard.device)
         )
@@ -153,7 +161,7 @@ class Tower(nn.Module):
         )
         who = F.binary_cross_entropy_with_logits(self.who(h).float(), batch["who"])
         total = nce + 0.5 * own + 0.2 * who
-        acc = (hard.argmax(1) == 0).float().mean()
+        acc = top1(hard).float().mean()
         return total, {
             "loss": total.item(),
             "nce": nce.item(),

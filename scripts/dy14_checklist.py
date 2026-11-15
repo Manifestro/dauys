@@ -122,6 +122,8 @@ def main() -> None:
         loss.backward()
         opt.step()
     anchors = build_eval_anchors(test, per_window=20)
+    # only channel 1 repeats channel 0, so only self = 0 has a knowable partner window
+    anchors["items"] = [it for it in anchors["items"] if it["ch"] == 0]
     real = correct_per_anchor(model, test, anchors, swap=False, device=device)
     swapped = correct_per_anchor(model, test, anchors, swap=True, device=device)
     res = summarize(real, swapped, anchors)

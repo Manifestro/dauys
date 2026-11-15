@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from .dy14_data import NEGATIVES, Conv, pad_windows, sequence
-from .dy14_model import Tower
+from .dy14_model import Tower, top1
 
 
 @torch.no_grad()
@@ -63,7 +63,7 @@ def correct_per_anchor(
                 ids.view(n, NEGATIVES + 1, -1).to(device),
                 mask.view(n, NEGATIVES + 1, -1).to(device),
             )
-        out[idx] = (hard.argmax(1) == 0).cpu().numpy()
+        out[idx] = top1(hard).cpu().numpy()
     model.train()
     return out
 
