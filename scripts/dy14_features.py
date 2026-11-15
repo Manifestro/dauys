@@ -11,6 +11,8 @@ is skipped, so the step resumes.
 
 import argparse
 import json
+import subprocess
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -56,13 +58,34 @@ def main() -> None:
         "--limit", type=int, default=0, help="first N conversations per part (dry run)"
     )
     p.add_argument("--workers", type=int, default=12)
+    p.add_argument("--shards", type=int, default=3, help="extractors sharing the GPU")
+    p.add_argument("--shard", type=int, default=-1)
     args = p.parse_args()
+
+    if args.shards > 1 and args.shard < 0:
+        # several extractors keep the GPU busy while each one's pool segments on the CPU
+        cmd = [
+            sys.executable,
+            *sys.argv,
+            "--workers",
+            str(max(args.workers // args.shards, 2)),
+        ]
+        procs = [
+            subprocess.Popen([*cmd, "--shard", str(i)]) for i in range(args.shards)
+        ]
+        codes = [proc.wait() for proc in procs]
+        if any(codes):
+            raise SystemExit(f"feature shards failed: {codes}")
+        print("FEATURES DONE all shards", flush=True)
+        return
 
     split = json.loads(Path(args.split).read_text())
     convs = []
     for part in args.parts.split(","):
         names = split[part][: args.limit or None]
         convs += names
+    if args.shard >= 0:
+        convs = convs[args.shard :: args.shards]
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
