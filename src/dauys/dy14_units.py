@@ -243,11 +243,12 @@ def build_track(
     voiced: np.ndarray,
 ) -> Track:
     if len(segments):
-        c = np.concatenate(
-            [np.zeros((1, states.shape[1])), np.cumsum(states, 0, np.float64)]
-        )
+        # sums over [start, end) by reduceat on interleaved bounds; a zero row keeps
+        # every index inside the array when the last segment ends at the last frame
+        padded = np.concatenate([states, np.zeros((1, states.shape[1]), states.dtype)])
+        sums = np.add.reduceat(padded, segments.reshape(-1), axis=0)[0::2]
         n = (segments[:, 1] - segments[:, 0])[:, None]
-        feats = ((c[segments[:, 1]] - c[segments[:, 0]]) / n).astype(np.float16)
+        feats = (sums / n).astype(np.float16)
     else:
         feats = np.zeros((0, 768), np.float16)
     rms_own = segment_rms(own, segments)
