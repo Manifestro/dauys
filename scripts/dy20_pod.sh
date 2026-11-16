@@ -70,7 +70,7 @@ EOF
 fi
 
 if ! done_ features; then
-  python "$repo/scripts/dy14_features.py" --root /data/dc --split $W/split_dc.json --parts dc --out $W/seg --workers 28 --shards 6 || exit 1
+  python "$repo/scripts/dy14_features.py" --root /data/dc --split $W/split_dc.json --parts dc --out $W/seg --workers 14 --shards 5 || exit 1
   mark features
 fi
 
