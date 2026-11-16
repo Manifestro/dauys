@@ -92,6 +92,9 @@ def main() -> None:
         torch.save(centroids.cpu(), centroids_path)
         del allf, feats, x
 
+    # mean raw Sylber feature per unit over kept train segments: the synthesis lookup
+    sums = torch.zeros(args.k, centroids.shape[1], device=device, dtype=torch.float64)
+    counts = torch.zeros(args.k, device=device, dtype=torch.float64)
     stats = {}
     for part, convs in parts.items():
         tot = {
@@ -122,6 +125,11 @@ def main() -> None:
                     args.k,
                 )
                 saved[f"tok_{t}"], saved[f"pros_{t}"] = tok, pros
+                if part == "train" and len(f):
+                    kept = torch.from_numpy(z[f"{t}_keep"]).to(device)
+                    u = torch.from_numpy(units).to(device)[kept]
+                    sums.index_add_(0, u, f[kept].double())
+                    counts += torch.bincount(u, minlength=args.k).double()
                 for key in st:
                     tot[key] += st[key]
                 tot["segments"] += len(z[f"{t}_keep"])
@@ -132,6 +140,9 @@ def main() -> None:
         stats[part] = tot
         print(json.dumps({part: tot}), flush=True)
     (out / "stats.json").write_text(json.dumps(stats, indent=2))
+    if counts.sum() > 0:
+        means = (sums / counts.clamp(min=1)[:, None]).float().cpu()
+        torch.save({"means": means, "counts": counts.cpu()}, out / "unit_means.pt")
     print("GRID DONE", flush=True)
 
 
