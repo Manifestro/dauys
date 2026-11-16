@@ -24,8 +24,7 @@ from dy16_generate import moments
 from dy17_generate import control_moments, run_all
 
 from dauys.dy14_data import load_convs
-from dauys.dy14_model import TowerConfig
-from dauys.dy16_model import Speaker
+from dauys.dy19_model import load_speaker
 
 FALSE_START = 0.10
 
@@ -44,9 +43,7 @@ def main() -> None:
     convs = load_convs(args.grid, split["val"], args.k)
     ctrl = control_moments(convs, args.n)
     reply = moments(convs, args.n)
-    ck = torch.load(args.model, map_location="cpu", weights_only=False)
-    model = Speaker(TowerConfig(**ck["cfg"])).to(device)
-    model.load_state_dict(ck["model"])
+    model = load_speaker(args.model, device)
     _, sc = run_all(model, convs, ctrl, device, False, float("inf"))
     _, sr = run_all(model, convs, reply, device, False, float("inf"))
     cmax = sc[:, :30].max(1)

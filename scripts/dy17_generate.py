@@ -31,6 +31,7 @@ from dy16_generate import GEN, judge_content, timing_form
 from dauys.dy14_data import CTX, GAP, WIN, Conv, WHO_AHEAD, load_convs
 from dauys.dy14_model import Tower, TowerConfig
 from dauys.dy16_model import Speaker, sample_next
+from dauys.dy19_model import load_speaker
 
 THRESHOLD = 0.5
 
@@ -118,6 +119,8 @@ def generate_gated(
         else:
             p_self = torch.sigmoid(model.who(last).float())[:, :WHO_AHEAD]
         score = p_self.mean(1)
+        if hasattr(model, "onset") and not oracle:
+            score = torch.sigmoid(model.onset_logits(last))  # DY-19: the trained onset head
         scores.append(score)
         logits = model.speech_logits(last)
         free = sample_next(logits, temperature, top_p, gen)
@@ -178,9 +181,7 @@ def main() -> None:
         cpath.write_text(json.dumps(control_moments(convs, args.n)))
     ctrl = json.loads(cpath.read_text())
 
-    ck = torch.load(args.model, map_location="cpu", weights_only=False)
-    model = Speaker(TowerConfig(**ck["cfg"])).to(device)
-    model.load_state_dict(ck["model"])
+    model = load_speaker(args.model, device)
     thr = args.threshold
     if args.threshold_file:
         thr = json.loads(Path(args.threshold_file).read_text())["threshold"]
