@@ -60,7 +60,7 @@ def main() -> None:
     cent = torch.load(args.centroids).to(device)
     done = {line.split()[-1].removesuffix(".npz") for line in sh(f"aws s3 ls {args.dst}/ || true").splitlines()
             if line.strip().endswith(".npz")}
-    mine = [s for s in shards(args.src) if s not in done][k::n]
+    mine = [s for s in shards(args.src)[k::n] if s not in done]  # fixed assignment, so instances never overlap
     if args.max_shards:
         mine = mine[: args.max_shards]
     t0, audio_s = time.time(), 0.0
