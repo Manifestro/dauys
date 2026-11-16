@@ -114,6 +114,8 @@ if ! done_ dry; then
   mark dry
 fi
 
+SEEDS=${SEEDS:-0 1}
+RUNS=$(for s in $SEEDS; do printf "%s," "$W/runs/s$s"; done); RUNS=${RUNS%,}
 export DAUYS_EXPERIMENT="DY-20: те же 109M с нуля на Open Yap + 1000 ч DuplexChat (Kezek v1) — растёт ли слух от данных" DAUYS_TAG=dy20
 if ! done_ filter; then
   # DuplexChat pieces where the bleed filter left one person almost without units are not two-person speech
@@ -135,17 +137,17 @@ EOF
   mark filter
 fi
 if ! done_ train; then
-  for s in 0 1; do
+  for s in $SEEDS; do
     python "$repo/scripts/dy14_train.py" --grid $W/grid --split $W/split.json --out $W/runs/s$s --seed $s --steps 20000 --stop-at 8000 \
       > $W/train_s$s.log 2>&1 &
   done
   wait
-  for s in 0 1; do [[ -e $W/runs/s$s/DONE || -e $W/runs/s$s/STOPPED ]] || { echo "seed $s did not finish"; tail -5 $W/train_s$s.log; exit 1; }; done
+  for s in $SEEDS; do [[ -e $W/runs/s$s/DONE || -e $W/runs/s$s/STOPPED ]] || { echo "seed $s did not finish"; tail -5 $W/train_s$s.log; exit 1; }; done
   mark train
 fi
 if ! done_ eval; then
   python "$repo/scripts/dy14_eval.py" --grid $W/grid --split $W/split.json --anchors /data/dy14/test_anchors.json \
-    --runs $W/runs/s0,$W/runs/s1 --out $W/result.json || exit 1
+    --runs $RUNS --out $W/result.json || exit 1
   mark eval
 fi
 if ! done_ upload; then
