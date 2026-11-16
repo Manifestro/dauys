@@ -47,6 +47,7 @@ def main() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--seed", type=int, required=True)
     p.add_argument("--steps", type=int, default=20000)
+    p.add_argument("--stop-at", type=int, default=0, help="end early at this step; the lr schedule stays that of --steps")
     p.add_argument("--batch", type=int, default=64)
     p.add_argument("--anchors", type=int, default=16)
     p.add_argument("--lr", type=float, default=3e-4)
@@ -153,7 +154,7 @@ def main() -> None:
     )
     model.train()
     t0 = time.time()
-    for step in range(start, args.steps):
+    for step in range(start, min(args.steps, args.stop_at or args.steps)):
         for group in opt.param_groups:
             group["lr"] = lr_at(step, args.steps, args.lr, args.warmup)
         batch = next(loader)

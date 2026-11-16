@@ -117,7 +117,7 @@ fi
 export DAUYS_EXPERIMENT="DY-20: те же 109M с нуля на Open Yap + 1000 ч DuplexChat (Kezek v1) — растёт ли слух от данных" DAUYS_TAG=dy20
 if ! done_ train; then
   for s in 0 1; do
-    python "$repo/scripts/dy14_train.py" --grid $W/grid --split $W/split.json --out $W/runs/s$s --seed $s --steps 12000 \
+    python "$repo/scripts/dy14_train.py" --grid $W/grid --split $W/split.json --out $W/runs/s$s --seed $s --steps 20000 --stop-at 8000 \
       > $W/train_s$s.log 2>&1 &
   done
   wait
