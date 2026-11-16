@@ -58,10 +58,8 @@ EOF
     || { echo "DC checksum mismatch"; exit 1; }
   cat /data/dcraw/MANIFEST.* > /tmp/dc_manifest.txt
   # the converted pieces go to the local NVMe when there is one (EBS reads at ~125 MB/s)
-  if [[ -b /dev/nvme1n1 ]] && ! mountpoint -q /nvme; then
-    sudo mkfs.ext4 -q -F /dev/nvme1n1 && sudo mkdir -p /nvme && sudo mount /dev/nvme1n1 /nvme && sudo chown "$USER" /nvme
-  fi
-  if mountpoint -q /nvme; then rm -rf /data/dc; mkdir -p /nvme/dc; ln -sfn /nvme/dc /data/dc; fi
+  NV=/opt/dlami/nvme  # the AMI mounts the instance NVMe here
+  if mountpoint -q $NV; then sudo chown "$USER" $NV; rm -rf /data/dc; mkdir -p $NV/dc; ln -sfn $NV/dc /data/dc; fi
   python "$repo/scripts/dy20_dc_prepare.py" --src /data/dcraw --out /data/dc --manifest /tmp/dc_manifest.txt || exit 1
   python - <<EOF || exit 1
 import json
