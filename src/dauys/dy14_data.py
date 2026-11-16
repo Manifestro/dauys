@@ -54,6 +54,8 @@ class Conv:
         self.next_unit = np.full((2, self.length), -100, np.int64)
         for ch in range(2):
             pos = np.flatnonzero(self.unit[ch])
+            if len(pos) == 0:  # a channel without a single unit (DY-20: bleed filter dropped all)
+                continue
             idx = np.searchsorted(pos, t, side="right")
             ok = idx < len(pos)
             nxt = np.where(ok, pos[np.minimum(idx, len(pos) - 1)], 10**9)

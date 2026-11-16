@@ -115,6 +115,25 @@ if ! done_ dry; then
 fi
 
 export DAUYS_EXPERIMENT="DY-20: те же 109M с нуля на Open Yap + 1000 ч DuplexChat (Kezek v1) — растёт ли слух от данных" DAUYS_TAG=dy20
+if ! done_ filter; then
+  # DuplexChat pieces where the bleed filter left one person almost without units are not two-person speech
+  python - <<EOF || exit 1
+import json, numpy as np
+split = json.load(open("$W/split.json"))
+keep, drop = [], 0
+for n in split["train"]:
+    if n.startswith("dc_"):
+        z = np.load(f"$W/grid/{n}.npz")
+        if min(int((z["tok_a"] < 8192).sum()), int((z["tok_b"] < 8192).sum())) < 50:
+            drop += 1
+            continue
+    keep.append(n)
+split["train"] = keep
+json.dump(split, open("$W/split.json", "w"))
+print("filter: dropped", drop, "dc pieces with < 50 units on a side; train", len(keep))
+EOF
+  mark filter
+fi
 if ! done_ train; then
   for s in 0 1; do
     python "$repo/scripts/dy14_train.py" --grid $W/grid --split $W/split.json --out $W/runs/s$s --seed $s --steps 20000 --stop-at 8000 \
