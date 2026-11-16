@@ -58,6 +58,7 @@ def main() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--steps", type=int, default=16000)
     p.add_argument("--batch", type=int, default=64)
+    p.add_argument("--micro", type=int, default=32, help="micro-batch; gradients are accumulated up to --batch")
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--warmup", type=int, default=1000)
     p.add_argument("--val-every", type=int, default=1000)
@@ -128,10 +129,15 @@ def main() -> None:
         starts = rng.integers(0, len(train) - T - 1, size=args.batch)
         ids = torch.from_numpy(np.stack([train[s : s + T + 1] for s in starts]).astype(np.int64)).to(device,
                                                                                                     non_blocking=True)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            total, logs = loss(model, tgt, ids)
         opt.zero_grad(set_to_none=True)
-        total.backward()
+        chunks = ids.split(args.micro)
+        logs = {}
+        for c in chunks:
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                total, part = loss(model, tgt, c)
+            (total / len(chunks)).backward()
+            for k, v in part.items():
+                logs[k] = logs.get(k, 0.0) + v / len(chunks)
         logs["grad_norm"] = float(torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0))
         opt.step()
         ema_update(tgt, model, args.ema)
