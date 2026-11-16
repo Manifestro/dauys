@@ -9,6 +9,7 @@ Writes ``OUT/dc_names.json`` (kept names, hours) and deletes each shard's .bin a
 """
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -23,17 +24,28 @@ def main() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--min-s", type=float, default=80.0)
     p.add_argument("--min-speech-s", type=float, default=10.0)
+    p.add_argument("--manifest", default="", help="cat of MANIFEST.*: a.bin / b.bin are checked against it while read")
     args = p.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    want = {}
+    if args.manifest:
+        for line in open(args.manifest):
+            h, f = line.split()
+            want[f] = h
     names, kept_s, all_s, n_all = [], 0.0, 0.0, 0
     for d in sorted(Path(args.src).iterdir()):
         if not (d / "index.npy").exists():
             continue
         idx = np.load(d / "index.npy")
         rows = [json.loads(line) for line in open(d / "pieces.jsonl")]
-        a = np.memmap(d / "a.bin", dtype=np.int16, mode="r")
-        b = np.memmap(d / "b.bin", dtype=np.int16, mode="r")
+        raw = {}
+        for f in ("a.bin", "b.bin"):
+            raw[f] = (d / f).read_bytes()
+            if want and hashlib.sha256(raw[f]).hexdigest() != want[f"{d.name}/{f}"]:
+                raise SystemExit(f"checksum mismatch {d.name}/{f}")
+        a = np.frombuffer(raw["a.bin"], dtype=np.int16)
+        b = np.frombuffer(raw["b.bin"], dtype=np.int16)
         for i, ((st, n), r) in enumerate(zip(idx, rows)):
             n_all += 1
             all_s += n / SR
@@ -50,7 +62,7 @@ def main() -> None:
             np.save(out / name / "b.npy", np.asarray(b[st : st + n]))
             names.append(name)
             kept_s += n / SR
-        del a, b
+        del a, b, raw
         for f in ("a.bin", "b.bin"):
             (d / f).unlink()
     info = {

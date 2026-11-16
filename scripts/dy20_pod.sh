@@ -52,11 +52,17 @@ from huggingface_hub import hf_hub_download
 shutil.copy(hf_hub_download("manifestro/dauys-runs", "dy14/test_anchors.json", token=os.environ["HF_TOKEN"]), "/data/dy14/test_anchors.json")
 print("artifacts ok")
 EOF
-  aws s3 cp --recursive s3://manifestro-dataset-876108973178-us-east-1-an/outputs/duplexchat/kezek-v1-1000h/ /data/dcraw/ \
+  aws s3 sync s3://manifestro-dataset-876108973178-us-east-1-an/outputs/duplexchat/kezek-v1-1000h/ /data/dcraw/ \
     --exclude "*act*" --exclude "CLAIM*" --exclude "DONE*" --only-show-errors || exit 1
-  ( cd /data/dcraw && cat MANIFEST.* | grep -v "act" | grep -E "/(a\.bin|b\.bin|index\.npy|pieces\.jsonl)$" | sha256sum -c --quiet ) \
+  ( cd /data/dcraw && cat MANIFEST.* | grep -E "/(index\.npy|pieces\.jsonl)$" | sha256sum -c --quiet ) \
     || { echo "DC checksum mismatch"; exit 1; }
-  python "$repo/scripts/dy20_dc_prepare.py" --src /data/dcraw --out /data/dc || exit 1
+  cat /data/dcraw/MANIFEST.* > /tmp/dc_manifest.txt
+  # the converted pieces go to the local NVMe when there is one (EBS reads at ~125 MB/s)
+  if [[ -b /dev/nvme1n1 ]] && ! mountpoint -q /nvme; then
+    sudo mkfs.ext4 -q -F /dev/nvme1n1 && sudo mkdir -p /nvme && sudo mount /dev/nvme1n1 /nvme && sudo chown "$USER" /nvme
+  fi
+  if mountpoint -q /nvme; then rm -rf /data/dc; mkdir -p /nvme/dc; ln -sfn /nvme/dc /data/dc; fi
+  python "$repo/scripts/dy20_dc_prepare.py" --src /data/dcraw --out /data/dc --manifest /tmp/dc_manifest.txt || exit 1
   python - <<EOF || exit 1
 import json
 split = json.load(open("$SPLIT"))
