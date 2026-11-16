@@ -50,6 +50,7 @@ def main() -> None:
     p.add_argument("--work", required=True)
     p.add_argument("--src", default=SRC)
     p.add_argument("--dst", default=DST)
+    p.add_argument("--sub", default="0/1", help="j/m: only every m-th shard of this part, from j")
     p.add_argument("--max-shards", type=int, default=0, help="dry run: stop after this many shards")
     args = p.parse_args()
     k, n = map(int, args.part.split("/"))
@@ -60,7 +61,8 @@ def main() -> None:
     cent = torch.load(args.centroids).to(device)
     done = {line.split()[-1].removesuffix(".npz") for line in sh(f"aws s3 ls {args.dst}/ || true").splitlines()
             if line.strip().endswith(".npz")}
-    mine = [s for s in shards(args.src)[k::n] if s not in done]  # fixed assignment, so instances never overlap
+    j, m = map(int, args.sub.split("/"))
+    mine = [s for s in shards(args.src)[k::n][j::m] if s not in done]  # fixed assignment, so instances never overlap
     if args.max_shards:
         mine = mine[: args.max_shards]
     t0, audio_s = time.time(), 0.0

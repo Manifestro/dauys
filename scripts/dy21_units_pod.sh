@@ -71,7 +71,7 @@ if ! done_ units; then
   NPODS=${NPODS:-1}; POD=${POD:-0}
   for k in 0 1 2 3 4 5 6 7; do
     python "$repo/scripts/dy21_mono_units.py" --centroids /data/dy14/centroids.pt --part $((POD * 8 + k))/$((NPODS * 8)) \
-      --work $NV/w$k > $W/units_$k.log 2>&1 &
+      --sub ${SUB:-0/1} --work $NV/w$k > $W/units_$k.log 2>&1 &
   done
   wait
   for k in 0 1 2 3 4 5 6 7; do grep -q "MONO UNITS DONE" $W/units_$k.log || { echo "part $k failed"; tail -5 $W/units_$k.log; exit 1; }; done
