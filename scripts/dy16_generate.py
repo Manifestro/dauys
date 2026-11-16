@@ -109,7 +109,7 @@ def generate(
     pr = torch.from_numpy(np.concatenate([pros_self, pros_part], -1)).to(device)
     model.eval()
     for g in range(GEN):
-        lo = g + 1
+        lo = g  # the window ends at frame t + g; its last state predicts t + g + 1
         with torch.autocast("cuda", dtype=torch.bfloat16):
             h = model.states(
                 ts[:, lo : lo + CTX], tp[:, lo : lo + CTX], pr[:, lo : lo + CTX]
