@@ -79,8 +79,9 @@ def generate_gated(
     oracle: bool = False,
     temperature: float = 1.0,
     top_p: float = 0.9,
+    threshold: float = THRESHOLD,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Returns generated own tokens [B, GEN] and the head's onset score at frame t [B]."""
+    """Returns generated own tokens [B, GEN] and the onset score at every generated frame [B, GEN]."""
     k = model.cfg.k
     gen = torch.Generator(device=device).manual_seed(seed)
     own, part = (lambda it: it["ch"]), (lambda it: 1 - it["ch"])
@@ -106,7 +107,7 @@ def generate_gated(
     pr = torch.from_numpy(pros).to(device)
     unit_only = torch.zeros(k + 2, device=device, dtype=torch.bool)
     unit_only[k:] = True
-    score0 = None
+    scores = []
     model.eval()
     for g in range(GEN):
         with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -117,16 +118,15 @@ def generate_gated(
         else:
             p_self = torch.sigmoid(model.who(last).float())[:, :WHO_AHEAD]
         score = p_self.mean(1)
-        if score0 is None:
-            score0 = score.cpu().numpy()
+        scores.append(score)
         logits = model.speech_logits(last)
         free = sample_next(logits, temperature, top_p, gen)
         first = sample_next(logits.masked_fill(unit_only, float("-inf")), temperature, top_p, gen)
         silent = ts[:, CTX + g - 1] == k + 1
-        start = score > THRESHOLD
+        start = score > threshold
         nxt = torch.where(silent, torch.where(start, first, torch.full_like(free, k + 1)), free)
         ts[:, CTX + g] = nxt
-    return ts[:, CTX:].cpu().numpy(), score0
+    return ts[:, CTX:].cpu().numpy(), torch.stack(scores, 1).cpu().numpy()
 
 
 def auc(pos: np.ndarray, neg: np.ndarray) -> float:
@@ -146,9 +146,9 @@ def agg(tf: list[dict]) -> dict:
     }
 
 
-def run_all(model, convs, items, device, oracle):
+def run_all(model, convs, items, device, oracle, threshold=THRESHOLD):
     outs = [
-        generate_gated(model, convs, items[i : i + 100], device, 1234 + i, oracle)
+        generate_gated(model, convs, items[i : i + 100], device, 1234 + i, oracle, threshold=threshold)
         for i in range(0, len(items), 100)
     ]
     return np.concatenate([o[0] for o in outs]), np.concatenate([o[1] for o in outs])
@@ -166,6 +166,8 @@ def main() -> None:
     p.add_argument("--n", type=int, default=200)
     p.add_argument("--k", type=int, default=8192)
     p.add_argument("--oracle", action="store_true")
+    p.add_argument("--threshold", type=float, default=THRESHOLD)
+    p.add_argument("--threshold-file", default="", help="JSON with the calibrated threshold (DY-18)")
     args = p.parse_args()
     device = torch.device("cuda")
     names = json.loads(Path(args.anchors).read_text())["names"]
@@ -179,8 +181,12 @@ def main() -> None:
     ck = torch.load(args.model, map_location="cpu", weights_only=False)
     model = Speaker(TowerConfig(**ck["cfg"])).to(device)
     model.load_state_dict(ck["model"])
-    gens, s_reply = run_all(model, convs, items, device, args.oracle)
-    gens_c, s_ctrl = run_all(model, convs, ctrl, device, args.oracle)
+    thr = args.threshold
+    if args.threshold_file:
+        thr = json.loads(Path(args.threshold_file).read_text())["threshold"]
+    gens, s_reply = run_all(model, convs, items, device, args.oracle, thr)
+    gens_c, s_ctrl = run_all(model, convs, ctrl, device, args.oracle, thr)
+    s_reply, s_ctrl = s_reply[:, 0], s_ctrl[:, 0]
 
     real_tf = [
         timing_form(convs[it["conv"]].tok[it["ch"], it["t"] + 1 : it["t"] + 1 + GEN], args.k)
@@ -204,7 +210,7 @@ def main() -> None:
         "D": g["started_3s"] - c["started_3s"] >= 0.3 and c["started_3s"] <= 0.5,
         "F": 3 <= g["units_per_s_speech"] <= 6 and g["rep4"] <= 2 * max(r["rep4"], 1e-3),
     }
-    res = {"model": args.model, "oracle": args.oracle, "n": len(items), "n_control": len(ctrl), "timing_form": timing}
+    res = {"model": args.model, "threshold": thr, "oracle": args.oracle, "n": len(items), "n_control": len(ctrl), "timing_form": timing}
     if args.judge:
         jk = torch.load(args.judge, map_location="cpu", weights_only=False)
         judge = Tower(TowerConfig(**jk["cfg"])).to(device)
