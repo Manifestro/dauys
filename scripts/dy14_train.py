@@ -24,7 +24,12 @@ from dauys.dy14_eval import correct_per_anchor, summarize
 from dauys.dy14_model import Tower, TowerConfig
 
 STOP_STEP, STOP_ACC = 5000, 0.08
-EXPERIMENT = "Слушание на Open Yap: единицы Sylber + латент партнёра (одна конфигурация, башня ~100M)"
+# DY-20 reuses this script on more data: the tracker experiment and run tag come from the environment
+EXPERIMENT = os.environ.get(
+    "DAUYS_EXPERIMENT",
+    "Слушание на Open Yap: единицы Sylber + латент партнёра (одна конфигурация, башня ~100M)",
+)
+TAG = os.environ.get("DAUYS_TAG", "dy14")
 
 
 def lr_at(step: int, steps: int, peak: float, warmup: int) -> float:
@@ -105,7 +110,7 @@ def main() -> None:
             "train_convs": len(train),
             "val_convs": len(val),
             "val_anchors_sha256": val_anchors["sha256"],
-            "git": os.environ.get("DY14_COMMIT", ""),
+            "git": os.environ.get("DY14_COMMIT", os.environ.get("DY20_COMMIT", "")),
         }
         meta_path.write_text(json.dumps(meta, indent=2))
     print(
@@ -123,10 +128,10 @@ def main() -> None:
 
     run = airon.init(
         project="dauys",
-        name=f"dy14-s{args.seed}",
+        name=f"{TAG}-s{args.seed}",
         config=meta,
         experiment=EXPERIMENT,
-        tags=["dy14", f"seed-{args.seed}"],
+        tags=[TAG, f"seed-{args.seed}"],
         total_steps=args.steps,
         run_id=meta["run_id"],
         resume="allow",
