@@ -57,12 +57,13 @@ def main() -> None:
     p.add_argument("--sample", type=int, default=2_000_000)
     p.add_argument("--steps", type=int, default=20)
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument(
+        "--parts", default="train,val,test", help="with saved centroids: any subset"
+    )
     args = p.parse_args()
 
     split = json.loads(Path(args.split).read_text())
-    parts = {
-        name: split[name][: args.limit or None] for name in ("train", "val", "test")
-    }
+    parts = {name: split[name][: args.limit or None] for name in args.parts.split(",")}
     seg = Path(args.seg)
     out = Path(args.out)
     (out / "grid").mkdir(parents=True, exist_ok=True)
