@@ -121,7 +121,7 @@ def main() -> None:
             r.append({"text": t, "logppl": logppl(t), "words": len(t.split()), "rep4": rep4(u)})
         rows[kind] = r
         print(kind, json.dumps(r[:3]), flush=True)
-    for i in range(10):
+    for i in range(min(10, len(gen))):
         for kind, arr in (("gen", gen), ("real", real)):
             w = wav_of(np.concatenate([prompts[i], arr[i]]))
             sf.write(out / "listen" / f"{i:02d}_{kind}.wav", w, SR)
