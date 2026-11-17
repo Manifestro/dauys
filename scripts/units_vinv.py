@@ -48,7 +48,7 @@ def pool(states: np.ndarray, seg: np.ndarray) -> np.ndarray:
     seg = np.minimum(seg, len(states))
     c = np.concatenate([np.zeros((1, states.shape[1]), np.float32), np.cumsum(states, 0)])
     f = (c[seg[:, 1]] - c[seg[:, 0]]) / np.maximum(seg[:, 1] - seg[:, 0], 1)[:, None]
-    return f / (np.linalg.norm(f, axis=1, keepdims=True) + 1e-8)
+    return (f / (np.linalg.norm(f, axis=1, keepdims=True) + 1e-8)).astype(np.float32)
 
 
 def perturb(wav: np.ndarray, a: float, rng) -> np.ndarray:
