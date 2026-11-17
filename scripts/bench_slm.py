@@ -100,7 +100,7 @@ def zr_pairs(root: Path, task: str, n: int, rng) -> list[tuple[Path, Path]]:
     rows = list(csv.DictReader(open(d / "gold.csv")))
     groups = defaultdict(dict)
     for r in rows:
-        key = (r["id"], r.get("voice", ""))
+        key = (r["id"], r.get("voice", ""), r.get("type", ""), r.get("subtype", ""))  # sBLIMP ids repeat across types
         groups[key][int(r["correct"])] = d / f"{r['filename']}.wav"
     pairs = [(g[1], g[0]) for g in groups.values() if 0 in g and 1 in g]
     pick = rng.choice(len(pairs), size=min(n, len(pairs)), replace=False)
@@ -149,19 +149,22 @@ def main() -> None:
 
     def run(name: str, items):
         t0 = time.time()
-        right = defaultdict(int)
-        n = 0
+        right = defaultdict(float)
+        n = same = 0
         for ctx, good, bad in items:
             if len(good[good < K]) == 0 or len(bad[bad < K]) == 0:
                 continue
             n += 1
+            same += int(np.array_equal(good, bad))
             for s, fn in scorers.items():
-                right[s] += fn(ctx, good) > fn(ctx, bad)
+                a, b = fn(ctx, good), fn(ctx, bad)
+                right[s] += 1.0 if a > b else 0.5 if a == b else 0.0  # a tie (same units) is a coin flip
         res = {}
         for s in scorers:
             a = right[s] / max(n, 1)
             res[s] = {"acc": round(a, 4), "ci95": round(1.96 * math.sqrt(a * (1 - a) / max(n, 1)), 4)}
         res["n"] = n
+        res["same_units_share"] = round(same / max(n, 1), 4)
         res["seconds"] = round(time.time() - t0)
         results[name] = res
         print(name, json.dumps(res), flush=True)
