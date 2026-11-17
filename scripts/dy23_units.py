@@ -58,6 +58,7 @@ def main() -> None:
     p.add_argument("--dst", default=DST)
     p.add_argument("--sub", default="0/1", help="j/m: only every m-th shard of this part, from j")
     p.add_argument("--max-shards", type=int, default=0, help="dry run: stop after this many shards")
+    p.add_argument("--reverse", action="store_true", help="take the shards from the end (a helper on another instance)")
     args = p.parse_args()
     k, n = map(int, args.part.split("/"))
     work = Path(args.work)
@@ -76,8 +77,16 @@ def main() -> None:
     mine = [s for s in shards(args.src)[k::n][j::m] if s not in done]  # fixed assignment, so instances never overlap
     if args.max_shards:
         mine = mine[: args.max_shards]
+    if args.reverse:
+        mine = mine[::-1]
     t0, audio_s = time.time(), 0.0
     for j, s in enumerate(mine):
+        if sh(f"aws s3 ls {args.dst}/{s}.npz || true").strip():
+            continue  # done or taken by another worker (forward and reverse workers meet in the middle)
+        claim = f"{args.dst}/claims/{s}"
+        if sh(f"aws s3 ls {claim} || true").strip():
+            continue
+        sh(f"echo {args.part} | aws s3 cp - {claim} --only-show-errors")
         d = work / s
         d.mkdir(exist_ok=True)
         for fn in ("index.npy", "segs.bin"):
