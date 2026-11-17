@@ -77,19 +77,19 @@ class Enc:
 
 
 @torch.no_grad()
-def logprob(model: CodeLM, ev: np.ndarray, cd: np.ndarray, device) -> float:
+def logprob(model: CodeLM, ev: np.ndarray, cd: np.ndarray, device, groups: int = 8, events: bool = True) -> float:
     e = torch.from_numpy(np.r_[EOS, ev]).long()[None].to(device)
     c = torch.from_numpy(np.concatenate([np.zeros((1, 8), np.int64), cd])).long()[None].to(device)
     e, c = e[:, -(model.cfg.ctx + 1) :], c[:, -(model.cfg.ctx + 1) :]
     with torch.autocast("cuda", dtype=torch.bfloat16):
         h = model.states(e[:, :-1], c[:, :-1])[0]
     y = e[0, 1:]
-    lp = torch.log_softmax(model.ev_head(h).float(), -1).gather(1, y[:, None]).sum()
+    lp = torch.log_softmax(model.ev_head(h).float(), -1).gather(1, y[:, None]).sum() if events else torch.zeros((), device=device)
     nxt = y == UNIT
     if nxt.any():
         yc = c[0, 1:][nxt]
         lc = torch.log_softmax(model.code_logits(h[nxt], yc), -1)
-        lp = lp + lc.gather(2, yc[:, :, None]).sum()
+        lp = lp + lc.gather(2, yc[:, :, None])[:, :groups].sum()
     return float(lp)
 
 
@@ -103,6 +103,7 @@ def main() -> None:
     p.add_argument("--pairs", type=int, default=3000)
     p.add_argument("--sc-splits", default="tsc_bm,tsc_af,ssc_bm,ssc_af")
     p.add_argument("--tasks", default="swuggy,sblimp,sc")
+    p.add_argument("--scores", default="all", help="comma list of scorings: all, g1, g2, g4, codes_only (all 8 codes, no events)")
     args = p.parse_args()
     device = torch.device("cuda")
     rng = np.random.default_rng(0)
@@ -112,17 +113,25 @@ def main() -> None:
     model.load_state_dict(ck["model"])
     results = {}
 
+    modes = {"all": (8, True), "g1": (1, True), "g2": (2, True), "g4": (4, True), "codes_only": (8, False)}
+    scores = args.scores.split(",")
+
     def run(name, items):
-        t0, right, n = time.time(), 0.0, 0
+        t0, n = time.time(), 0
+        right = {s: 0.0 for s in scores}
         for good, bad in items:
             if (good[0] == UNIT).sum() == 0 or (bad[0] == UNIT).sum() == 0:
                 continue
             n += 1
-            a, b = logprob(model, *good, device), logprob(model, *bad, device)
-            right += 1.0 if a > b else 0.5 if a == b else 0.0
-        acc = right / max(n, 1)
-        results[name] = {"dy23": {"acc": round(acc, 4), "ci95": round(1.96 * math.sqrt(acc * (1 - acc) / max(n, 1)), 4)},
-                         "n": n, "seconds": round(time.time() - t0)}
+            for s in scores:
+                g, e = modes[s]
+                a, b = logprob(model, *good, device, g, e), logprob(model, *bad, device, g, e)
+                right[s] += 1.0 if a > b else 0.5 if a == b else 0.0
+        results[name] = {"n": n, "seconds": round(time.time() - t0)}
+        for s in scores:
+            acc = right[s] / max(n, 1)
+            key = "dy23" if s == "all" else f"dy23_{s}"
+            results[name][key] = {"acc": round(acc, 4), "ci95": round(1.96 * math.sqrt(acc * (1 - acc) / max(n, 1)), 4)}
         print(name, json.dumps(results[name]), flush=True)
         Path(args.out).write_text(json.dumps(results, indent=2))
 
