@@ -28,7 +28,7 @@ if ! done_ setup; then
   ~/venv/bin/pip install -q torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
   printf "torch==2.7.1\ntorchaudio==2.7.1\n" > /tmp/constraints.txt
   ~/venv/bin/pip install -q -c /tmp/constraints.txt "numpy<2.1" scipy transformers==4.46.3 huggingface_hub safetensors \
-    airon soundfile pyyaml "datasets==3.6.0" zerospeech-benchmarks jiwer accelerate sylber==0.1.4 speech-articulatory-coding
+    airon soundfile pyyaml "datasets==3.6.0" remotezip jiwer accelerate sylber==0.1.4 speech-articulatory-coding
   ~/venv/bin/python -c "import torch, sylber, sparc, jiwer; assert torch.cuda.is_available(); print('GPU', torch.cuda.get_device_name(0), torch.__version__)" || exit 1
   curl -sfL -o $W/sylber_resynthesis.yaml https://raw.githubusercontent.com/Berkeley-Speech-Group/sylber/main/sylber_configs/sylber_resynthesis.yaml || exit 1
   [[ -d ~/ke-zek ]] || git clone -q "https://$GITHUB_API@github.com/Manifestro/kezek-research.git" ~/ke-zek
@@ -51,13 +51,19 @@ for d in ["dy21", "dy22"]:
     for f in ["run/best.pt", "run/metadata.json"]:
         shutil.copy(hf_hub_download("manifestro/dauys-runs", f"{d}/{f}", token=os.environ["HF_TOKEN"]), f"/data/{d}/{f}")
 EOF2
-  mkdir -p $W/zr && cd $W/zr
-  (zrc datasets:pull sLM21-dataset 2>&1 | tail -3) || true
-  ZR=$(dirname "$(dirname "$(find / -path '*lexical/dev/gold.csv' 2>/dev/null | head -1)")")
+  python - <<'EOF2' || exit 1
+from remotezip import RemoteZip
+url = "https://download.zerospeech.com/datasets/sLM21.dataset.zip"
+with RemoteZip(url) as z:
+    names = [n for n in z.namelist() if ("/lexical/dev/" in n or "/syntactic/dev/" in n) and not n.endswith("/")]
+    print("members", len(names), names[:2])
+    for n in names:
+        z.extract(n, "/data/bench/zr")
+EOF2
+  ZR=$(dirname "$(dirname "$(find /data/bench/zr -path '*lexical/dev/gold.csv' | head -1)")")
   [[ -n "$ZR" && -d "$ZR/lexical" ]] || { echo "ZR DATA MISSING"; exit 1; }
   echo "$ZR" > $W/zr_path
   ls "$ZR"; ls "$ZR/lexical/dev" | head -3; head -3 "$ZR/lexical/dev/gold.csv" "$ZR/syntactic/dev/gold.csv"
-  cd ~
   mark data
 fi
 ZR=$(cat $W/zr_path)
