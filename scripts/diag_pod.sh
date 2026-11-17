@@ -44,6 +44,7 @@ SPLIT=$HOME/ke-zek/experiments/K-R1/split_round1.json
 if ! done_ data; then
   mkdir -p /data/dy14 /data/bench/zr
   aws s3 cp "$S3OUT/dy14-grid.tar" - --only-show-errors | tar -C /data/dy14 -xf - centroids.pt || exit 1
+  command -v aria2c >/dev/null || sudo apt-get install -y -qq aria2 >/dev/null 2>&1
   aria2c -q -x 16 -s 16 -k 64M -d /data/bench -o sLM21.zip https://download.zerospeech.com/datasets/sLM21.dataset.zip || exit 1
   unzip -q /data/bench/sLM21.zip "*lexical/dev/*" -d /data/bench/zr || exit 1
   rm -f /data/bench/sLM21.zip
