@@ -183,7 +183,9 @@ def main() -> None:
         from datasets import load_dataset
 
         for split in args.sc_splits.split(","):
-            ds = load_dataset("slprl/multispeaker-storycloze", split=split)
+            kind, voice = split.split("_")  # e.g. tsc_bm -> tSC/bm (the repo's own split names fail to load)
+            ds = load_dataset("slprl/multispeaker-storycloze", data_files=f"{kind[0]}SC/{voice}/*.parquet",
+                              split="train")
             cols = ds.column_names
             print(split, cols, flush=True)
             audio = [c for c in cols if ds.features[c].__class__.__name__ == "Audio"]
