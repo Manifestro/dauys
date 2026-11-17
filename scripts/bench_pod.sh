@@ -52,10 +52,12 @@ for d in ["dy21", "dy22"]:
         shutil.copy(hf_hub_download("manifestro/dauys-runs", f"{d}/{f}", token=os.environ["HF_TOKEN"]), f"/data/{d}/{f}")
 EOF2
   mkdir -p /data/bench/zr
-  aria2c -q -x 16 -s 16 -k 64M -d /data/bench -o sLM21.zip https://download.zerospeech.com/datasets/sLM21.dataset.zip || exit 1
-  unzip -q /data/bench/sLM21.zip "*lexical/dev/*" "*syntactic/dev/*" -d /data/bench/zr || exit 1
-  rm -f /data/bench/sLM21.zip
-  ZR=$(dirname "$(dirname "$(find /data/bench/zr -path '*lexical/dev/gold.csv' | head -1)")")
+  if [[ ! -f /data/bench/zr/lexical/dev/gold.csv ]]; then
+    aria2c -q -x 16 -s 16 -k 64M -d /data/bench -o sLM21.zip https://download.zerospeech.com/datasets/sLM21.dataset.zip || exit 1
+    unzip -q /data/bench/sLM21.zip "*lexical/dev/*" "*syntactic/dev/*" -d /data/bench/zr || exit 1
+    rm -f /data/bench/sLM21.zip
+  fi
+  ZR=/data/bench/zr
   [[ -n "$ZR" && -d "$ZR/lexical" ]] || { echo "ZR DATA MISSING"; exit 1; }
   echo "$ZR" > $W/zr_path
   ls "$ZR"; ls "$ZR/lexical/dev" | head -3; head -3 "$ZR/lexical/dev/gold.csv" "$ZR/syntactic/dev/gold.csv"
