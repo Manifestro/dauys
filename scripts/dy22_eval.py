@@ -65,6 +65,13 @@ def generate(model: GridLM, prompts: np.ndarray, device, seed: int) -> tuple[np.
             break
         logits = model.logits(h)
         logits[:, EOS] = -float("inf")
+        # timing at T 1: first draw the event (new unit / continue / pause) from the model's own
+        # probabilities, then the unit with the sampler below; a low temperature on the whole vocabulary
+        # made pauses swallow the speech (80 % pause frames at step 3000)
+        pr = torch.softmax(logits, -1)
+        ev = torch.stack([pr[:, :K].sum(-1), pr[:, CONT], pr[:, SIL]], -1)
+        kind = torch.multinomial(ev, 1, generator=g)[:, 0]
+        logits[:, K:] = -float("inf")
         hist = ids.cpu().numpy()
         for r, row in enumerate(hist):
             u = row[row < K]
@@ -75,7 +82,9 @@ def generate(model: GridLM, prompts: np.ndarray, device, seed: int) -> tuple[np.
             banned = [u[i + 3] for i in range(len(u) - 3) if tuple(u[i : i + 3]) == last]
             if banned:
                 logits[r, torch.tensor(banned, device=device)] = -float("inf")
-        ids = torch.cat([ids, sample_next(logits, T_UNIT, TOP_P, g)[:, None]], 1)
+        nxt = sample_next(logits, T_UNIT, TOP_P, g)
+        nxt = torch.where(kind == 1, CONT, torch.where(kind == 2, SIL, nxt))
+        ids = torch.cat([ids, nxt[:, None]], 1)
     return ids[:, -GEN:].cpu().numpy(), pros[:, :GEN].cpu().numpy()
 
 
