@@ -109,7 +109,7 @@ if ! done_ dry; then
   mark dry
 fi
 if ! done_ train; then
-  python "$repo/scripts/dy23_train.py" --units $U --init $INIT --out $W/run --steps ${STEPS:-8000} > $W/train.log 2>&1 || { echo "TRAIN FAILED"; tail -5 $W/train.log; exit 1; }
+  python "$repo/scripts/dy23_train.py" --units $U --init $INIT --out $W/run --steps ${STEPS:-8000} ${TRAIN_ARGS:-} > $W/train.log 2>&1 || { echo "TRAIN FAILED"; tail -5 $W/train.log; exit 1; }
   mark train
 fi
 if ! done_ bench; then
@@ -127,8 +127,8 @@ repo = "manifestro/dauys-runs"
 if not api.repo_info(repo).private:
     raise SystemExit(f"UPLOAD SKIPPED: {repo} is not private")
 for f in ["bench.json", "train.log", "run/best.pt", "run/metadata.json"]:
-    api.upload_file(path_or_fileobj=f"/data/dy23/{f}", path_in_repo=f"dy23/{f}", repo_id=repo)
-print("UPLOADED dy23/")
+    api.upload_file(path_or_fileobj=f"/data/dy23/{f}", path_in_repo=f"{os.environ.get('TAG', 'dy23')}/{f}", repo_id=repo)
+print("UPLOADED", os.environ.get("TAG", "dy23"))
 EOF2
   mark upload
 fi

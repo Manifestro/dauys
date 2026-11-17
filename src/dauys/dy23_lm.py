@@ -95,7 +95,7 @@ def from_dy22(state: dict, cfg: LMConfig) -> CodeLM:
     return m
 
 
-def loss(model: CodeLM, tgt: CodeLM, ev: torch.Tensor, codes: torch.Tensor, pros: torch.Tensor):
+def loss(model: CodeLM, tgt: CodeLM, ev: torch.Tensor, codes: torch.Tensor, pros: torch.Tensor, code_w=None):
     """ev [B, T+1], codes [B, T+1, G], pros [B, T+1, 3] (bins, valid at syllables)."""
     x_ev, x_c, y_ev, y_c = ev[:, :-1], codes[:, :-1], ev[:, 1:], codes[:, 1:]
     h = model.states(x_ev, x_c)
@@ -103,7 +103,13 @@ def loss(model: CodeLM, tgt: CodeLM, ev: torch.Tensor, codes: torch.Tensor, pros
     nxt = y_ev == UNIT
     yc = y_c[nxt].long()
     lc = model.code_logits(h[nxt], yc)
-    ce_codes = F.cross_entropy(lc.flatten(0, 1), yc.flatten()) if len(yc) else ce_ev * 0
+    if len(yc):
+        per_g = F.cross_entropy(lc.transpose(1, 2), yc, reduction="none").mean(0)  # [G]
+        ce_codes = per_g.mean()
+        w = torch.ones(G, device=per_g.device) if code_w is None else code_w.to(per_g.device)
+        ce_codes_w = (per_g * w).sum()
+    else:
+        ce_codes = ce_codes_w = ce_ev * 0
     is_unit = x_ev == UNIT
     pf, pe, pv = model.prosody(h[is_unit])
     p = pros[:, :-1][is_unit].long()
@@ -117,7 +123,7 @@ def loss(model: CodeLM, tgt: CodeLM, ev: torch.Tensor, codes: torch.Tensor, pros
     pred = F.normalize(model.pred(h[:, :t]).float(), dim=-1)
     jepa = (1 - (pred * F.normalize(target, dim=-1)).sum(-1)).mean()
     # per syllable the 8 codes carry the content: their summed CE is the content term
-    ce = ce_ev + ce_codes * G * nxt.float().mean()
+    ce = ce_ev + ce_codes_w * nxt.float().mean()
     total = ce + JEPA_WEIGHT * jepa + PROS_WEIGHT * (l_f + l_e + l_v)
     return total, {"ce_ev": ce_ev.item(), "ce_code": ce_codes.item(), "jepa": jepa.item(), "f0": l_f.item(),
                    "energy": l_e.item(), "voiced": l_v.item(), "loss": total.item()}

@@ -74,6 +74,8 @@ def main() -> None:
     p.add_argument("--small", action="store_true")
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--tracking", default="on", choices=["on", "off"])
+    p.add_argument("--code-weights", default="", help="8 comma weights for the code groups (default all 1)")
+    p.add_argument("--name", default="dy23")
     args = p.parse_args()
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
@@ -119,9 +121,11 @@ def main() -> None:
     }
     (out / "metadata.json").write_text(json.dumps(meta, indent=2))
     print(json.dumps({k: v for k, v in meta.items() if k != "val_files_names"}), flush=True)
-    run = airon.init(project="dauys", name=f"dy23-s{args.seed}", config=meta, experiment=EXPERIMENT,
+    run = airon.init(project="dauys", name=f"{args.name}-s{args.seed}", config=meta, experiment=EXPERIMENT,
                      tags=["dy23", f"seed-{args.seed}"], total_steps=args.steps, run_id=meta["run_id"],
                      mode="disabled" if args.tracking == "off" else None)
+
+    code_w = torch.tensor([float(x) for x in args.code_weights.split(",")]) if args.code_weights else None
 
     @torch.no_grad()
     def validate() -> dict:
@@ -129,7 +133,7 @@ def main() -> None:
         acc = {}
         for i in range(0, len(vb), 32):
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                _, part = loss(model, tgt, vb[i : i + 32].to(device), vc[i : i + 32].to(device), vp[i : i + 32].to(device))
+                _, part = loss(model, tgt, vb[i : i + 32].to(device), vc[i : i + 32].to(device), vp[i : i + 32].to(device), code_w)
             for k, v in part.items():
                 acc[k] = acc.get(k, 0.0) + v * 32 / len(vb)
         model.train()
@@ -151,7 +155,7 @@ def main() -> None:
         n = math.ceil(args.batch / args.micro)
         for c, cc, cp in zip(ids.split(args.micro), cd.split(args.micro), pr.split(args.micro)):
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                total, part = loss(model, tgt, c, cc, cp)
+                total, part = loss(model, tgt, c, cc, cp, code_w)
             (total / n).backward()
             for k, v in part.items():
                 logs[k] = logs.get(k, 0.0) + v / n
