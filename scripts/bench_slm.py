@@ -4,7 +4,7 @@ spoken / topic StoryCloze (slprl/multispeaker-storycloze).
 Every clip is turned into DY-14 units exactly as the training data (Sylber layer-9 states, segments, DY-14
 track with no other channel, nearest DY-14 centroid, 10 Hz grid). A pair is right when the model gives the
 correct item the higher total log-probability (sWUGGY, sBLIMP: the whole clip after an EOS; StoryCloze: the
-ending given the story context). Models:
+whole story with the right vs the wrong ending). Models:
   dy21   — deduplicated units (the grid with continue/pause removed);
   dy22   — the grid with pauses cut to 2 s; scored twice: ``all`` tokens and ``unit`` targets only.
 Pairs are subsampled with a fixed seed (``--pairs``); accuracy with a 95 % binomial interval.
@@ -189,15 +189,16 @@ def main() -> None:
             cols = ds.column_names
             print(split, cols, flush=True)
             audio = [c for c in cols if ds.features[c].__class__.__name__ == "Audio"]
-            pc = next(c for c in audio if "prompt" in c)
-            gc = next(c for c in audio if c != pc and ("correct" in c or "positive" in c) and "in" not in c.split("_")[0])
-            bc = next(c for c in audio if c not in (pc, gc))
-            print(split, "prompt", pc, "good", gc, "bad", bc, flush=True)
+            # each item is the whole story read twice, with the right and the wrong ending (no separate prompt):
+            # the pair is scored on the whole clip, as in slamkit
+            gc = next(c for c in audio if c.startswith("correct"))
+            bc = next(c for c in audio if c.startswith("negative") or c.startswith("incorrect"))
+            print(split, "good", gc, "bad", bc, flush=True)
 
-            def items(ds=ds, pc=pc, gc=gc, bc=bc):
+            def items(ds=ds, gc=gc, bc=bc):
                 for r in ds:
                     enc = lambda a: U.grid(to_int16(np.asarray(a["array"], np.float32), a["sampling_rate"]))
-                    yield enc(r[pc]), enc(r[gc]), enc(r[bc])
+                    yield empty, enc(r[gc]), enc(r[bc])
             run(split, items())
     print("BENCH DONE", flush=True)
 
