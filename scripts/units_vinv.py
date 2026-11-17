@@ -36,6 +36,7 @@ from bench_slm import to_int16
 from dy14_features import segments_of
 from dy21_train import held_out
 from units_diag import cos_dtw, dedup, edit, kmeans
+from units_rvq import edit_codes
 
 from dauys.dy14_units import SR, hidden_states, load_sylber
 
@@ -121,6 +122,7 @@ def main() -> None:
     p.add_argument("--steps", type=int, default=6000)
     p.add_argument("--inv", type=float, default=1.0, help="weight of the cosine pull between the two z")
     p.add_argument("--ids", type=int, default=400)
+    p.add_argument("--pq", default="", help="product codes, e.g. 4x256,8x256: z split into G groups, K codes each")
     args = p.parse_args()
     device = torch.device("cuda")
     out = Path(args.out)
@@ -155,7 +157,18 @@ def main() -> None:
     with torch.no_grad():
         Z = torch.cat([m.z(fo[j : j + 65536]) for j in range(0, len(fo), 65536)])
     books = {k: kmeans(Z, k, cosine=True, iters=25) for k in (8192, 2048)}
-    torch.save({"coder": m.state_dict(), "books": {k: v.cpu() for k, v in books.items()}}, out.parent / "vinv.pt")
+    pq = {}
+    for spec in filter(None, args.pq.split(",")):
+        g, k = map(int, spec.split("x"))
+        pq[spec] = [kmeans(part.contiguous(), k, cosine=False, iters=25, seed=j) for j, part in enumerate(Z.chunk(g, 1))]
+    torch.save({"coder": m.state_dict(), "books": {k: v.cpu() for k, v in books.items()},
+                "pq": {k: [c.cpu() for c in v] for k, v in pq.items()}}, out.parent / f"vinv_inv{args.inv}.pt")
+
+    def pq_codes(z: torch.Tensor, spec: str) -> np.ndarray:
+        c = torch.stack([torch.cdist(part.contiguous(), b).argmin(1) for part, b in zip(z.chunk(len(pq[spec]), 1), pq[spec])], 1)
+        c = c.cpu().numpy()
+        keep = np.r_[True, (c[1:] != c[:-1]).any(1)] if len(c) else np.zeros(0, bool)
+        return np.ascontiguousarray(c[keep])
 
     d = Path(args.zr) / "lexical" / "dev"
     items = defaultdict(lambda: defaultdict(dict))
@@ -176,11 +189,13 @@ def main() -> None:
                     seg = segments_of(st)
                     if len(seg) == 0:
                         reps[(i, c, v)] = {"z": np.zeros((0, 256), np.float32),
-                                           **{k: np.zeros(0, np.int64) for k in books}}
+                                           **{k: np.zeros(0, np.int64) for k in books},
+                                           **{k: np.zeros((0, len(v_)), np.int64) for k, v_ in pq.items()}}
                         continue
                     z = m.z(torch.from_numpy(pool(st, seg.copy())).to(device))
                     reps[(i, c, v)] = {"z": z.cpu().numpy(),
-                                       **{k: dedup((z @ b.T).argmax(1).cpu().numpy()) for k, b in books.items()}}
+                                       **{k: dedup((z @ b.T).argmax(1).cpu().numpy()) for k, b in books.items()},
+                                       **{k: pq_codes(z, k) for k in pq}}
     voices = ["A", "C", "D", "F"]
 
     def abx(dist) -> float:
@@ -200,6 +215,8 @@ def main() -> None:
         res[f"abx_codes_k{k}"] = abx(lambda x, y, k=k: edit(reps[x][k], reps[y][k]))
         res[f"same_word_identical_k{k}"] = round(float(np.mean([np.array_equal(reps[(i, 1, a)][k], reps[(i, 1, b)][k])
                                                                 for i in ids for a in voices for b in voices if a < b])), 4)
+    for k in pq:
+        res[f"abx_pq_{k}"] = abx(lambda x, y, k=k: edit_codes(reps[x][k], reps[y][k]))
     out.write_text(json.dumps(res, indent=2))
     print("SUMMARY", json.dumps(res), flush=True)
 
