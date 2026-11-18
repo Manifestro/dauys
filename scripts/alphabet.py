@@ -277,6 +277,94 @@ def evaluate(args) -> None:
     print("EVAL", json.dumps(res), flush=True)
 
 
+# ---------------------------------------------------------------- real words, relative to the phoneme oracle
+STOP = set("""the and that this with have from they what were there their would about which when will your just like
+know yeah really because people think going right some then them than also been into more over only very even well
+much here where these those other could should does doing being after before something things thing actually""".split())
+
+
+def words(args) -> None:
+    """~200 content words of held-out podcasts, each cut (Whisper word timestamps, a ruler only) from several different
+    pieces (different people); tokens from the alphabet and from the phoneme oracle on the same cuts. Per word: share
+    of occurrence pairs with identical tokens and mean normalised edit distance; plus word ABX (X = occurrence of w,
+    A = other occurrence of w, B = occurrence of another word of similar length)."""
+    from transformers import pipeline
+
+    from dy21_train import held_out
+    from phon_units import Phonemes
+
+    device = torch.device("cuda")
+    asr = pipeline("automatic-speech-recognition", model="openai/whisper-large-v3-turbo", device=0, torch_dtype=torch.float16)
+    shards = [x for x in sorted(l.split()[-1].rstrip("/") for l in sh(f"aws s3 ls {SRC}/").splitlines()
+                                if l.strip().startswith("PRE")) if held_out(x)][: args.shards]
+    occ = defaultdict(list)  # word -> [(piece key, audio int16)]
+    for s in shards:
+        for fn in ("index.npy", "segs.bin"):
+            sh(f"aws s3 cp {SRC}/{s}/{fn} /tmp/w_{fn} --only-show-errors")
+        idx, segs = np.load("/tmp/w_index.npy"), np.fromfile("/tmp/w_segs.bin", dtype=np.int16)
+        for p, (st, ln) in enumerate(idx[: args.pieces]):
+            if ln < 20 * SR:
+                continue
+            w = segs[st + 2 * SR : st + 32 * SR]
+            r = asr({"raw": w.astype(np.float32) / 32768, "sampling_rate": SR}, return_timestamps="word",
+                    generate_kwargs={"language": "en"})
+            for ch in r.get("chunks", []):
+                t = "".join(c for c in ch["text"].lower() if c.isalpha())
+                a, b = ch["timestamp"]
+                if len(t) >= 4 and t not in STOP and a is not None and b is not None and 0.2 <= b - a <= 1.2:
+                    occ[t].append((f"{s}:{p}", w[max(0, int((a - 0.03) * SR)) : int((b + 0.03) * SR)]))
+        print(json.dumps({"shard": s, "words": len(occ)}), flush=True)
+    pick = {}
+    for t, lst in occ.items():
+        seen, keep = set(), []
+        for k, a in lst:
+            if k not in seen:
+                seen.add(k)
+                keep.append(a)
+        if len(keep) >= 3:
+            pick[t] = keep[:4]
+    names = sorted(pick, key=lambda t: -len(pick[t]))[: args.n]
+    print("words with >= 3 different pieces:", len(pick), "used", len(names), flush=True)
+
+    syl = load_sylber(device)
+    ph = Phonemes(device)
+    res = {"words": len(names), "occurrences": sum(len(pick[t]) for t in names)}
+    for run in args.runs:
+        ck = torch.load(Path(run) / "alpha.pt")
+        m = Encoder(ck["k"]).to(device).eval()
+        m.load_state_dict(ck["model"])
+        res[f"alpha_k{ck['k']}"] = (lambda m: lambda w: m.tokens(torch.from_numpy(hidden_states(syl, np.pad(w, (0, max(0, SR // 5 - len(w)))))).float().to(device)))(m)
+    res["phonemes"] = lambda w: ph(w)
+    rng = np.random.default_rng(0)
+    out = {k: v for k, v in res.items() if not callable(v)}
+    for name in [k for k, v in res.items() if callable(v)]:
+        fn = res[name]
+        tok = {t: [np.asarray(fn(a), np.int64) for a in pick[t]] for t in names}
+        same, dist = [], []
+        for t in names:
+            q = tok[t]
+            for i in range(len(q)):
+                for j in range(i + 1, len(q)):
+                    same.append(np.array_equal(q[i], q[j]))
+                    dist.append(edit(q[i], q[j]))
+        right = n = 0.0
+        for t in names:
+            others = [u for u in names if u != t and abs(len(u) - len(t)) <= 1] or [u for u in names if u != t]
+            for i in range(len(tok[t])):
+                for j in range(len(tok[t])):
+                    if i != j:
+                        u = others[rng.integers(len(others))]
+                        x, a_, b_ = tok[t][i], tok[t][j], tok[u][rng.integers(len(tok[u]))]
+                        da, db = edit(x, a_), edit(x, b_)
+                        right += 1.0 if da < db else 0.5 if da == db else 0.0
+                        n += 1
+        out[name] = {"same_word_identical": round(float(np.mean(same)), 4), "mean_edit": round(float(np.mean(dist)), 4),
+                     "word_abx": round(right / n, 4), "tokens_per_word": round(float(np.mean([len(x) for v in tok.values() for x in v])), 2)}
+        print("WORDS", name, json.dumps(out[name]), flush=True)
+    Path(args.out).write_text(json.dumps(out, indent=2))
+    print("WORDS DONE", json.dumps(out), flush=True)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -294,8 +382,14 @@ def main() -> None:
     c.add_argument("--run", required=True)
     c.add_argument("--zr", required=True)
     c.add_argument("--out", required=True)
+    w = sub.add_parser("words")
+    w.add_argument("--runs", nargs="+", required=True)
+    w.add_argument("--out", required=True)
+    w.add_argument("--shards", type=int, default=6)
+    w.add_argument("--pieces", type=int, default=80)
+    w.add_argument("--n", type=int, default=200)
     args = p.parse_args()
-    {"feats": feats, "train": train, "eval": evaluate}[args.cmd](args)
+    {"feats": feats, "train": train, "eval": evaluate, "words": words}[args.cmd](args)
 
 
 if __name__ == "__main__":
