@@ -11,7 +11,7 @@ ONNX model is fed phoneme ids directly: every character of an oracle token, NFD-
 phoneme_id_map, with Piper's BOS / pad-after-each-symbol / EOS; no word boundaries are added) -> 16 kHz -> Whisper
 large-v3-turbo -> text. Reference: Whisper on the original audio of the prompt and of the continuation.
 
-Judge: Qwen2.5-7B-Instruct (fp16, a ruler only) sees the prompt text and two continuations A and B and is asked
+Judge: Qwen2.5-7B-Instruct (bfloat16, a ruler only) sees the prompt text and two continuations A and B and is asked
 which one was said next; the answer is read from the next-token logits of "A" vs "B", both orders; a pair is right
 when the mean probability of the real one is > 0.5 (ties 0.5). D = share of right pairs, 95 % binomial CI.
 
@@ -252,7 +252,7 @@ class Judge:
         self.torch, self.device = torch, device
         self.tok = AutoTokenizer.from_pretrained(JUDGE)
         self.tok.padding_side = "left"
-        self.model = AutoModelForCausalLM.from_pretrained(JUDGE, torch_dtype=torch.float16).to(device).eval()
+        self.model = AutoModelForCausalLM.from_pretrained(JUDGE, torch_dtype=torch.bfloat16).to(device).eval()
         ab = [self.tok.encode(x, add_special_tokens=False) for x in ("A", "B")]
         assert all(len(x) == 1 for x in ab), ab
         self.ab = [ab[0][0], ab[1][0]]
@@ -269,7 +269,7 @@ class Judge:
                 enc = self.tok(texts[i : i + batch], return_tensors="pt", padding=True).to(self.device)
                 lg = self.model(**enc).logits[:, -1, self.ab].float()
                 if not torch.isfinite(lg).all():
-                    raise RuntimeError("judge logits not finite (fp16 overflow?)")
+                    raise RuntimeError("judge logits not finite")
                 out.append(torch.softmax(lg, -1)[:, 0].cpu().numpy())
         return np.concatenate(out) if out else np.zeros(0)
 
