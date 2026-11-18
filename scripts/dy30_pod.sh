@@ -65,7 +65,7 @@ print(next(s for s in sorted(l.split()[-1].rstrip('/') for l in out.splitlines()
 import os, shutil
 from huggingface_hub import hf_hub_download
 for d in ("dy22", "dy23"):
-    shutil.copy(hf_hub_download("manifestro/dauys-runs", f"{d}/eval.json", token=os.environ["HF_TOKEN"]), f"$W/{d}_eval.json")
+    shutil.copy(hf_hub_download("manifestro/dauys-runs", f"{d}/eval/eval.json", token=os.environ["HF_TOKEN"]), f"$W/{d}_eval.json")
 EOF
     python "$repo/scripts/dy30_eval.py" gates --shard $GS --tokens $W/gate_tokens.npz --dy22 $W/dy22_eval.json \
       --dy23 $W/dy23_eval.json --out $W/gates > $W/logs/gates.log 2>&1
