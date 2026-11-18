@@ -112,7 +112,7 @@ def main() -> None:
     p.add_argument("--zr", required=True, help="unpacked ZeroSpeech sLM21-dataset")
     p.add_argument("--centroids", required=True)
     p.add_argument("--dy21", required=True)
-    p.add_argument("--dy22", required=True)
+    p.add_argument("--dy22", default="", help="optional DY-22 grid LM")
     p.add_argument("--out", required=True)
     p.add_argument("--pairs", type=int, default=3000)
     p.add_argument("--sc-splits", default="tsc_bm,tsc_af,ssc_bm,ssc_af")
@@ -127,15 +127,14 @@ def main() -> None:
     m = UnitLM(LMConfig(**ck["cfg"])).to(device).eval()
     m.load_state_dict(ck["model"])
     models["dy21"] = m
-    ck = torch.load(args.dy22, map_location="cpu", weights_only=False)
-    m = GridLM(LMConfig(**ck["cfg"])).to(device).eval()
-    m.load_state_dict(ck["model"])
-    models["dy22"] = m
-    scorers = {
-        "dy21": lambda ctx, cont: logprob(models["dy21"], dedup(ctx, 8192), dedup(cont, None), device, False),
-        "dy22_all": lambda ctx, cont: logprob(models["dy22"], ctx22(ctx), cont, device, False),
-        "dy22_unit": lambda ctx, cont: logprob(models["dy22"], ctx22(ctx), cont, device, True),
-    }
+    scorers = {"dy21": lambda ctx, cont: logprob(models["dy21"], dedup(ctx, 8192), dedup(cont, None), device, False)}
+    if args.dy22:
+        ck = torch.load(args.dy22, map_location="cpu", weights_only=False)
+        m = GridLM(LMConfig(**ck["cfg"])).to(device).eval()
+        m.load_state_dict(ck["model"])
+        models["dy22"] = m
+        scorers["dy22_all"] = lambda ctx, cont: logprob(models["dy22"], ctx22(ctx), cont, device, False)
+        scorers["dy22_unit"] = lambda ctx, cont: logprob(models["dy22"], ctx22(ctx), cont, device, True)
 
     def dedup(t: np.ndarray, eos) -> np.ndarray:
         u = t[t < K]

@@ -67,6 +67,10 @@ def main() -> None:
     p.add_argument("--small", action="store_true", help="dry run: a tiny model")
     p.add_argument("--limit", type=int, default=0, help="dry run: use only this many shard files")
     p.add_argument("--tracking", default="on", choices=["on", "off"])
+    p.add_argument("--cfg", default="", help="model size d,layers,heads,ffn,ctx (e.g. 512,8,8,2048,1024); default LMConfig()")
+    p.add_argument("--experiment", default=EXPERIMENT, help="Airon experiment title")
+    p.add_argument("--name", default="", help="Airon run name (default dy21-s<seed>)")
+    p.add_argument("--patience", type=int, default=0, help="stop after this many validations without a new best (0 = off)")
     args = p.parse_args()
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
@@ -78,7 +82,13 @@ def main() -> None:
     tr_files = [f for f in files if not held_out(f.stem)]
     va_files = [f for f in files if held_out(f.stem)] or files[-1:]
     train, val = load_stream(tr_files), load_stream(va_files)
-    cfg = LMConfig(d=256, layers=4, heads=4, ffn=1024, ctx=256) if args.small else LMConfig()
+    if args.small:
+        cfg = LMConfig(d=256, layers=4, heads=4, ffn=1024, ctx=256)
+    elif args.cfg:
+        d, layers, heads, ffn, ctx = map(int, args.cfg.split(","))
+        cfg = LMConfig(d=d, layers=layers, heads=heads, ffn=ffn, ctx=ctx)
+    else:
+        cfg = LMConfig()
     T = cfg.ctx
     vrng = np.random.default_rng(1234)
     vstarts = vrng.integers(0, len(val) - T - 1, size=256)
@@ -104,8 +114,8 @@ def main() -> None:
     }
     (out / "metadata.json").write_text(json.dumps(meta, indent=2))
     print(json.dumps({k: v for k, v in meta.items() if k != "val_files_names"}), flush=True)
-    run = airon.init(project="dauys", name=f"dy21-s{args.seed}", config=meta, experiment=EXPERIMENT,
-                     tags=["dy21", f"seed-{args.seed}"], total_steps=args.steps, run_id=meta["run_id"],
+    run = airon.init(project="dauys", name=args.name or f"dy21-s{args.seed}", config=meta, experiment=args.experiment,
+                     tags=[(args.name or "dy21").split("-")[0], f"seed-{args.seed}"], total_steps=args.steps, run_id=meta["run_id"],
                      mode="disabled" if args.tracking == "off" else None)
 
     @torch.no_grad()
@@ -122,7 +132,7 @@ def main() -> None:
         model.train()
         return {"ce": tot / n, "ppl": math.exp(tot / n)}
 
-    best, t0 = math.inf, time.time()
+    best, t0, stale = math.inf, time.time(), 0
     for step in range(args.steps):
         for g in opt.param_groups:
             g["lr"] = lr_at(step, args.steps, args.lr, args.warmup)
@@ -152,9 +162,14 @@ def main() -> None:
             run.log({f"val/{k}": v for k, v in res.items()}, step=step + 1)
             print(json.dumps({"step": step + 1, "val": res}), flush=True)
             if res["ce"] < best:
-                best = res["ce"]
+                best, stale = res["ce"], 0
                 torch.save({"model": model.state_dict(), "cfg": vars(cfg), "step": step + 1, "val": res},
                            out / "best.pt")
+            else:
+                stale += 1
+                if args.patience and stale >= args.patience:
+                    print(json.dumps({"early_stop": step + 1, "best_ce": best}), flush=True)
+                    break
     (out / "DONE").write_text(f"{best}\n")
     run.finish()
     print("TRAIN DONE", best, flush=True)
