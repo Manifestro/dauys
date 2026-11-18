@@ -113,22 +113,40 @@ def main() -> None:
         file_j += 1
         buf_a, buf_m = [], []
 
+    def synth(tx, ra):
+        """Generate one batch; on OOM split it in halves. Codec 12 Hz: cap at 0.75 s per word (longer clips are
+        dropped anyway), so runaway outputs cost neither time nor memory."""
+        cap = int(12 * 0.75 * max(len(t.split()) for t in tx)) + 24
+        try:
+            wavs, sr = m.generate_voice_clone(text=tx, language=["English"] * len(tx), ref_audio=ra,
+                                              x_vector_only_mode=[True] * len(tx), max_new_tokens=cap)
+            return list(wavs), sr
+        except torch.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if len(tx) == 1:
+                return [None], 24000
+            h = len(tx) // 2
+            a, sr = synth(tx[:h], ra[:h])
+            b, _ = synth(tx[h:], ra[h:])
+            return a + b, sr
+
+    pool = []
     while done_s < target_s:
-        batch = [next(gen) for _ in range(args.batch_texts)]
+        if not pool:  # 16 batches' worth of texts, sorted by length so a batch has similar lengths
+            pool = sorted((next(gen) for _ in range(args.batch_texts * 16)), key=lambda x: len(x[1].split()))
+            pool = [pool[i : i + args.batch_texts] for i in range(0, len(pool), args.batch_texts)]
+            rng.shuffle(pool)
+        batch = pool.pop()
         tx, ra, meta = [], [], []
         for tid, t in batch:
             for v in rng.choice(len(bank), VOICES_PER_TEXT, replace=False):
                 tx.append(t)
                 ra.append((bank[v], SR))
                 meta.append({"text_id": int(tid), "text": t, "voice": f"p{k}v{int(v)}"})
-        try:
-            wavs, sr = m.generate_voice_clone(text=tx, language=["English"] * len(tx), ref_audio=ra,
-                                              x_vector_only_mode=[True] * len(tx), max_new_tokens=480)
-        except torch.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            print("OOM, batch skipped", flush=True)
-            continue
+        wavs, sr = synth(tx, ra)
         for w, mt in zip(wavs, meta):
+            if w is None:
+                continue
             a = resample_poly(np.asarray(w, np.float32), SR, sr)
             words = len(mt["text"].split())
             if not (0.12 * words * SR <= len(a) <= 0.75 * words * SR):
