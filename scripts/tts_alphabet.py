@@ -81,6 +81,7 @@ def main() -> None:
     p.add_argument("--voices", type=int, default=400)
     p.add_argument("--batch-texts", type=int, default=16)
     p.add_argument("--clips-per-file", type=int, default=2000)
+    p.add_argument("--token-budget", type=int, default=12000, help="clips x max new tokens per batch (A10G: 96 clips of ~12 words)")
     p.add_argument("--work", default="/data/tts")
     args = p.parse_args()
     k, n = map(int, args.part.split("/"))
@@ -132,9 +133,18 @@ def main() -> None:
 
     pool = []
     while done_s < target_s:
-        if not pool:  # 16 batches' worth of texts, sorted by length so a batch has similar lengths
-            pool = sorted((next(gen) for _ in range(args.batch_texts * 16)), key=lambda x: len(x[1].split()))
-            pool = [pool[i : i + args.batch_texts] for i in range(0, len(pool), args.batch_texts)]
+        if not pool:  # texts sorted by length; each batch fills a token budget (cap x clips), so long texts get smaller batches
+            srt = sorted((next(gen) for _ in range(args.batch_texts * 16)), key=lambda x: len(x[1].split()))
+            i = 0
+            while i < len(srt):
+                j = i + 1
+                while j < len(srt) and j - i < args.batch_texts:
+                    cap = int(12 * 0.75 * len(srt[j][1].split())) + 24
+                    if (j - i + 1) * VOICES_PER_TEXT * cap > args.token_budget:
+                        break
+                    j += 1
+                pool.append(srt[i:j])
+                i = j
             rng.shuffle(pool)
         batch = pool.pop()
         tx, ra, meta = [], [], []
