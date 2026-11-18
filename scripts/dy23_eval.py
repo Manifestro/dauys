@@ -80,6 +80,8 @@ def main() -> None:
     p.add_argument("--ref", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--n", type=int, default=N)
+    p.add_argument("--other", default="", help="eval.json of DY-22 (same prompts): its gen texts get the topic test too")
+    p.add_argument("--no-listen", action="store_true")
     args = p.parse_args()
     out = Path(args.out)
     (out / "listen").mkdir(parents=True, exist_ok=True)
@@ -173,7 +175,38 @@ def main() -> None:
             r.append({"text": t, "logppl": logppl(t), "words": len(t.split()), **stats(E[i], Cc[i], P[i])})
         rows[kind] = r
         print(kind, json.dumps(r[:2]), flush=True)
-    for i in range(min(10, len(g_ev))):
+    # topic test (text models as rulers only): Whisper transcript of the 30 s prompt vs of each continuation;
+    # right when a continuation is closer to its own prompt than to another random prompt (MiniLM sentence vectors)
+    from transformers import AutoModel
+    etk = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+    emb = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2").to(device).eval()
+
+    @torch.no_grad()
+    def vec(texts):
+        b = etk(texts, padding=True, truncation=True, max_length=256, return_tensors="pt").to(device)
+        h = emb(**b).last_hidden_state
+        m = b["attention_mask"].unsqueeze(-1).float()
+        return F.normalize((h * m).sum(1) / m.sum(1).clamp(min=1), dim=-1)
+
+    prompt_text = [text(wav(p_ev[i], p_cd[i], pr_pr[i])) for i in range(len(p_ev))]
+    pv = vec([t or "." for t in prompt_text])
+    trng = np.random.default_rng(7)
+    other_idx = np.array([(i + trng.integers(1, len(pv))) % len(pv) for i in range(len(pv))])
+
+    def topic(texts):
+        cv = vec([t or "." for t in texts])
+        own = (cv * pv).sum(-1)
+        oth = (cv * pv[torch.from_numpy(other_idx).to(device)]).sum(-1)
+        return {"topic_acc": float(((own > oth).float() + 0.5 * (own == oth).float()).mean()),
+                "sim_own": float(own.mean()), "sim_other": float(oth.mean())}
+
+    topics = {k: topic([x["text"] for x in rows[k]]) for k in rows}
+    if args.other:
+        o = json.loads(Path(args.other).read_text())["rows"]["gen"]
+        if len(o) >= len(pv):
+            topics["dy22_gen"] = topic([x["text"] for x in o[: len(pv)]])
+    print("TOPIC", json.dumps(topics), flush=True)
+    for i in range(0 if args.no_listen else min(10, len(g_ev))):
         for kind, E, Cc, P in (("gen", g_ev, g_cd, g_pr), ("real", r_ev, r_cd, r_pr)):
             w = wav(np.concatenate([p_ev[i][-50:], E[i]]), np.concatenate([p_cd[i][-50:], Cc[i]]), np.concatenate([pr_pr[i][-50:], P[i]]))
             sf.write(out / "listen" / f"{i:02d}_{kind}.wav", w, SR)
@@ -191,7 +224,8 @@ def main() -> None:
     summ["L3"] = bool(abs(G["f0_std"] / R["f0_std"] - 1) <= 0.3)
     summ["L"] = summ["L1"] and summ["L2"] and summ["L3"]
     summ["n"] = len(g_ev)
-    (out / "eval.json").write_text(json.dumps({"summary": summ, "rows": rows}, indent=2, ensure_ascii=False))
+    summ["topic"] = topics
+    (out / "eval.json").write_text(json.dumps({"summary": summ, "rows": rows, "prompt_text": prompt_text}, indent=2, ensure_ascii=False))
     print("SUMMARY", json.dumps(summ), flush=True)
 
 
