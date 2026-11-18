@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # DY-24 alphabet quantiser on an Airon AWS GPU instance: venv (virtualenv, no apt) -> ZeroSpeech dev from S3 ->
 # pair features from the TTS alphabet data -> train -> eval (gate Q) -> upload HF dy24/.
-#   K=256 FILES=8 nohup bash ~/dauys/scripts/alpha_pod.sh > ~/alpha.log 2>&1 &
+#   K=256 FILES=8 [W=/data/alpha_x FEAT=microsoft/wavlm-large:12 WAIT_CUTS=1] nohup bash ~/dauys/scripts/alpha_pod.sh > ~/alpha.log 2>&1 &
 set -uo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 until [[ -s /etc/airon.env ]]; do sleep 5; done
 set -a; . /etc/airon.env; set +a
 sudo mkdir -p /data && sudo chown "$USER" /data
-W=/data/alpha; mkdir -p $W/marks
+W=${W:-/data/alpha}; mkdir -p $W/marks
 mark() { touch "$W/marks/$1"; echo "=== $1 done $(date -u +%H:%M:%S)"; }
 done_() { [[ -e "$W/marks/$1" ]]; }
 if ! done_ setup; then
@@ -28,7 +28,7 @@ if ! done_ zr; then
   mark zr
 fi
 if ! done_ feats; then
-  python "$repo/scripts/alphabet.py" feats --files ${FILES:-8} ${FEATS_ARGS:-} --out $W/pairs.pt > $W/feats.log 2>&1 || { echo "FEATS FAILED"; tail -20 $W/feats.log; exit 1; }
+  python "$repo/scripts/alphabet.py" feats --files ${FILES:-8} --feat ${FEAT:-sylber} ${FEATS_ARGS:-} --out $W/pairs.pt > $W/feats.log 2>&1 || { echo "FEATS FAILED"; tail -20 $W/feats.log; exit 1; }
   tail -2 $W/feats.log
   mark feats
 fi
@@ -47,19 +47,21 @@ for k in ${K:-256}; do
   fi
 done
 if ! done_ words; then
+  until [[ -z "${WAIT_CUTS:-}" || -s /data/alpha/words_pick.pkl ]]; do sleep 30; done  # cut words made by another stage
   runs=""; for k in ${K:-256}; do runs="$runs $W/run$k"; done
   python "$repo/scripts/alphabet.py" words --runs $runs --out $W/words.json > $W/words.log 2>&1 || { echo "WORDS FAILED"; tail -20 $W/words.log; exit 1; }
   grep -E "^WORDS" $W/words.log
   mark words
 fi
-python - <<'EOF2'
+W=$W python - <<'EOF2'
 import os, glob
 from huggingface_hub import HfApi
 api = HfApi(token=os.environ["HF_TOKEN"])
 assert api.repo_info("manifestro/dauys-runs").private
 tag = os.environ.get("TAG", "dy24")
-for f in glob.glob("/data/alpha/*.json") + glob.glob("/data/alpha/*.log") + glob.glob("/data/alpha/run*/alpha.pt"):
-    api.upload_file(path_or_fileobj=f, path_in_repo=f"{tag}/" + os.path.relpath(f, "/data/alpha"), repo_id="manifestro/dauys-runs")
+w = os.environ["W"]
+for f in glob.glob(f"{w}/*.json") + glob.glob(f"{w}/*.log") + glob.glob(f"{w}/run*/alpha.pt"):
+    api.upload_file(path_or_fileobj=f, path_in_repo=f"{tag}/" + os.path.relpath(f, w), repo_id="manifestro/dauys-runs")
 print("UPLOADED", tag)
 EOF2
 echo "ALPHA POD DONE"
