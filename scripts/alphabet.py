@@ -106,8 +106,11 @@ def feats(args) -> None:
                     aug_pairs[(c, a)] = torch.from_numpy(np.minimum(np.round(np.arange(nc) / r), na - 1).astype(np.int32))
                     aug_pairs[(a, c)] = torch.from_numpy(np.minimum(np.round(np.arange(na) * r), nc - 1).astype(np.int32))
             groups.append(g)
+        import resource
+
         print(json.dumps({"file": f, "clips": len(out_f), "groups": len(groups), "hours": round(
-            sum(len(x) for x in out_f) / 50 / 3600, 2), "s": round(time.time() - t0)}), flush=True)
+            sum(len(x) for x in out_f) / 50 / 3600, 2), "s": round(time.time() - t0),
+            "maxrss_gb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6, 1)}), flush=True)
     align = {}
     for g in groups:
         nf = [F.normalize(out_f[i].float(), dim=1).numpy() for i in g]

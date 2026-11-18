@@ -21,7 +21,7 @@ if ! done_ setup; then
   ~/venv/bin/python -c "import torch, sylber, numba; assert torch.cuda.is_available(); print('GPU', torch.cuda.get_device_name(0))" || exit 1
   mark setup
 fi
-export PATH=$HOME/venv/bin:$PATH PYTHONPATH=$repo/src PYTHONWARNINGS=ignore HF_HUB_DISABLE_PROGRESS_BARS=1 OMP_NUM_THREADS=8
+export PATH=$HOME/venv/bin:$PATH PYTHONPATH=$repo/src PYTHONWARNINGS=ignore HF_HUB_DISABLE_PROGRESS_BARS=1 OMP_NUM_THREADS=8 MALLOC_ARENA_MAX=2
 if ! done_ zr; then
   mkdir -p /data/bench
   aws s3 cp s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/bench/zr_dev.tar - --only-show-errors | tar -C /data/bench -xf - || exit 1
