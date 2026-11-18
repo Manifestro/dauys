@@ -39,6 +39,37 @@ TTS = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/tts-alpha
 SRC = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/duplexchat/en-16k"
 
 
+class Feat:
+    """Frozen frame features at 50 Hz from a spec: "sylber" (Sylber layer 9, 768-d) or "<hf model>:<layer>", e.g.
+    "microsoft/wavlm-large:12" (hidden_states[layer]; 0 = CNN output)."""
+
+    def __init__(self, spec: str, device) -> None:
+        self.spec, self.device = spec, device
+        if spec == "sylber":
+            self.m, self.dim = load_sylber(device), 768
+        else:
+            from transformers import AutoModel
+
+            name, layer = spec.rsplit(":", 1)
+            self.layer = int(layer)
+            self.m = AutoModel.from_pretrained(name).to(device).half().eval()
+            self.m.encoder.layers = self.m.encoder.layers[: self.layer]  # nothing above the layer is computed
+            self.dim = self.m.config.hidden_size
+
+    @torch.no_grad()
+    def __call__(self, w16: np.ndarray) -> np.ndarray:
+        if self.spec == "sylber":
+            return hidden_states(self.m, w16)
+        out = []
+        for o in range(0, len(w16), 20 * SR):  # 20 s chunks, each normalised as the feature extractor does
+            x = w16[o : o + 20 * SR].astype(np.float32)
+            x = np.pad(x, (0, max(0, 400 - len(x))))
+            x = (x - x.mean()) / (x.std() + 1e-7)
+            h = self.m(torch.from_numpy(x)[None].to(self.device).half(), output_hidden_states=True).hidden_states[self.layer]
+            out.append(h[0].float().cpu().numpy())
+        return np.concatenate(out)
+
+
 def sh(cmd: str) -> str:
     return subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True).stdout
 
@@ -71,7 +102,7 @@ def dtw_map(c: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------- features + pairs
 def feats(args) -> None:
     device = torch.device("cuda")
-    syl = load_sylber(device)
+    syl = Feat(args.feat, device)
     files = [l.split()[-1] for l in sh(f"aws s3 ls --recursive {TTS}/").splitlines() if l.endswith(".npz")]
     files = sorted(files, key=lambda f: (int(Path(f).stem), f))[: args.files]  # first files of every part
     out_f, groups, voices, aug_pairs = [], [], [], {}
@@ -92,14 +123,14 @@ def feats(args) -> None:
             for i in idx:
                 s, n = z["index"][i]
                 w = z["audio"][s : s + n]
-                st = hidden_states(syl, w)
+                st = syl(w)
                 out_f.append(torch.from_numpy(st.astype(np.float16)))
                 voices.append(meta[i]["voice"])
                 g.append(len(out_f) - 1)
                 if args.aug:  # the same clip distorted: noise / speed / phone band; frames mapped by the speed factor
                     kind = ("noise", "speed", "lowpass")[int(arng.integers(3))]
                     w2, r = distort(w, kind, arng)
-                    out_f.append(torch.from_numpy(hidden_states(syl, w2).astype(np.float16)))
+                    out_f.append(torch.from_numpy(syl(w2).astype(np.float16)))
                     voices.append(meta[i]["voice"] + ":" + kind)
                     c, a = len(out_f) - 2, len(out_f) - 1
                     nc, na = len(out_f[c]), len(out_f[a])
@@ -120,7 +151,7 @@ def feats(args) -> None:
                     align[(g[a], g[b])] = torch.from_numpy(dtw_map((1 - nf[a] @ nf[b].T).astype(np.float64)).astype(np.int32))
     align.update(aug_pairs)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"feats": out_f, "groups": groups, "voices": voices, "align": align}, args.out)
+    torch.save({"feats": out_f, "groups": groups, "voices": voices, "align": align, "feat": args.feat}, args.out)
     print("FEATS DONE", len(out_f), "clips", len(groups), "groups", len(align), "pairs", flush=True)
 
 
@@ -141,10 +172,10 @@ def distort(w16: np.ndarray, kind: str, rng) -> tuple[np.ndarray, float]:
 
 # ---------------------------------------------------------------- model
 class Encoder(nn.Module):
-    def __init__(self, k: int, d: int = 512, z: int = 256, blank: bool = False) -> None:
+    def __init__(self, k: int, d: int = 512, z: int = 256, blank: bool = False, in_dim: int = 768) -> None:
         super().__init__()
         self.blank = blank
-        self.inp = nn.Linear(768, d)
+        self.inp = nn.Linear(in_dim, d)
         self.tr = nn.TransformerEncoder(nn.TransformerEncoderLayer(d, 8, 1024, 0.1, batch_first=True, norm_first=True), 2)
         self.down = nn.Conv1d(d, d, 3, stride=2, padding=1)
         self.out = nn.Linear(d, z)
@@ -195,7 +226,8 @@ def train(args) -> None:
     print("clips", len(feats_), "pairs", len(pairs), flush=True)
     torch.manual_seed(0)
     rng = np.random.default_rng(0)
-    m = Encoder(args.k, blank=args.ctc).to(device)
+    feat, in_dim = data.get("feat", "sylber"), feats_[0].shape[1]
+    m = Encoder(args.k, blank=args.ctc, in_dim=in_dim).to(device)
     if args.init:
         m.load_state_dict(torch.load(args.init)["model"], strict=False)
     opt = torch.optim.AdamW(m.parameters(), lr=args.lr, weight_decay=0.01)
@@ -207,7 +239,7 @@ def train(args) -> None:
         clips = sorted({c for p in sel for c in p})
         pos = {c: i for i, c in enumerate(clips)}
         T = max(len(feats_[c]) for c in clips)
-        x = torch.zeros(len(clips), T, 768)
+        x = torch.zeros(len(clips), T, in_dim)
         mask = torch.zeros(len(clips), T, dtype=torch.bool)
         for c, i in pos.items():
             x[i, : len(feats_[c])] = feats_[c].float()
@@ -266,21 +298,21 @@ def train(args) -> None:
                 used = lg[m2].argmax(-1).unique().numel()
             print(json.dumps({"step": step + 1, "loss": round(loss.item(), 4), "aligned_agree": round(agree, 4),
                               "codes_used": used, "s": round(time.time() - t0)}), flush=True)
-    torch.save({"model": m.state_dict(), "k": args.k, "blank": bool(args.ctc)}, out / "alpha.pt")
+    torch.save({"model": m.state_dict(), "k": args.k, "blank": bool(args.ctc), "feat": feat, "in_dim": in_dim}, out / "alpha.pt")
     print("TRAIN DONE", flush=True)
 
 
 # ---------------------------------------------------------------- evaluation
 def evaluate(args) -> None:
     device = torch.device("cuda")
-    syl = load_sylber(device)
     ck = torch.load(Path(args.run) / "alpha.pt")
-    m = Encoder(ck["k"], blank=ck.get("blank", False)).to(device).eval()
+    syl = Feat(ck.get("feat", "sylber"), device)
+    m = Encoder(ck["k"], blank=ck.get("blank", False), in_dim=ck.get("in_dim", 768)).to(device).eval()
     m.load_state_dict(ck["model"])
 
     def tok(w16: np.ndarray) -> np.ndarray:
         w16 = np.pad(w16, (0, max(0, SR // 5 - len(w16))))
-        return m.tokens(torch.from_numpy(hidden_states(syl, w16)).float().to(device), args.smooth)
+        return m.tokens(torch.from_numpy(syl(w16)).float().to(device), args.smooth)
 
     res = {"k": ck["k"], "smooth": args.smooth}
     d = Path(args.zr) / "lexical" / "dev"
@@ -362,12 +394,35 @@ def words(args) -> None:
     pieces (different people); tokens from the alphabet and from the phoneme oracle on the same cuts. Per word: share
     of occurrence pairs with identical tokens and mean normalised edit distance; plus word ABX (X = occurrence of w,
     A = other occurrence of w, B = occurrence of another word of similar length)."""
-    from transformers import pipeline
-
-    from dy21_train import held_out
     from phon_units import Phonemes
 
     device = torch.device("cuda")
+    names, pick = word_cuts(args, device)
+    ph = Phonemes(device)
+    res = {"words": len(names), "occurrences": sum(len(pick[t]) for t in names)}
+    for run in args.runs:
+        ck = torch.load(Path(run) / "alpha.pt")
+        fe = Feat(ck.get("feat", "sylber"), device)
+        m = Encoder(ck["k"], blank=ck.get("blank", False), in_dim=ck.get("in_dim", 768)).to(device).eval()
+        m.load_state_dict(ck["model"])
+        name = f"alpha_k{ck['k']}" + ("_ctc" if ck.get("blank") else "") + ("" if ck.get("feat", "sylber") == "sylber" else "_" + Path(run).name)
+        res[name] = (lambda m, fe: lambda w: m.tokens(torch.from_numpy(fe(np.pad(w, (0, max(0, SR // 5 - len(w)))))).float().to(device)))(m, fe)
+    res["phonemes"] = lambda w: ph(w)
+    word_scores(res, names, pick, args.out)
+
+
+def word_cuts(args, device):
+    """The cut words; cached in --cache (Whisper on 12 shards takes ~35 min)."""
+    import pickle
+
+    from transformers import pipeline
+
+    from dy21_train import held_out
+
+    if Path(args.cache).exists():
+        names, pick = pickle.loads(Path(args.cache).read_bytes())
+        print("words from cache:", len(names), flush=True)
+        return names, pick
     asr = pipeline("automatic-speech-recognition", model="openai/whisper-large-v3-turbo", device=0, torch_dtype=torch.float16)
     shards = [x for x in sorted(l.split()[-1].rstrip("/") for l in sh(f"aws s3 ls {SRC}/").splitlines()
                                 if l.strip().startswith("PRE")) if held_out(x)][: args.shards]
@@ -399,28 +454,36 @@ def words(args) -> None:
             pick[t] = keep[:4]
     names = sorted(pick, key=lambda t: -len(pick[t]))[: args.n]
     print("words with >= 3 different pieces:", len(pick), "used", len(names), flush=True)
+    pick = {t: pick[t] for t in names}
+    Path(args.cache).write_bytes(pickle.dumps((names, pick)))
+    return names, pick
 
-    syl = load_sylber(device)
-    ph = Phonemes(device)
-    res = {"words": len(names), "occurrences": sum(len(pick[t]) for t in names)}
-    for run in args.runs:
-        ck = torch.load(Path(run) / "alpha.pt")
-        m = Encoder(ck["k"], blank=ck.get("blank", False)).to(device).eval()
-        m.load_state_dict(ck["model"])
-        res[f"alpha_k{ck['k']}" + ("_ctc" if ck.get("blank") else "")] = (lambda m: lambda w: m.tokens(torch.from_numpy(hidden_states(syl, np.pad(w, (0, max(0, SR // 5 - len(w)))))).float().to(device)))(m)
-    res["phonemes"] = lambda w: ph(w)
-    rng = np.random.default_rng(0)
+
+def word_scores(res: dict, names, pick, out_path, cont: bool = False) -> dict:
+    """Per entry of res (a function audio -> tokens, or with cont=True audio -> frames): identical share, mean edit
+    and word ABX on the cut words; continuous frames get ABX only, with cosine DTW."""
+    from units_diag import cos_dtw
+
     out = {k: v for k, v in res.items() if not callable(v)}
     for name in [k for k, v in res.items() if callable(v)]:
+        rng = np.random.default_rng(0)  # the same B words for every entry
         fn = res[name]
-        tok = {t: [np.asarray(fn(a), np.int64) for a in pick[t]] for t in names}
-        same, dist = [], []
-        for t in names:
-            q = tok[t]
-            for i in range(len(q)):
-                for j in range(i + 1, len(q)):
-                    same.append(np.array_equal(q[i], q[j]))
-                    dist.append(edit(q[i], q[j]))
+        if cont:
+            tok = {t: [F.normalize(torch.from_numpy(fn(a)).float(), dim=1).numpy() for a in pick[t]] for t in names}
+            d = cos_dtw
+        else:
+            tok = {t: [np.asarray(fn(a), np.int64) for a in pick[t]] for t in names}
+            d = edit
+        r = {}
+        if not cont:
+            same, dist = [], []
+            for t in names:
+                q = tok[t]
+                for i in range(len(q)):
+                    for j in range(i + 1, len(q)):
+                        same.append(np.array_equal(q[i], q[j]))
+                        dist.append(edit(q[i], q[j]))
+            r = {"same_word_identical": round(float(np.mean(same)), 4), "mean_edit": round(float(np.mean(dist)), 4)}
         right = n = 0.0
         for t in names:
             others = [u for u in names if u != t and abs(len(u) - len(t)) <= 1] or [u for u in names if u != t]
@@ -429,14 +492,30 @@ def words(args) -> None:
                     if i != j:
                         u = others[rng.integers(len(others))]
                         x, a_, b_ = tok[t][i], tok[t][j], tok[u][rng.integers(len(tok[u]))]
-                        da, db = edit(x, a_), edit(x, b_)
+                        da, db = d(x, a_), d(x, b_)
                         right += 1.0 if da < db else 0.5 if da == db else 0.0
                         n += 1
-        out[name] = {"same_word_identical": round(float(np.mean(same)), 4), "mean_edit": round(float(np.mean(dist)), 4),
-                     "word_abx": round(right / n, 4), "tokens_per_word": round(float(np.mean([len(x) for v in tok.values() for x in v])), 2)}
-        print("WORDS", name, json.dumps(out[name]), flush=True)
-    Path(args.out).write_text(json.dumps(out, indent=2))
+        r["word_abx"] = round(right / n, 4)
+        if not cont:
+            r["tokens_per_word"] = round(float(np.mean([len(x) for v in tok.values() for x in v])), 2)
+        out[name] = r
+        print("WORDS", name, json.dumps(r), flush=True)
+    Path(out_path).write_text(json.dumps(out, indent=2))
     print("WORDS DONE", json.dumps(out), flush=True)
+    return out
+
+
+def ceiling(args) -> None:
+    """Input ceiling: word ABX of the frozen frame features themselves (no quantiser) on the same cut words."""
+    device = torch.device("cuda")
+    names, pick = word_cuts(args, device)
+    res = {"words": len(names)}
+    for spec in args.specs:
+        fe = Feat(spec, device)
+        res["cont_" + spec] = (lambda fe: lambda w: fe(np.pad(w, (0, max(0, SR // 5 - len(w))))))(fe)
+        word_scores({"cont_" + spec: res["cont_" + spec]}, names, pick, args.out + "." + spec.replace("/", "_"), cont=True)
+        del fe
+        torch.cuda.empty_cache()
 
 
 def main() -> None:
@@ -446,6 +525,7 @@ def main() -> None:
     a.add_argument("--files", type=int, default=8)
     a.add_argument("--aug", action="store_true", help="also store one distorted copy per clip as an extra pair")
     a.add_argument("--out", required=True)
+    a.add_argument("--feat", default="sylber", help='"sylber" or "<hf model>:<layer>"')
     b = sub.add_parser("train")
     b.add_argument("--pairs", required=True)
     b.add_argument("--out", required=True)
@@ -467,8 +547,16 @@ def main() -> None:
     w.add_argument("--shards", type=int, default=12)
     w.add_argument("--pieces", type=int, default=80)
     w.add_argument("--n", type=int, default=200)
+    w.add_argument("--cache", default="/data/alpha/words_pick.pkl")
+    e = sub.add_parser("ceiling")
+    e.add_argument("--specs", nargs="+", required=True)
+    e.add_argument("--out", required=True)
+    e.add_argument("--shards", type=int, default=12)
+    e.add_argument("--pieces", type=int, default=80)
+    e.add_argument("--n", type=int, default=200)
+    e.add_argument("--cache", default="/data/alpha/words_pick.pkl")
     args = p.parse_args()
-    {"feats": feats, "train": train, "eval": evaluate, "words": words}[args.cmd](args)
+    {"feats": feats, "train": train, "eval": evaluate, "words": words, "ceiling": ceiling}[args.cmd](args)
 
 
 if __name__ == "__main__":
