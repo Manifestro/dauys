@@ -74,7 +74,8 @@ def feats(args) -> None:
     syl = load_sylber(device)
     files = [l.split()[-1] for l in sh(f"aws s3 ls --recursive {TTS}/").splitlines() if l.endswith(".npz")]
     files = sorted(files, key=lambda f: (int(Path(f).stem), f))[: args.files]  # first files of every part
-    out_f, groups, voices = [], [], []
+    out_f, groups, voices, aug_pairs = [], [], [], {}
+    arng = np.random.default_rng(7)
     t0 = time.time()
     for f in files:
         b = sh(f"aws s3 cp s3://manifestro-dataset-876108973178-us-east-1-an/{f} /tmp/a.npz --only-show-errors")
@@ -90,10 +91,20 @@ def feats(args) -> None:
             g = []
             for i in idx:
                 s, n = z["index"][i]
-                st = hidden_states(syl, z["audio"][s : s + n])
+                w = z["audio"][s : s + n]
+                st = hidden_states(syl, w)
                 out_f.append(torch.from_numpy(st.astype(np.float16)))
                 voices.append(meta[i]["voice"])
                 g.append(len(out_f) - 1)
+                if args.aug:  # the same clip distorted: noise / speed / phone band; frames mapped by the speed factor
+                    kind = ("noise", "speed", "lowpass")[int(arng.integers(3))]
+                    w2, r = distort(w, kind, arng)
+                    out_f.append(torch.from_numpy(hidden_states(syl, w2).astype(np.float16)))
+                    voices.append(meta[i]["voice"] + ":" + kind)
+                    c, a = len(out_f) - 2, len(out_f) - 1
+                    nc, na = len(out_f[c]), len(out_f[a])
+                    aug_pairs[(c, a)] = torch.from_numpy(np.minimum(np.round(np.arange(nc) / r), na - 1).astype(np.int32))
+                    aug_pairs[(a, c)] = torch.from_numpy(np.minimum(np.round(np.arange(na) * r), nc - 1).astype(np.int32))
             groups.append(g)
         print(json.dumps({"file": f, "clips": len(out_f), "groups": len(groups), "hours": round(
             sum(len(x) for x in out_f) / 50 / 3600, 2), "s": round(time.time() - t0)}), flush=True)
@@ -104,9 +115,25 @@ def feats(args) -> None:
             for b in range(len(g)):
                 if a != b:
                     align[(g[a], g[b])] = torch.from_numpy(dtw_map((1 - nf[a] @ nf[b].T).astype(np.float64)).astype(np.int32))
+    align.update(aug_pairs)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     torch.save({"feats": out_f, "groups": groups, "voices": voices, "align": align}, args.out)
     print("FEATS DONE", len(out_f), "clips", len(groups), "groups", len(align), "pairs", flush=True)
+
+
+def distort(w16: np.ndarray, kind: str, rng) -> tuple[np.ndarray, float]:
+    """Noise 10-20 dB / speed x0.9-1.1 / 4 kHz phone band. Returns the audio and the duration factor (old/new)."""
+    x = w16.astype(np.float32)
+    r = 1.0
+    if kind == "noise":
+        x = x + rng.standard_normal(len(x)) * x.std() / 10 ** (rng.uniform(10, 20) / 20)
+    elif kind == "speed":
+        f = int(rng.choice([90, 95, 105, 110]))
+        x = resample_poly(x, 100, f)
+        r = f / 100
+    else:
+        x = resample_poly(resample_poly(x, 1, 2), 2, 1)
+    return np.clip(x, -32768, 32767).astype(np.int16), r
 
 
 # ---------------------------------------------------------------- model
@@ -127,8 +154,12 @@ class Encoder(nn.Module):
         return z @ F.normalize(self.codes, dim=1).T / 0.1
 
     @torch.no_grad()
-    def tokens(self, x: torch.Tensor) -> np.ndarray:
+    def tokens(self, x: torch.Tensor, smooth: int = 0) -> np.ndarray:
         c = self.forward(x[None])[0].argmax(-1).cpu().numpy()
+        for _ in range(smooth):  # a frame between two equal neighbours takes their code (removes one-frame flicker)
+            if len(c) > 2:
+                fix = (c[:-2] == c[2:]) & (c[1:-1] != c[:-2])
+                c[1:-1][fix] = c[:-2][fix]
         return c[np.r_[True, c[1:] != c[:-1]]] if len(c) else c
 
 
@@ -207,9 +238,9 @@ def evaluate(args) -> None:
 
     def tok(w16: np.ndarray) -> np.ndarray:
         w16 = np.pad(w16, (0, max(0, SR // 5 - len(w16))))
-        return m.tokens(torch.from_numpy(hidden_states(syl, w16)).float().to(device))
+        return m.tokens(torch.from_numpy(hidden_states(syl, w16)).float().to(device), args.smooth)
 
-    res = {"k": ck["k"]}
+    res = {"k": ck["k"], "smooth": args.smooth}
     d = Path(args.zr) / "lexical" / "dev"
     items = defaultdict(lambda: defaultdict(dict))
     for r in csv.DictReader(open(d / "gold.csv")):
@@ -371,6 +402,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("feats")
     a.add_argument("--files", type=int, default=8)
+    a.add_argument("--aug", action="store_true", help="also store one distorted copy per clip as an extra pair")
     a.add_argument("--out", required=True)
     b = sub.add_parser("train")
     b.add_argument("--pairs", required=True)
@@ -383,6 +415,7 @@ def main() -> None:
     c.add_argument("--run", required=True)
     c.add_argument("--zr", required=True)
     c.add_argument("--out", required=True)
+    c.add_argument("--smooth", type=int, default=0)
     w = sub.add_parser("words")
     w.add_argument("--runs", nargs="+", required=True)
     w.add_argument("--out", required=True)
