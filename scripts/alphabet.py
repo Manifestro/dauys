@@ -234,15 +234,18 @@ def train(args) -> None:
         if args.ctc:
             # sequence level: the other voice's decoded tokens (merge repeats, drop blanks) are the CTC target
             lp = F.log_softmax(lg_all, -1)  # [C, T2, K+1], blank = K
-            with torch.no_grad():
-                dec = lg_all.argmax(-1)
+            with torch.no_grad():  # targets from the code classes only (no blank), so they cannot shrink to nothing
+                dec = lg_all[..., : args.k].argmax(-1)
             ctc_terms = []
             for a, b in sel:
                 for x_, y_ in ((a, b), (b, a)):
                     n_y = int(m2[pos[y_]].sum())
                     t = dec[pos[y_], :n_y]
+                    if len(t) > 2:  # one-frame flicker removed before merging, as in --smooth 1
+                        fix = (t[:-2] == t[2:]) & (t[1:-1] != t[:-2])
+                        t = t.clone()
+                        t[1:-1][fix] = t[:-2][fix]
                     t = t[torch.cat([torch.ones(1, dtype=torch.bool, device=device), t[1:] != t[:-1]])]
-                    t = t[t != args.k]
                     n_x = int(m2[pos[x_]].sum())
                     if 0 < len(t) <= n_x:
                         ctc_terms.append((lp[pos[x_], :n_x], t))
