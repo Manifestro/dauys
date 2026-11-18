@@ -77,7 +77,8 @@ class Enc:
 
 
 @torch.no_grad()
-def logprob(model: CodeLM, ev: np.ndarray, cd: np.ndarray, device, groups: int = 8, events: bool = True) -> float:
+def logprob(model: CodeLM, ev: np.ndarray, cd: np.ndarray, device, groups: int = 8, events: bool = True,
+            mean: bool = False) -> float:
     e = torch.from_numpy(np.r_[EOS, ev]).long()[None].to(device)
     c = torch.from_numpy(np.concatenate([np.zeros((1, 8), np.int64), cd])).long()[None].to(device)
     e, c = e[:, -(model.cfg.ctx + 1) :], c[:, -(model.cfg.ctx + 1) :]
@@ -90,7 +91,7 @@ def logprob(model: CodeLM, ev: np.ndarray, cd: np.ndarray, device, groups: int =
         yc = c[0, 1:][nxt]
         lc = torch.log_softmax(model.code_logits(h[nxt], yc), -1)
         lp = lp + lc.gather(2, yc[:, :, None])[:, :groups].sum()
-    return float(lp)
+    return float(lp) / (max(int((y == UNIT).sum()), 1) if mean else 1)
 
 
 def main() -> None:
@@ -103,7 +104,7 @@ def main() -> None:
     p.add_argument("--pairs", type=int, default=3000)
     p.add_argument("--sc-splits", default="tsc_bm,tsc_af,ssc_bm,ssc_af")
     p.add_argument("--tasks", default="swuggy,sblimp,sc")
-    p.add_argument("--scores", default="all", help="comma list of scorings: all, g1, g2, g4, codes_only (all 8 codes, no events)")
+    p.add_argument("--scores", default="all", help="comma list: all, g1, g2, g4, codes_only (no events), all_mean / g1_mean (per syllable)")
     args = p.parse_args()
     device = torch.device("cuda")
     rng = np.random.default_rng(0)
@@ -113,7 +114,8 @@ def main() -> None:
     model.load_state_dict(ck["model"])
     results = {}
 
-    modes = {"all": (8, True), "g1": (1, True), "g2": (2, True), "g4": (4, True), "codes_only": (8, False)}
+    modes = {"all": (8, True, False), "g1": (1, True, False), "g2": (2, True, False), "g4": (4, True, False),
+             "codes_only": (8, False, False), "all_mean": (8, True, True), "g1_mean": (1, True, True)}
     scores = args.scores.split(",")
 
     def run(name, items):
@@ -124,8 +126,8 @@ def main() -> None:
                 continue
             n += 1
             for s in scores:
-                g, e = modes[s]
-                a, b = logprob(model, *good, device, g, e), logprob(model, *bad, device, g, e)
+                g, e, mn = modes[s]
+                a, b = logprob(model, *good, device, g, e, mn), logprob(model, *bad, device, g, e, mn)
                 right[s] += 1.0 if a > b else 0.5 if a == b else 0.0
         results[name] = {"n": n, "seconds": round(time.time() - t0)}
         for s in scores:
