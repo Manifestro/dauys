@@ -81,6 +81,8 @@ def main() -> None:
     p.add_argument("--voices", type=int, default=400)
     p.add_argument("--batch-texts", type=int, default=16)
     p.add_argument("--clips-per-file", type=int, default=2000)
+    p.add_argument("--resume-files", type=int, default=0, help="restart: files already in S3 for this part")
+    p.add_argument("--resume-hours", type=float, default=0.0, help="restart: hours already done by this part")
     p.add_argument("--token-budget", type=int, default=12000, help="clips x max new tokens per batch (A10G: 96 clips of ~12 words)")
     p.add_argument("--work", default="/data/tts")
     args = p.parse_args()
@@ -95,9 +97,11 @@ def main() -> None:
 
     m = Qwen3TTSModel.from_pretrained("Qwen/Qwen3-TTS-12Hz-1.7B-Base", device_map="cuda:0", dtype=torch.bfloat16)
     target_s = args.hours * 3600 / n
-    done_s, file_j, t0 = 0.0, 0, time.time()
+    done_s, file_j, t0 = args.resume_hours * 3600, args.resume_files, time.time()
     buf_a, buf_m = [], []
     gen = texts(k, n)
+    for _ in range(int(args.resume_files * args.clips_per_file / VOICES_PER_TEXT * 1.15)):  # skip texts already used
+        next(gen)
 
     def flush():
         nonlocal file_j, buf_a, buf_m
@@ -168,7 +172,8 @@ def main() -> None:
             flush()
             el = time.time() - t0
             print(json.dumps({"part": args.part, "files": file_j, "hours": round(done_s / 3600, 2),
-                              "target_h": round(target_s / 3600, 1), "x_realtime": round(done_s / el, 2)}), flush=True)
+                              "target_h": round(target_s / 3600, 1),
+                              "x_realtime": round((done_s - args.resume_hours * 3600) / el, 2)}), flush=True)
     flush()
     print(f"TTS ALPHABET DONE part {args.part} hours {done_s / 3600:.2f}", flush=True)
 
