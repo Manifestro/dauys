@@ -109,7 +109,7 @@ def main() -> None:
 
     ck = torch.load(Path(args.run) / "best.pt", map_location="cpu", weights_only=False)
     model = CodeLM(LMConfig(**ck["cfg"])).to(device)
-    model.load_state_dict(ck["model"])
+    model.load_state_dict(ck["model"], strict=False)  # DY-24 D has an extra future head
     gs = [generate(model, p_ev[i : i + 50], p_cd[i : i + 50], device, 1234 + i) for i in range(0, len(pick), 50)]
     g_ev, g_cd, g_pr = (np.concatenate(x) for x in zip(*gs))
     del model
