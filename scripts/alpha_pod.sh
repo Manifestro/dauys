@@ -28,7 +28,7 @@ if ! done_ zr; then
   mark zr
 fi
 if ! done_ feats; then
-  python "$repo/scripts/alphabet.py" feats --files ${FILES:-8} --out $W/pairs.pt > $W/feats.log 2>&1 || { echo "FEATS FAILED"; tail -20 $W/feats.log; exit 1; }
+  python "$repo/scripts/alphabet.py" feats --files ${FILES:-8} ${FEATS_ARGS:-} --out $W/pairs.pt > $W/feats.log 2>&1 || { echo "FEATS FAILED"; tail -20 $W/feats.log; exit 1; }
   tail -2 $W/feats.log
   mark feats
 fi
@@ -39,18 +39,27 @@ for k in ${K:-256}; do
     mark train_$k
   fi
   if ! done_ eval_$k; then
-    python "$repo/scripts/alphabet.py" eval --run $W/run$k --zr /data/bench/zr --out $W/eval$k.json > $W/eval$k.log 2>&1 || { echo "EVAL $k FAILED"; tail -20 $W/eval$k.log; exit 1; }
-    grep -E "^EVAL" $W/eval$k.log
+    for sm in ${SMOOTH:-0}; do
+      python "$repo/scripts/alphabet.py" eval --run $W/run$k --zr /data/bench/zr --out $W/eval${k}_s$sm.json --smooth $sm > $W/eval${k}_s$sm.log 2>&1 || { echo "EVAL $k FAILED"; tail -20 $W/eval${k}_s$sm.log; exit 1; }
+      grep -E "^EVAL" $W/eval${k}_s$sm.log
+    done
     mark eval_$k
   fi
 done
+if ! done_ words; then
+  runs=""; for k in ${K:-256}; do runs="$runs $W/run$k"; done
+  python "$repo/scripts/alphabet.py" words --runs $runs --out $W/words.json > $W/words.log 2>&1 || { echo "WORDS FAILED"; tail -20 $W/words.log; exit 1; }
+  grep -E "^WORDS" $W/words.log
+  mark words
+fi
 python - <<'EOF2'
 import os, glob
 from huggingface_hub import HfApi
 api = HfApi(token=os.environ["HF_TOKEN"])
 assert api.repo_info("manifestro/dauys-runs").private
-for f in glob.glob("/data/alpha/eval*.json") + glob.glob("/data/alpha/*.log") + glob.glob("/data/alpha/run*/alpha.pt"):
-    api.upload_file(path_or_fileobj=f, path_in_repo="dy24/" + os.path.relpath(f, "/data/alpha"), repo_id="manifestro/dauys-runs")
-print("UPLOADED dy24/")
+tag = os.environ.get("TAG", "dy24")
+for f in glob.glob("/data/alpha/*.json") + glob.glob("/data/alpha/*.log") + glob.glob("/data/alpha/run*/alpha.pt"):
+    api.upload_file(path_or_fileobj=f, path_in_repo=f"{tag}/" + os.path.relpath(f, "/data/alpha"), repo_id="manifestro/dauys-runs")
+print("UPLOADED", tag)
 EOF2
 echo "ALPHA POD DONE"
