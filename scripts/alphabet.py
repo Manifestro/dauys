@@ -79,6 +79,7 @@ def feats(args) -> None:
     for f in files:
         b = sh(f"aws s3 cp s3://manifestro-dataset-876108973178-us-east-1-an/{f} /tmp/a.npz --only-show-errors")
         z = np.load("/tmp/a.npz")
+        z = {k: z[k] for k in ("audio", "index", "meta")}  # read each array once (npz re-reads on every access)
         meta = [json.loads(l) for l in str(z["meta"]).splitlines()]
         by_text = defaultdict(list)
         for i, m in enumerate(meta):
