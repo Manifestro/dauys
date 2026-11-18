@@ -141,24 +141,32 @@ def distort(w16: np.ndarray, kind: str, rng) -> tuple[np.ndarray, float]:
 
 # ---------------------------------------------------------------- model
 class Encoder(nn.Module):
-    def __init__(self, k: int, d: int = 512, z: int = 256) -> None:
+    def __init__(self, k: int, d: int = 512, z: int = 256, blank: bool = False) -> None:
         super().__init__()
+        self.blank = blank
         self.inp = nn.Linear(768, d)
         self.tr = nn.TransformerEncoder(nn.TransformerEncoderLayer(d, 8, 1024, 0.1, batch_first=True, norm_first=True), 2)
         self.down = nn.Conv1d(d, d, 3, stride=2, padding=1)
         self.out = nn.Linear(d, z)
         self.codes = nn.Parameter(F.normalize(torch.randn(k, z), dim=1))
+        if blank:  # CTC-like "no new sound here" class, scored by its own head
+            self.blank_head = nn.Linear(d, 1)
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         """x [B, T, 768] frames at 50 Hz -> logits [B, ceil(T/2), K] (cosine / tau)."""
         h = self.tr(self.inp(x), src_key_padding_mask=None if mask is None else ~mask)
         h = self.down(h.transpose(1, 2)).transpose(1, 2)
         z = F.normalize(self.out(h), dim=-1)
-        return z @ F.normalize(self.codes, dim=1).T / 0.1
+        lg = z @ F.normalize(self.codes, dim=1).T / 0.1
+        return torch.cat([lg, self.blank_head(h)], -1) if self.blank else lg
 
     @torch.no_grad()
     def tokens(self, x: torch.Tensor, smooth: int = 0) -> np.ndarray:
         c = self.forward(x[None])[0].argmax(-1).cpu().numpy()
+        if self.blank:  # CTC decoding: merge repeats, then drop blanks
+            k = self.codes.shape[0]
+            c = c[np.r_[True, c[1:] != c[:-1]]]
+            return c[c != k]
         for _ in range(smooth):  # a frame between two equal neighbours takes their code (removes one-frame flicker)
             if len(c) > 2:
                 fix = (c[:-2] == c[2:]) & (c[1:-1] != c[:-2])
@@ -187,7 +195,9 @@ def train(args) -> None:
     print("clips", len(feats_), "pairs", len(pairs), flush=True)
     torch.manual_seed(0)
     rng = np.random.default_rng(0)
-    m = Encoder(args.k).to(device)
+    m = Encoder(args.k, blank=args.ctc).to(device)
+    if args.init:
+        m.load_state_dict(torch.load(args.init)["model"], strict=False)
     opt = torch.optim.AdamW(m.parameters(), lr=args.lr, weight_decay=0.01)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -206,6 +216,9 @@ def train(args) -> None:
         with torch.autocast("cuda", dtype=torch.bfloat16):
             lg = m(x, mask).float()  # [C, T2, K]
         m2 = mask[:, ::2]
+        lg_all = lg
+        if args.ctc:
+            lg = lg_all[..., : args.k]
         q = torch.zeros_like(lg)
         q[m2] = sinkhorn(lg[m2])
         ia, ta, ib, tb = [], [], [], []
@@ -218,6 +231,29 @@ def train(args) -> None:
             tb.append(np.minimum(al[t] // 2, (len(feats_[b]) - 1) // 2))
         ia, ta, ib, tb = (torch.from_numpy(np.concatenate(v)).to(device) for v in (ia, ta, ib, tb))
         loss = -(q[ia, ta] * F.log_softmax(lg[ib, tb], -1)).sum(-1).mean() - (q[ib, tb] * F.log_softmax(lg[ia, ta], -1)).sum(-1).mean()
+        if args.ctc:
+            # sequence level: the other voice's decoded tokens (merge repeats, drop blanks) are the CTC target
+            lp = F.log_softmax(lg_all, -1)  # [C, T2, K+1], blank = K
+            with torch.no_grad():
+                dec = lg_all.argmax(-1)
+            ctc_terms = []
+            for a, b in sel:
+                for x_, y_ in ((a, b), (b, a)):
+                    n_y = int(m2[pos[y_]].sum())
+                    t = dec[pos[y_], :n_y]
+                    t = t[torch.cat([torch.ones(1, dtype=torch.bool, device=device), t[1:] != t[:-1]])]
+                    t = t[t != args.k]
+                    n_x = int(m2[pos[x_]].sum())
+                    if 0 < len(t) <= n_x:
+                        ctc_terms.append((lp[pos[x_], :n_x], t))
+            if ctc_terms:
+                L = max(len(t) for _, t in ctc_terms)
+                Tm = max(len(l) for l, _ in ctc_terms)
+                lps = torch.stack([F.pad(l, (0, 0, 0, Tm - len(l))) for l, _ in ctc_terms], 1)  # [T, N, K+1]
+                tg = torch.stack([F.pad(t, (0, L - len(t))) for _, t in ctc_terms])
+                ctc = F.ctc_loss(lps, tg, torch.tensor([len(l) for l, _ in ctc_terms]), torch.tensor([len(t) for _, t in ctc_terms]),
+                                 blank=args.k, zero_infinity=True)
+                loss = loss + args.ctc_weight * ctc
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -227,7 +263,7 @@ def train(args) -> None:
                 used = lg[m2].argmax(-1).unique().numel()
             print(json.dumps({"step": step + 1, "loss": round(loss.item(), 4), "aligned_agree": round(agree, 4),
                               "codes_used": used, "s": round(time.time() - t0)}), flush=True)
-    torch.save({"model": m.state_dict(), "k": args.k}, out / "alpha.pt")
+    torch.save({"model": m.state_dict(), "k": args.k, "blank": bool(args.ctc)}, out / "alpha.pt")
     print("TRAIN DONE", flush=True)
 
 
@@ -236,7 +272,7 @@ def evaluate(args) -> None:
     device = torch.device("cuda")
     syl = load_sylber(device)
     ck = torch.load(Path(args.run) / "alpha.pt")
-    m = Encoder(ck["k"]).to(device).eval()
+    m = Encoder(ck["k"], blank=ck.get("blank", False)).to(device).eval()
     m.load_state_dict(ck["model"])
 
     def tok(w16: np.ndarray) -> np.ndarray:
@@ -366,9 +402,9 @@ def words(args) -> None:
     res = {"words": len(names), "occurrences": sum(len(pick[t]) for t in names)}
     for run in args.runs:
         ck = torch.load(Path(run) / "alpha.pt")
-        m = Encoder(ck["k"]).to(device).eval()
+        m = Encoder(ck["k"], blank=ck.get("blank", False)).to(device).eval()
         m.load_state_dict(ck["model"])
-        res[f"alpha_k{ck['k']}"] = (lambda m: lambda w: m.tokens(torch.from_numpy(hidden_states(syl, np.pad(w, (0, max(0, SR // 5 - len(w)))))).float().to(device)))(m)
+        res[f"alpha_k{ck['k']}" + ("_ctc" if ck.get("blank") else "")] = (lambda m: lambda w: m.tokens(torch.from_numpy(hidden_states(syl, np.pad(w, (0, max(0, SR // 5 - len(w)))))).float().to(device)))(m)
     res["phonemes"] = lambda w: ph(w)
     rng = np.random.default_rng(0)
     out = {k: v for k, v in res.items() if not callable(v)}
@@ -414,6 +450,9 @@ def main() -> None:
     b.add_argument("--steps", type=int, default=6000)
     b.add_argument("--batch", type=int, default=32)
     b.add_argument("--lr", type=float, default=5e-4)
+    b.add_argument("--ctc", action="store_true", help="add a blank class and a cross-voice CTC loss on decoded tokens")
+    b.add_argument("--ctc-weight", type=float, default=1.0)
+    b.add_argument("--init", default="", help="start from this alpha.pt")
     c = sub.add_parser("eval")
     c.add_argument("--run", required=True)
     c.add_argument("--zr", required=True)
