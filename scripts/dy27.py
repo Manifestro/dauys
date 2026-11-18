@@ -234,7 +234,7 @@ def cmd_known(a) -> None:
     v, _ = next_dists(model, stream, K, device, 2000)
     lab = agglo(js_matrix(v), P)
     purity = sum(np.bincount(owner[lab == g]).max() for g in np.unique(lab)) / K
-    res = {"ce": round(ce.item(), 4), "purity": round(float(purity), 4), "pass": purity >= 0.9}
+    res = {"ce": round(ce.item(), 4), "purity": round(float(purity), 4), "pass": bool(purity >= 0.9)}
     Path(a.out).write_text(json.dumps(res))
     print("KNOWN", json.dumps(res), flush=True)
 
