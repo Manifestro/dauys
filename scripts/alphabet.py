@@ -312,7 +312,7 @@ def words(args) -> None:
                 t = "".join(c for c in ch["text"].lower() if c.isalpha())
                 a, b = ch["timestamp"]
                 if len(t) >= 4 and t not in STOP and a is not None and b is not None and 0.2 <= b - a <= 1.2:
-                    occ[t].append((f"{s}:{p}", w[max(0, int((a - 0.03) * SR)) : int((b + 0.03) * SR)]))
+                    occ[t].append((s, w[max(0, int((a - 0.03) * SR)) : int((b + 0.03) * SR)]))
         print(json.dumps({"shard": s, "words": len(occ)}), flush=True)
     pick = {}
     for t, lst in occ.items():
@@ -385,7 +385,7 @@ def main() -> None:
     w = sub.add_parser("words")
     w.add_argument("--runs", nargs="+", required=True)
     w.add_argument("--out", required=True)
-    w.add_argument("--shards", type=int, default=6)
+    w.add_argument("--shards", type=int, default=12)
     w.add_argument("--pieces", type=int, default=80)
     w.add_argument("--n", type=int, default=200)
     args = p.parse_args()
