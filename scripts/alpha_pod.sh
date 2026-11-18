@@ -17,7 +17,7 @@ if ! done_ setup; then
   ~/venv/bin/pip install -q torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
   printf "torch==2.7.1\ntorchaudio==2.7.1\n" > /tmp/constraints.txt
   ~/venv/bin/pip install -q -c /tmp/constraints.txt "numpy<2.1" scipy transformers==4.46.3 huggingface_hub safetensors \
-    soundfile pyyaml numba sylber==0.1.4 accelerate
+    soundfile pyyaml numba sylber==0.1.4 accelerate airon "datasets==3.6.0"
   ~/venv/bin/python -c "import torch, sylber, numba; assert torch.cuda.is_available(); print('GPU', torch.cuda.get_device_name(0))" || exit 1
   mark setup
 fi
