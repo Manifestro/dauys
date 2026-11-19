@@ -83,7 +83,7 @@ def pool(f: torch.Tensor, rate: int) -> torch.Tensor:
     if rate == 50:
         return f
     t = f.shape[0] // 2
-    return f[: 2 * t].view(t, 2, -1).mean(1)
+    return f[: 2 * t].reshape(t, 2, f.shape[1]).mean(1)
 
 
 class Codebook:
