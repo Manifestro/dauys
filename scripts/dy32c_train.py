@@ -29,6 +29,23 @@ from dy21_train import held_out, lr_at
 EXPERIMENT = "DY-32: канал, через который слова выживают, без текста — три идеи и повтор GSLM параллельными ветками"
 
 
+def load_runs(files: list[Path], cols: list[int], k: int, min_run: int) -> tuple[np.ndarray, np.ndarray]:
+    """DY-33: only runs (contiguous audio of one episode, index rows of the npz) of >= min_run steps, joined with an
+    EOS frame, in the delay layout; returns the stream and the allowed window starts (window inside one run)."""
+    parts, starts, pos = [], [], 0
+    eos = np.full((1, len(cols)), k, np.int16)
+    for f in files:
+        z = np.load(f)
+        tok, index = z["tok"], z["index"]
+        for st, n in index:
+            if n >= min_run:
+                parts.append(tok[st : st + n][:, cols])
+                starts.append(np.arange(pos, pos + n - min_run + 1, dtype=np.int64))
+                parts.append(eos)
+                pos += n + 1
+    return delay(np.concatenate(parts), k + 1), np.concatenate(starts)
+
+
 def load_stream(files: list[Path], cols: list[int], k: int) -> np.ndarray:
     parts = []
     eos = np.full((1, len(cols)), k, np.int16)
@@ -56,6 +73,10 @@ def main() -> None:
     p.add_argument("--order", default="0,1,2,3", help="npz columns in model stream order (rvq: levels 0..3; "
                    "sb six-layer units: 5,4,3,2,1,0 = layers 23..1)")
     p.add_argument("--k", type=int, default=1024, help="codes per stream")
+    p.add_argument("--runs", action="store_true", help="DY-33: windows only inside runs >= ctx + 1 steps (npz index = runs)")
+    p.add_argument("--rate", type=float, default=50.0, help="model steps per second of audio (for logging hours)")
+    p.add_argument("--patience", type=int, default=0, help="stop after this many validations without a new best")
+    p.add_argument("--snapshot-min", type=float, default=0, help="copy best.pt to snapshot.pt once, this many minutes in")
     p.add_argument("--units-desc", default="kNN-VC WavLM-Large layer 6, residual k-means 4 x 1024 (track A corpus codebooks), 50 Hz")
     p.add_argument("--cfg", default="", help="d,layers,heads,ffn,ctx; default MSConfig()")
     p.add_argument("--stop-utc", default="", help="HH:MM UTC: validate, checkpoint and stop at this time")
@@ -88,10 +109,15 @@ def main() -> None:
     files = sorted(Path(args.units).glob("*.npz"))[: args.limit or None]
     tr_files = [f for f in files if not held_out(f.stem)]
     va_files = [f for f in files if held_out(f.stem)] or files[-1:]
-    train, val = load_stream(tr_files, cols, cfg.k), load_stream(va_files, cols, cfg.k)
     T = cfg.ctx
     vrng = np.random.default_rng(1234)
-    vstarts = vrng.integers(0, len(val) - T - 1, size=128)
+    if args.runs:
+        (train, tr_ok), (val, va_ok) = (load_runs(x, cols, cfg.k, T + 1) for x in (tr_files, va_files))
+        vstarts = va_ok[vrng.integers(0, len(va_ok), size=128)]
+    else:
+        train, val = load_stream(tr_files, cols, cfg.k), load_stream(va_files, cols, cfg.k)
+        tr_ok = None
+        vstarts = vrng.integers(0, len(val) - T - 1, size=128)
     vbatch = torch.from_numpy(np.stack([val[s : s + T + 1] for s in vstarts]).astype(np.int64))
 
     model = MultiStreamLM(cfg).to(device)
@@ -101,7 +127,8 @@ def main() -> None:
                             lr=args.lr, betas=(0.9, 0.95), fused=True)
     meta = {"run_id": str(uuid.uuid4()), "params": model.parameters_count(), "config": {**vars(cfg), "vocab": cfg.vocab},
             "args": vars(args), "stream_columns": order, "train_files": len(tr_files), "val_files": len(va_files),
-            "train_positions": int(len(train)), "train_hours": round(len(train) / 50 / 3600, 1),
+            "train_positions": int(len(train)), "train_hours": round(len(train) / args.rate / 3600, 1),
+            "train_window_starts": int(len(tr_ok)) if tr_ok is not None else None, "steps_per_s_audio": args.rate,
             "val_positions": int(len(val)), "val_files_names": [f.stem for f in va_files],
             "units": args.units_desc,
             "git": os.environ.get("DY21_COMMIT", "")}
@@ -141,10 +168,12 @@ def main() -> None:
         return False
 
     best, t0 = math.inf, time.time()
+    stale, snapped, t_begin = 0, False, time.time()
     for step in range(args.steps):
         for g in opt.param_groups:
             g["lr"] = lr_at(step, args.steps, args.lr, args.warmup)
-        starts = rng.integers(0, len(train) - T - 1, size=args.batch)
+        starts = (tr_ok[rng.integers(0, len(tr_ok), size=args.batch)] if tr_ok is not None
+                  else rng.integers(0, len(train) - T - 1, size=args.batch))
         ids = torch.from_numpy(np.stack([train[s : s + T + 1] for s in starts]).astype(np.int64)).to(device, non_blocking=True)
         opt.zero_grad(set_to_none=True)
         chunks = ids.split(args.micro)
@@ -165,7 +194,15 @@ def main() -> None:
             print(json.dumps({"step": step + 1, **{k: round(v, 4) for k, v in logs.items()}}), flush=True)
         late = stop_at is not None and dt.datetime.now(dt.timezone.utc) >= stop_at
         if (step + 1) % args.val_every == 0 or step + 1 == args.steps or late:
-            checkpoint(step + 1)
+            stale = 0 if checkpoint(step + 1) else stale + 1
+            if args.snapshot_min and not snapped and time.time() - t_begin > args.snapshot_min * 60 and (out / "best.pt").exists():
+                import shutil
+                shutil.copy(out / "best.pt", out / "snapshot.pt")
+                snapped = True
+                print(json.dumps({"snapshot": step + 1}), flush=True)
+            if args.patience and stale >= args.patience:
+                print(json.dumps({"early_stop": step + 1, "best_ce": best}), flush=True)
+                break
         if late:
             print(json.dumps({"stopped_at_utc": args.stop_utc, "step": step + 1}), flush=True)
             break
