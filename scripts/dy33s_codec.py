@@ -145,11 +145,16 @@ def cmd_resynth(a) -> None:
     torch.backends.cuda.matmul.allow_tf32 = True
     dev = torch.device("cuda")
     out = Path(a.out) / a.name
-    ckp = out / "frozen.pt" if (out / "frozen.pt").exists() and a.frozen else out / "last.pt"
+    if a.ckpt:
+        ckp = Path(a.ckpt)
+    else:  # snapshot last.pt first so the checked weights are kept under their step
+        ck0 = torch.load(out / "last.pt", map_location="cpu", weights_only=False)
+        ckp = out / f"snap{ck0['step']}.pt"
+        torch.save(ck0, ckp)
     m, ck = load_codec(ckp, dev)
     names, waves = read_pack(Path(a.pack))
     u = RVQUnits(dev)
-    rd = out / "resynth"
+    rd = out / f"resynth{ck['step']}"
     rd.mkdir(parents=True, exist_ok=True)
     res = []
     for n, w in zip(names, waves):
@@ -158,7 +163,7 @@ def cmd_resynth(a) -> None:
         wav = u.knn.vocode(y[None].float()).reshape(-1).cpu().numpy()
         sf.write(rd / f"{n}.wav", wav, 16000)
         res.append(wav)
-    info = {"codec": a.name, "checkpoint_step": ck["step"], "train_hours_seen_pool": round(ck["hours"], 1), "config": ck["cfg"],
+    info = {"codec": a.name, "checkpoint": str(ckp), "checkpoint_step": ck["step"], "train_hours_seen_pool": round(ck["hours"], 1), "config": ck["cfg"],
             "params": sum(v.numel() for k, v in ck["model"].items() if not k.startswith("rvq.") and k not in ("mu", "sd")),
             "path": "real_XX.wav -> kNN-VC WavLM-Large layer 6 (50 Hz) -> codec encoder (x4 down, 12.5 Hz) -> RVQ 4 x 1024 -> "
                     "codec decoder (x4 up) -> 50 Hz features -> kNN-VC prematched HiFi-GAN (frozen)",
@@ -196,7 +201,7 @@ def main() -> None:
     x.add_argument("--out", required=True)
     x.add_argument("--pack", default="/opt/dlami/nvme/pack")
     x.add_argument("--asr", action="store_true")
-    x.add_argument("--frozen", action="store_true")
+    x.add_argument("--ckpt", default="", help="codec checkpoint (default: snapshot of last.pt)")
     x.add_argument("--s3", default="", help="upload to dy33/resynth/<this>/")
     a = p.parse_args()
     {"train": cmd_train, "resynth": cmd_resynth}[a.cmd](a)
