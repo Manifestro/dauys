@@ -103,12 +103,15 @@ def sample_next(lg: torch.Tensor, temp: float, top_p: float, g: torch.Generator)
 
 
 @torch.no_grad()
-def generate(model: MultiStreamLM, prompts: np.ndarray, n_new: int, temp: float, top_p: float, seed: int,
+def generate(model: MultiStreamLM, prompts: np.ndarray, n_new: int, temp, top_p, seed: int,
              device) -> np.ndarray:
     """prompts [B, N, S] frames (same N; the caller puts an EOS frame first) -> [B, n_new, S] new frames.
+    temp / top_p: one value or one per stream (temperature <= 0: greedy for that stream).
     Positions are generated in the delayed layout; a stream's code of a frame still inside the prompt is forced."""
     cfg = model.cfg
     B, N, S = prompts.shape
+    temps = list(temp) if isinstance(temp, (list, tuple)) else [temp] * S
+    tops = list(top_p) if isinstance(top_p, (list, tuple)) else [top_p] * S
     K, PAD = cfg.k, cfg.k + 1
     total = N + n_new
     full = np.full((B, total, S), PAD, np.int64)
@@ -127,7 +130,8 @@ def generate(model: MultiStreamLM, prompts: np.ndarray, n_new: int, temp: float,
             h = model.states(ids[:, lo:t])
         lg = model.logits(h[:, -1])  # [B, S, V]
         lg[..., K:] = -float("inf")  # never EOS or PAD inside the continuation
-        nxt = sample_next(lg.flatten(0, 1), temp, top_p, g).view(B, S)
+        nxt = torch.stack([lg[:, k].argmax(-1) if temps[k] <= 0 else sample_next(lg[:, k], temps[k], tops[k], g)
+                           for k in range(S)], 1)
         for k in range(S):
             frame = t - k
             if frame < 0 or frame >= total:

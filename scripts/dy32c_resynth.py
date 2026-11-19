@@ -77,9 +77,9 @@ def whisper(waves: list[np.ndarray], device) -> list[str]:
     return [r["text"].strip() for r in res]
 
 
-def read_pack(dst: Path, kind: str = "real") -> tuple[list[str], list[np.ndarray]]:
+def read_pack(dst: Path, kind: str = "real", src: str = "prompts") -> tuple[list[str], list[np.ndarray]]:
     dst.mkdir(parents=True, exist_ok=True)
-    sh(f"aws s3 sync {BUCKET}/prompts/ {dst}/ --only-show-errors")
+    sh(f"aws s3 sync {BUCKET}/{src}/ {dst}/ --only-show-errors")
     names = sorted(p.stem.split("_")[1] for p in dst.glob(f"{kind}_*.wav"))
     waves = []
     for n in names:
