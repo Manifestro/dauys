@@ -411,7 +411,15 @@ def cmd_train(a) -> None:
     run.log({f"val/{k}": v for k, v in res0.items()}, step=0)
     print(json.dumps({"step": 0, "val": res0}), flush=True)
     best, t0 = res0["loss"], time.time()
-    for step in range(a.steps):
+    step, t_rate = 0, None
+    while step < a.steps:
+        if a.until and step == 25:
+            t_rate = time.time()
+        if a.until and step == 125:  # fit the cosine schedule to the time left before the deadline (epoch seconds)
+            rate = 100 / (time.time() - t_rate)
+            a.steps = 125 + int(rate * (a.until - time.time() - 300) * 0.97)
+            print(json.dumps({"schedule_steps": a.steps, "steps_per_s": round(rate, 3)}), flush=True)
+            run.log({"train/schedule_steps": a.steps}, step=step)
         for g in opt.param_groups:
             g["lr"] = lr_at(step)
         ids = torch.from_numpy(windows(train, cum, T, a.batch, rng).astype(np.int64)).to(device, non_blocking=True)
@@ -422,7 +430,7 @@ def cmd_train(a) -> None:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 total, part = lm_loss(model, c)
             (total / len(chunks)).backward()
-            part["loss"] = float(total)
+            part["loss"] = total.item()
             for k, v in part.items():
                 logs[k] = logs.get(k, 0.0) + v / len(chunks)
         logs["grad_norm"] = float(torch.nn.utils.clip_grad_norm_(model.parameters(), a.clip))
@@ -444,6 +452,7 @@ def cmd_train(a) -> None:
             if Path(a.stop_file).exists():
                 print("STOP FILE seen", flush=True)
                 break
+        step += 1
     (out / "DONE").write_text(f"{best}\n")
     run.finish()
     print("TRAIN DONE", best, flush=True)
@@ -499,6 +508,7 @@ def main() -> None:
     x.add_argument("--val-windows", type=int, default=128)
     x.add_argument("--seed", type=int, default=0)
     x.add_argument("--stop-file", default="/opt/dlami/nvme/STOP_TRAIN")
+    x.add_argument("--until", type=float, default=0, help="deadline (epoch s): steps are refit at step 125 to end then")
     x.add_argument("--tracking", default="on", choices=["on", "off"])
     x.add_argument("--experiment", default=EXPERIMENT)
     x.add_argument("--name", default="dy32-e")
