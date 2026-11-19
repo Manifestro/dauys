@@ -1,25 +1,26 @@
 #!/usr/bin/env bash
 # DY-33 track M: install the DY-32/33 evaluation environment on any GPU machine (idempotent).
-# venv ~/venv (torch 2.7.1 cu128, transformers 4.46.3), recogniser / Whisper / judge / GPT-2 / kNN-VC downloaded,
+# venv $VENV or ~/venv (torch 2.7.1 cu128, transformers 4.46.3), recogniser / Whisper / judge / GPT-2 / kNN-VC downloaded,
 # prompt packs, cached references (ref.json, eval_base*.json, eval_controls.json, judge cache) and anchor folders.
 #   bash scripts/dy33_setup.sh
 set -uo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 set -a; . /etc/airon.env; set +a
+V=${VENV:-$HOME/venv}  # evaluation venv (an own one on a shared machine)
 B=s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys
 W=/data/dy32/a
 sudo mkdir -p /data && sudo chown "$USER" /data
 mkdir -p $W /data/dy32/prompts /data/dy32/prompts_x
-if [[ ! -x ~/venv/bin/python ]] || ! ~/venv/bin/python -c "import torch, transformers, jiwer" 2>/dev/null; then
+if [[ ! -x $V/bin/python ]] || ! $V/bin/python -c "import torch, transformers, jiwer" 2>/dev/null; then
   python3 -m pip install -q --user virtualenv 2>/dev/null
-  python3 -m virtualenv -q ~/venv
-  ~/venv/bin/pip install -q --upgrade pip
-  ~/venv/bin/pip install -q torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
-  printf "torch==2.7.1\ntorchaudio==2.7.1\n" > /tmp/constraints.txt
-  ~/venv/bin/pip install -q -c /tmp/constraints.txt "numpy<2.1" scipy transformers==4.46.3 huggingface_hub safetensors \
+  python3 -m virtualenv -q $V
+  $V/bin/pip install -q --upgrade pip
+  $V/bin/pip install -q torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+  printf "torch==2.7.1\ntorchaudio==2.7.1\n" > $V.constraints.txt
+  $V/bin/pip install -q -c $V.constraints.txt "numpy<2.1" scipy transformers==4.46.3 huggingface_hub safetensors \
     soundfile pyyaml numba accelerate airon "datasets==3.6.0" jiwer onnxruntime
 fi
-export PATH=$HOME/venv/bin:$PATH HF_HUB_DISABLE_PROGRESS_BARS=1
+export PATH=$V/bin:$PATH HF_HUB_DISABLE_PROGRESS_BARS=1
 python - <<'EOF'
 from huggingface_hub import snapshot_download as s
 for m in ["facebook/wav2vec2-large-960h-lv60-self", "openai/whisper-large-v3-turbo", "gpt2-medium",

@@ -6,8 +6,9 @@
 set -uo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 set -a; . /etc/airon.env; set +a
+V=${VENV:-$HOME/venv}  # evaluation venv (an own one on a shared machine)
 B=s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys
-export PATH=$HOME/venv/bin:$PATH PYTHONPATH=$repo/src PYTHONWARNINGS=ignore HF_HUB_DISABLE_PROGRESS_BARS=1
+export PATH=$V/bin:$PATH PYTHONPATH=$repo/src PYTHONWARNINGS=ignore HF_HUB_DISABLE_PROGRESS_BARS=1
 export DY_S3=$B/dy33 DY_HF=dy33 DY_TABLE=eval/channel
 R=${1:?round}; HF=${2:-}
 F=${3:-b-t10,b-ra08,s-t10,s-ra08,s-t10-early,s-ra08-early}
