@@ -57,6 +57,8 @@ def main() -> None:
     p.add_argument("--dicts", default="A,C2500")
     p.add_argument("--out", required=True)
     p.add_argument("--cap", type=int, default=0)
+    p.add_argument("--no-judge", action="store_true", help="judge-free text-cosine rows only")
+    p.add_argument("--dict-rows-only", action="store_true", help="judge only the dictionary rows (T rows known)")
     p.add_argument("--g0texts", default="/data/dy36/g0/texts.json")
     a = p.parse_args()
     out = Path(a.out)
@@ -113,6 +115,17 @@ def main() -> None:
     for k, v in nb.items():
         assert np.isin(v, sub).all() and not np.isin(T["ep"][v], T["ep"][refs]).any()
     # letters for every candidate and reference
+    cos_rand0 = np.array([Er[i] @ Es[pos[int(rand[i])]] for i in range(len(refs))])
+    quick = {n: {"text_cos_neighbour": mean_ci(np.array([Er[i] @ Es[pos[int(v[i])]] for i in range(len(refs))])),
+                 "text_cos_random": mean_ci(cos_rand0),
+                 "text_cos_diff": mean_ci(np.array([Er[i] @ Es[pos[int(v[i])]] for i in range(len(refs))]) - cos_rand0)}
+             for n, v in nb.items()}
+    (out / "textcos.json").write_text(json.dumps(quick, indent=1))
+    log("TEXTCOS", json.dumps(quick))
+    if a.no_judge:
+        return
+    if a.dict_rows_only:
+        nb = {k: v for k, v in nb.items() if k not in ("T", "T10", "T100")}
     need = sorted({int(u) for v in list(nb.values()) + [rand] for u in v})
     lf = out / "letters.json"
     Lt = json.loads(lf.read_text()) if lf.exists() else {}
