@@ -63,6 +63,9 @@ def main() -> None:
     p.add_argument("--round", default="early")
     p.add_argument("--hf", action="store_true")
     p.add_argument("--skip", default="")
+    p.add_argument("--only", default="", help="comma list of gen folders (default: all)")
+    p.add_argument("--ids", default="", help="comma list of prompt ids for gen folders (default 00-05)")
+    p.add_argument("--no-resynth", action="store_true")
     a = p.parse_args()
     out = W / "listen" / a.round
     out.mkdir(parents=True, exist_ok=True)
@@ -75,11 +78,13 @@ def main() -> None:
          "Channels: `<name>__XX` = the original 10 s piece, beep, then the same piece through that channel (pieces 00-02). "
          "Texts below come from the letters recogniser on audio.", "", "## Continuations (gen/)", ""]
     tab = json.loads((W / "channel.json").read_text()) if (W / "channel.json").exists() else {}
-    for d in sorted(x for x in G.iterdir() if x.is_dir() and not x.name.endswith("-x") and x.name not in a.skip.split(",")) if G.exists() else []:
-        if not complete(d, N_GEN):
+    for d in sorted(x for x in G.iterdir() if x.is_dir() and not x.name.endswith("-x") and x.name not in a.skip.split(",")
+                    and (not a.only or x.name in a.only.split(","))) if G.exists() else []:
+        gid = [int(x) for x in a.ids.split(",")] if a.ids else list(range(N_GEN))
+        if not complete(d, max(gid) + 1):
             L += [f"- **{d.name}**: incomplete, skipped", ""]
             continue
-        for i in range(N_GEN):
+        for i in gid:
             tail = load(PACK / f"prompt_{i:02d}.wav")[-5 * SR :]
             save(out / f"{d.name}__{i:02d}", np.concatenate([pk(tail), b, pk(load(d / f"{i:02d}.wav"))]))
         L += [f"### {d.name}", "", f"What: {describe(d)}", ""]
@@ -96,14 +101,14 @@ def main() -> None:
                 u = s["union"]
                 L += [f"Union ({u['n']} prompts): Dc_mis {u['Dc_mis']['D']}, Dself {u['Dself']['D']} ± {u['Dself']['ci95']} "
                       f"(n {u['Dself']['n']}), Dself5 {u['Dself_5w']['D']} (n {u['Dself_5w']['n']}), speech {u['speech_seconds_median']:.1f} s", ""]
-            for r in e["rows"][:N_GEN]:
+            for r in [e["rows"][i] for i in gid]:
                 L += [f"- {r['id']} prompt: {r['prompt'][-300:]}", f"  - model: {r['gen']}", f"  - real: {r['real']}"]
             L.append("")
         else:
             L += ["(not evaluated in this round)", ""]
     L += ["## Channels (real piece through units + decoder, no model)", ""]
-    folders = [(x.name, x) for x in sorted(X.iterdir()) if x.is_dir()] if X.exists() else []
-    folders += [(x.name, x) for x in sorted((W / "resynth").iterdir()) if x.is_dir()] if (W / "resynth").exists() else []
+    folders = [(x.name, x) for x in sorted(X.iterdir()) if x.is_dir()] if X.exists() and not a.no_resynth else []
+    folders += [(x.name, x) for x in sorted((W / "resynth").iterdir()) if x.is_dir()] if (W / "resynth").exists() and not a.no_resynth else []
     for name, d in folders:
         if not complete(d, N_RES):
             L.append(f"- **{name}**: incomplete, skipped")

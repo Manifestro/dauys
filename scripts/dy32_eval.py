@@ -35,6 +35,8 @@ HF_PREFIX = os.environ.get("DY_HF", "dy32")
 CHAR = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/char-units"
 W = Path("/data/dy32/a")
 PACK = Path("/data/dy32/prompts")
+PACKS = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/dy32"  # prompt packs stay where DY-32 made them
+JC = W / "judge_cache"
 N, N_SHOW, N_LISTEN = 50, 20, 10
 VOCAB_BAR, IDEA3_GAP = 0.80, 0.05
 
@@ -199,7 +201,7 @@ def main() -> None:
     b = base(device)
     # extension pack (prompts_x, pieces 050-199): union controls for folders with a "<name>-x" twin
     PX = Path("/data/dy32/prompts_x")
-    sh(f"aws s3 sync {S3}/prompts_x/ {PX}/ --only-show-errors")
+    sh(f"aws s3 sync {PACKS}/prompts_x/ {PX}/ --only-show-errors")
     ext_ids = [i for i in range(50, 200) if (PX / f"prompt_{i:03d}.wav").exists() and (PX / f"real_{i:03d}.wav").exists()]
     twins = {}
     for n, d in folders.items():
@@ -219,7 +221,22 @@ def main() -> None:
         for n, (tw, pat, ids) in twins.items():
             jobs[n + "@x"] = [tw / pat.format(i) for i in ids]
     log("twins", {n: len(v[2]) for n, v in twins.items()})
-    tr = transcribe(device, jobs)
+    # cache: transcripts and judge results of a folder are reused while its files (names, sizes) are unchanged
+    JC.mkdir(parents=True, exist_ok=True)
+    sig = {n: [[f.name, f.stat().st_size] for f in jobs[n] + jobs.get(n + "@x", [])] for n in folders}
+    cached = {}
+    for n in folders:
+        f = JC / f"{n}.json"
+        if f.exists():
+            c = json.loads(f.read_text())
+            if c.get("sig") == sig[n] and (n not in twins) == ("U" not in c):
+                cached[n] = c
+    log("cached (reused)", list(cached))
+    tr = transcribe(device, {k: v for k, v in jobs.items() if k.split("@")[0] not in cached})
+    for n, c in cached.items():
+        tr[n] = c["tr"]
+        if "tr_x" in c:
+            tr[n + "@x"] = c["tr_x"]
     if "_px" in tr:
         bx = {"ids": ext_ids, "prompt": dict(zip(map(str, ext_ids), tr["_px"]["gen"])), "real": dict(zip(map(str, ext_ids), tr["_rx"]["gen"]))}
         (W / "eval_base_x.json").write_text(json.dumps(bx))
@@ -238,6 +255,9 @@ def main() -> None:
         cf.write_text(json.dumps(ctl))
     D = {}
     for n in folders:
+        if n in cached:
+            D[n] = cached[n]["D"]
+            continue
         g = tr[n]["gen"]
         D[n] = {"Dr": j.pairs(prompt_t, real_t, g), "Dc": j.pairs(prompt_t, g, other_t),
                 "Dc_mis": j.pairs(prompt_t, [g[x] for x in dj], [real_t[x] for x in dk])}
@@ -246,6 +266,9 @@ def main() -> None:
         log("JUDGE", n, json.dumps({k: strip_p(v) for k, v in D[n].items()}))
     U = {}
     for n, (tw, pat, ids) in twins.items():
+        if n in cached:
+            U[n] = cached[n]["U"]
+            continue
         pu = b["prompt"] + [bx["prompt"][str(i)] for i in ids]
         ru = b["real"] + [bx["real"][str(i)] for i in ids]
         gu = tr[n]["gen"] + tr[n + "@x"]["gen"]
@@ -257,6 +280,12 @@ def main() -> None:
                 "whisper_words_median": float(np.median([len(t.split()) for t in tr[n]["whisper"] + tr[n + "@x"]["whisper"]])),
                 "empty_share": float(np.mean([not t for t in gu]))}
         log("UNION", n, json.dumps(U[n]))
+    for n in folders:
+        if n not in cached:
+            c = {"sig": sig[n], "tr": tr[n], "D": D[n]}
+            if n in twins:
+                c.update({"tr_x": tr[n + "@x"], "U": U[n]})
+            (JC / f"{n}.json").write_text(json.dumps(c))
     del j
     cleanup()
     refs = text_refs(device, prompt_t, {"real": real_t, "floor": floor_t, **{n: tr[n]["gen"] for n in folders}}) if folders else {"summary": {}, "logppl": {}}
