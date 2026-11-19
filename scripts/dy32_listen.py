@@ -19,7 +19,7 @@ import numpy as np
 import soundfile as sf
 
 sys.path.insert(0, str(Path(__file__).parent))
-from dy32_channel import S3, SR, W, sh
+from dy32_channel import HF_PREFIX, S3, SR, W, sh
 from dy32_eval import PACK, load
 
 N_GEN, N_RES = 6, 3
@@ -124,7 +124,7 @@ def main() -> None:
 
         api = HfApi(token=os.environ["HF_TOKEN"])
         assert api.repo_info("manifestro/dauys-runs").private, "not private"
-        api.upload_folder(folder_path=str(out), path_in_repo="dy32/eval/listen", repo_id="manifestro/dauys-runs")
+        api.upload_folder(folder_path=str(out), path_in_repo=f"{HF_PREFIX}/eval/listen", repo_id="manifestro/dauys-runs")
     print("LISTEN DONE", out, len(list(out.glob("*.mp3"))), "mp3", flush=True)
 
 

@@ -23,6 +23,7 @@ import argparse
 import glob
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -34,8 +35,10 @@ import soundfile as sf
 sys.path.insert(0, str(Path(__file__).parent))
 from dy30_eval import ASR, SR, SRC, candidates, norm_text, read_pieces
 
-S3 = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/dy32"
+S3 = os.environ.get("DY_S3", "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/dy32")  # DY-33 reuses this code
+HF_PREFIX = os.environ.get("DY_HF", "dy32")
 W = Path("/data/dy32/a")
+TABLE = os.environ.get("DY_TABLE", "a/channel")
 NV = Path("/opt/dlami/nvme/dy32a")
 PACK = Path("/data/dy32/prompts")
 LJ = Path("/opt/dlami/nvme/lj/LJSpeech-1.1/wavs")
@@ -191,7 +194,7 @@ class Table:
               "multi-stream row with the best single-stream row (km, km25, rvq-L1, single-layer sb)."]
         (W / "channel.md").write_text("\n".join(L) + "\n")
         try:
-            sh(f"aws s3 cp {W}/channel.md {S3}/a/channel.md --only-show-errors && aws s3 cp {W}/channel.json {S3}/a/channel.json --only-show-errors")
+            sh(f"aws s3 cp {W}/channel.md {S3}/{TABLE}.md --only-show-errors && aws s3 cp {W}/channel.json {S3}/{TABLE}.json --only-show-errors")
         except subprocess.CalledProcessError as e:
             log("upload failed", e)
 

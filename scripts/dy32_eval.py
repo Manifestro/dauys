@@ -17,6 +17,7 @@ beep, the continuation). summary.md / summary.json over all folders.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -29,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from dy30_eval import EOS, SEED, SR, Judge, cleanup, other_index, rep4, text_refs
 from dy31_eval import controls, in_vocab_share, strip_p, verdict31
 
-S3 = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/dy32"
+S3 = os.environ.get("DY_S3", "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/dy32")  # DY-33 reuses this code
+HF_PREFIX = os.environ.get("DY_HF", "dy32")
 CHAR = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/char-units"
 W = Path("/data/dy32/a")
 PACK = Path("/data/dy32/prompts")
@@ -377,8 +379,8 @@ def main() -> None:
 
         api = HfApi(token=os.environ["HF_TOKEN"])
         assert api.repo_info("manifestro/dauys-runs").private, "not private"
-        api.upload_folder(folder_path=str(E), path_in_repo=f"dy32/eval/{a.round}", repo_id="manifestro/dauys-runs")
-        log("HF uploaded", f"dy32/eval/{a.round}")
+        api.upload_folder(folder_path=str(E), path_in_repo=f"{HF_PREFIX}/eval/{a.round}", repo_id="manifestro/dauys-runs")
+        log("HF uploaded", f"{HF_PREFIX}/eval/{a.round}")
     log("EVAL DONE", a.round)
 
 
