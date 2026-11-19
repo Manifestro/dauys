@@ -115,7 +115,6 @@ def cmd_rvq(a) -> None:
     (out / "asr_rvq.json").write_text(json.dumps(asr, indent=2))
     if a.s3:
         for dst, v in (("c", "rvq4"), ("c-multi", "rvq4"), ("c-single", "rvq1")):
-            sh(f"aws s3 rm {BUCKET}/resynth/{dst}/ --recursive --only-show-errors")
             sh(f"aws s3 sync {out / v} {BUCKET}/resynth/{dst}/ --only-show-errors")
         sh(f"aws s3 cp {out / 'asr_rvq.json'} {BUCKET}/c/resynth_asr_rvq.json --only-show-errors")
         print("UPLOADED resynth", flush=True)
