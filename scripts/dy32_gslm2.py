@@ -133,8 +133,8 @@ def load_lm(lm_dir: str, device: torch.device, dtype=torch.bfloat16):
     from gslm2.lm.inference import load_opt_model
 
     d = Path(lm_dir)
-    loaded = load_opt_model(d / "model.pt", device, model_config=d / "config.yaml")
-    loaded.model.to(dtype)
+    loaded = load_opt_model(d / "model.pt", torch.device("cpu"), model_config=d / "config.yaml")
+    loaded.model.to(dtype).to(device)  # cast on the CPU first: the GPU never holds a float32 copy
     return loaded
 
 
