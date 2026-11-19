@@ -49,7 +49,7 @@ CB = "/data/cb/km-corpus-K2000.npy"
 def load_t(path: str, dev):
     ck = torch.load(path, map_location="cpu", weights_only=False)
     cfg = LMConfig(**ck["cfg"])
-    m = ThoughtLM(cfg).to(dev).eval()
+    m = ThoughtLM(cfg, tuple(ck.get("z_layers", ()))).to(dev).eval()
     m.load_state_dict(ck["model"])
     e = GistEncoder(vocab=cfg.vocab - 1).to(dev).eval()
     e.load_state_dict(ck["enc"])

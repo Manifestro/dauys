@@ -366,10 +366,10 @@ def wilson_lo(k: int, n: int) -> float:
     return (p + z * z / (2 * n) - z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / d
 
 
-def make_models(cfg: LMConfig, dev):
+def make_models(cfg: LMConfig, dev, z_layers: tuple = ()):
     import copy
 
-    model = ThoughtLM(cfg).to(dev)
+    model = ThoughtLM(cfg, z_layers).to(dev)
     enc = GistEncoder(vocab=K).to(dev)
     tgt = copy.deepcopy(model)
     for p in tgt.parameters():
@@ -383,7 +383,7 @@ def train(args, tr: Corpus, va: Corpus, cfg: LMConfig, out: Path, log=print, met
     dev = torch.device("cuda")
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
-    model, enc, tgt = make_models(cfg, dev)
+    model, enc, tgt = make_models(cfg, dev, tuple(getattr(args, "z_layers", ()) or ()))
     named = list(model.named_parameters()) + [("enc." + n, p) for n, p in enc.named_parameters()]
     decay = [q for n, q in named if q.dim() >= 2 and "emb" not in n]
     other = [q for n, q in named if not (q.dim() >= 2 and "emb" not in n)]
@@ -462,7 +462,8 @@ def train(args, tr: Corpus, va: Corpus, cfg: LMConfig, out: Path, log=print, met
             run.log({f"val/{k}": v for k, v in res.items()}, step=step + 1)
             log(json.dumps({"step": step + 1, "val": res}))
             history.append({"step": step + 1, **res})
-            ck = {"model": model.state_dict(), "enc": enc.state_dict(), "cfg": vars(cfg), "step": step + 1, "val": res}
+            ck = {"model": model.state_dict(), "enc": enc.state_dict(), "cfg": vars(cfg), "step": step + 1, "val": res,
+                  "z_layers": list(model.z_layers)}
             if res["ce_pred"] < best:
                 best = res["ce_pred"]
                 torch.save(ck, out / "best.pt")
@@ -513,7 +514,9 @@ def main() -> None:
     p.add_argument("--name", default="dy35-t")
     p.add_argument("--stop-at", type=float, default=0)
     p.add_argument("--no-last", action="store_true")
+    p.add_argument("--z-layers", default="", help="also add the thought before these blocks (e.g. 8,16); default input only")
     args = p.parse_args()
+    args.z_layers = tuple(int(i) for i in args.z_layers.split(",") if i)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     files = sorted(Path(args.utt).glob("*.npz"))

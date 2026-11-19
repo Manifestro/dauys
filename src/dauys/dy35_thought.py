@@ -89,9 +89,14 @@ class GistEncoder(nn.Module):
 
 
 class ThoughtLM(nn.Module):
-    def __init__(self, cfg: LMConfig) -> None:
+    def __init__(self, cfg: LMConfig, z_layers: tuple = ()) -> None:
         super().__init__()
         self.lm = UnitLM(cfg)
+        # optional: the thought (projection per layer, zero-initialised) also added before these blocks
+        self.z_layers = tuple(z_layers)
+        self.zproj = nn.ModuleDict({str(i): nn.Linear(ZDIM, cfg.d, bias=False) for i in self.z_layers})
+        for m in self.zproj.values():
+            nn.init.zeros_(m.weight)
         self.cfg = cfg
         d = cfg.d
         self.proj = nn.Linear(ZDIM, d, bias=False)
@@ -112,7 +117,9 @@ class ThoughtLM(nn.Module):
     def states(self, ids: torch.Tensor, zin: torch.Tensor | None = None, has: torch.Tensor | None = None) -> torch.Tensor:
         b, t = ids.shape
         x = self.lm.emb(ids) + self.thought_input(zin, has, b, t)
-        for blk in self.lm.blocks:
+        for i, blk in enumerate(self.lm.blocks):
+            if i in self.z_layers and i > 0 and zin is not None:
+                x = x + self.zproj[str(i)](zin.to(self.proj.weight.dtype)) * has[..., None]
             x = blk(x)
         return self.lm.norm(x)
 
