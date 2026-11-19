@@ -225,6 +225,9 @@ def cmd_train(a) -> None:
     vidx = val_index(P)
     base = hist_retrieval([P.a(i) for i in vidx], [P.b(i) for i in vidx])
     model = ModelD(a.enc_layers, a.dec_layers).cuda()
+    if a.init:
+        model.load_state_dict(torch.load(a.init, map_location="cuda", weights_only=False)["model"])
+        log("initialised from", a.init)
     meta = {"run_id": str(uuid.uuid4()), "params": nparams(model), "params_encoder": nparams(model.enc),
             "params_decoder": nparams(model.dec), "args": vars(a), "git": os.environ.get("GIT_COMMIT", ""),
             "baseline_hist_xvoice_top1": base, "val_pairs": len(vidx)}
@@ -486,6 +489,7 @@ def main() -> None:
     p.add_argument("--pairs", default="/data/dy36/d/pairs")
     p.add_argument("--out", default="/data/dy36/d/run")
     p.add_argument("--ckpt", default="")
+    p.add_argument("--init", default="", help="start from the weights of this checkpoint (new optimiser)")
     p.add_argument("--name", default="dy36-d")
     p.add_argument("--others", default="A,C2500")
     p.add_argument("--enc-layers", type=int, default=6)
