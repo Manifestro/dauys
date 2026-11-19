@@ -56,6 +56,7 @@ def main() -> None:
     p.add_argument("--dict", required=True)
     p.add_argument("--dicts", default="A,C2500")
     p.add_argument("--out", required=True)
+    p.add_argument("--cap", type=int, default=0)
     p.add_argument("--g0texts", default="/data/dy36/g0/texts.json")
     a = p.parse_args()
     out = Path(a.out)
@@ -64,6 +65,8 @@ def main() -> None:
     files = json.loads(str(T["files"]))
     refs, bank, _ = select(T)
     sub = np.sort(np.random.default_rng(SEED).choice(bank, NSUB, replace=False))
+    if a.cap:  # the first `cap` of the 20k draw in row order (the order they were transcribed in)
+        sub = sub[: a.cap]
     r2 = np.random.default_rng(SEED + 1)
     rand = []
     for u in refs:
@@ -124,13 +127,13 @@ def main() -> None:
     import subprocess
 
     # the judge (bf16 ~15 GB) does not fit next to the B feature pass on a 24 GB GPU: pause it (it resumes per shard)
-    paused = subprocess.run("pkill -f '[d]y36_featB.py pass'", shell=True).returncode == 0
+    paused = False  # the B pass is stopped by hand while the control runs
     if paused:
         import time
 
         time.sleep(15)
     j = Judge()
-    res = {"rule": __doc__, "n_refs": len(refs), "subset": NSUB, "embedding_model": EMB}
+    res = {"rule": __doc__, "n_refs": len(refs), "subset": len(sub), "cap": a.cap, "embedding_model": EMB}
     for name, v in nb.items():
         r = {}
         for row in ("letters", "whisper"):
