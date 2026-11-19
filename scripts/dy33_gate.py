@@ -106,6 +106,7 @@ def main() -> None:
             Table().add(f"dy33-{name}", f"DY-33 slow codes, track S folder resynth/{name}", "12.5 steps/s x 4 codes", sc, h)
             write(state)
             log("GATE", name, state[name]["median"], state[name]["whisper_median"], "PASS" if state[name]["pass"] else "")
+        write(state)  # refresh updated_utc every poll so readers see the service is alive
         time.sleep(a.every)
     log("GATE SERVICE END")
 
