@@ -378,8 +378,13 @@ def cmd_gen(a) -> None:
         d = out / f"d-{tag}{a.suffix}"
         d.mkdir(parents=True, exist_ok=True)
         t0 = time.time()
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            gen = generate(model, ids, feats if mode == 0 else None, mode, frames, a.temp, a.top_p, a.seed)
+        gen = []
+        for i in range(0, len(ids), a.gen_batch):  # chunk i uses seed + i
+            sl = slice(i, i + a.gen_batch)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                gen.append(generate(model, ids[sl], feats[sl] if mode == 0 else None, mode, frames, a.temp, a.top_p,
+                                    a.seed + i))
+        gen = torch.cat(gen)
         y = decode(gen)
         for n, w in zip(names, y):
             sf.write(d / f"{n}.wav", np.clip(w, -1, 1), SR, subtype="PCM_16")
@@ -388,7 +393,7 @@ def cmd_gen(a) -> None:
                 "discrete: the same frames as unit ids (nearest centroid)",
                 "checkpoint": a.ckpt, "step": ck["step"], "val": ck["val"], "config": ck["cfg"],
                 "params": model.parameters_count(),
-                "sampling": {"temperature": a.temp, "top_p": a.top_p, "seed": a.seed, "frames": frames,
+                "sampling": {"temperature": a.temp, "top_p": a.top_p, "seed": f"{a.seed} + first index of each chunk of {a.gen_batch}", "frames": frames,
                              "frame_rate_hz": cb.rate},
                 "prompt_seen_s": P / SR, "prompt_frames": int(ids.shape[1]),
                 "units": f"K={len(cb.c)} codebook on WavLM-Large layer {LAYER} (knn-vc), metric {cb.metric}: {a.unit_desc}",
@@ -451,6 +456,7 @@ def main() -> None:
     x.add_argument("--top-p", type=float, default=0.95)
     x.add_argument("--seed", type=int, default=1234)
     x.add_argument("--resynth", action="store_true")
+    x.add_argument("--gen-batch", type=int, default=25)
     a = p.parse_args()
     {"kmeans": cmd_kmeans, "train": cmd_train, "gen": cmd_gen}[a.cmd](a)
 
