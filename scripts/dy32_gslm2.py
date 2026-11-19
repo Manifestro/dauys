@@ -11,6 +11,7 @@ streams equal the previous frame; durations are not kept). The LM sees raw code 
     wavs   --in DIR --glob 'prompt_*.wav' --out DIR      units of whole wav files (full-rate and dedup JSONL)
     gen    --lm DIR --prompts DIR --out DIR             continue every prompt (batched, no padding)
     shards --part k/n --work DIR --dst S3               full-rate units of DuplexChat training shards (npz per shard)
+    score  --units DIR --lms A,B --out F                 held-out loss of LMs on our units (train's validation windows)
     train  --units DIR --init DIR --out DIR             fine-tune a released LM on our units (Airon-tracked)
 """
 
@@ -336,6 +337,31 @@ def lm_loss(model, ids: torch.Tensor) -> tuple[torch.Tensor, dict]:
     return total, {"stream_specific_loss": float(model.last_stream_specific_loss), "gen_loss": float(model.last_gen_loss)}
 
 
+@torch.no_grad()
+def cmd_score(a) -> None:
+    """The training loss (eval mode, same fixed held-out windows as train's validation) of released/fine-tuned LMs."""
+    device = torch.device("cuda")
+    va_files = [f for f in sorted(Path(a.units).glob("*.npz")) if held_out(f.stem)]
+    val = load_pieces(va_files, a.ctx)
+    vcum = np.cumsum([p.shape[1] - a.ctx for p in val]).astype(np.float64)
+    vbatch = torch.from_numpy(windows(val, vcum, a.ctx, a.val_windows, np.random.default_rng(1234)).astype(np.int64))
+    res = {}
+    for lm in a.lms.split(","):
+        loaded = load_lm(lm, device)
+        loaded.model.eval()
+        torch.manual_seed(999)
+        tot, tss, tg, n = 0.0, 0.0, 0.0, 0
+        for i in range(0, len(vbatch), a.micro):
+            l, part = lm_loss(loaded.model, vbatch[i : i + a.micro].to(device))
+            tot, tss, tg, n = tot + l.item(), tss + part["stream_specific_loss"], tg + part["gen_loss"], n + 1
+        res[lm] = {"loss": tot / n, "stream_specific_loss": tss / n, "gen_loss": tg / n}
+        print(json.dumps({lm: res[lm]}), flush=True)
+        del loaded
+        torch.cuda.empty_cache()
+    Path(a.out).write_text(json.dumps({"val_files": [f.stem for f in va_files], "ctx": a.ctx,
+                                       "windows": a.val_windows, "scores": res}, indent=2))
+
+
 def cmd_train(a) -> None:
     import airon
 
@@ -493,6 +519,13 @@ def main() -> None:
     x.add_argument("--max-shards", type=int, default=0)
     x.add_argument("--keep", action="store_true", help="keep local npz after upload")
     x.add_argument("--stop-file", default="")
+    x = s.add_parser("score")
+    x.add_argument("--units", required=True)
+    x.add_argument("--lms", required=True, help="comma list of LM dirs (model.pt + config.yaml)")
+    x.add_argument("--out", required=True)
+    x.add_argument("--ctx", type=int, default=1024)
+    x.add_argument("--val-windows", type=int, default=128)
+    x.add_argument("--micro", type=int, default=8)
     x = s.add_parser("train")
     x.add_argument("--units", required=True)
     x.add_argument("--init", required=True)
@@ -513,7 +546,7 @@ def main() -> None:
     x.add_argument("--experiment", default=EXPERIMENT)
     x.add_argument("--name", default="dy32-e")
     a = p.parse_args()
-    {"wavs": cmd_wavs, "gen": cmd_gen, "shards": cmd_shards, "train": cmd_train}[a.cmd](a)
+    {"wavs": cmd_wavs, "gen": cmd_gen, "shards": cmd_shards, "score": cmd_score, "train": cmd_train}[a.cmd](a)
 
 
 if __name__ == "__main__":
