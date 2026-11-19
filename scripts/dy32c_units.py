@@ -64,6 +64,9 @@ class Units:
         from transformers import WavLMModel
 
         self.device, self.dtype = device, dtype
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
         self.ssl = WavLMModel.from_pretrained(SSL).to(device).eval()
         self.C = centroids().to(device)  # [6, K, D]
         self.C2 = (self.C ** 2).sum(-1)  # [6, K]
@@ -72,7 +75,7 @@ class Units:
     def feats(self, wavs: list[np.ndarray]) -> tuple[list[torch.Tensor], list[int]]:
         """Hidden states of LAYERS for a batch of float32 waves: list of [B, T, D] (fp32), frames per wave."""
         n = [n_frames(len(w)) for w in wavs]
-        T = max(len(w) for w in wavs)
+        T = -(-max(len(w) for w in wavs) // SR) * SR + LOOK  # few distinct shapes (cudnn benchmark)
         x = torch.zeros(len(wavs), T)
         mask = torch.zeros(len(wavs), T, dtype=torch.long)
         for i, w in enumerate(wavs):
