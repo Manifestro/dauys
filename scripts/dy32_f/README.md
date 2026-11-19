@@ -40,3 +40,32 @@ S3 `outputs/dauys/dy32/`:
 - `gen/e-<variant>/XX.wav` + `info.json` — track E's LM continuations.
 - `f/step<N>/...` — every round kept by vocoder step; `f/latest_round.json` — the last round's settings and WER.
 - `f/checkpoints/` — vocoder and duration checkpoints; HF `manifestro/dauys-runs` `dy32/f/` holds the same.
+
+## Final state (19 Nov 2026)
+- Vocoder: `vocoder-114141` (stopped 07:11 UTC; ~6.9 h on one GPU, batch 64). Validation mel L1 (16 LJ valid
+  utterances): 0.786 at 6k, 0.774 at 30k, 0.776 at 114k — flat after ~10k steps.
+- Duration predictor: `duration_best.pt` = step 6000 of a shortened run (batch 32 x 6,000 steps instead of
+  64 x 25,000; it shared the GPU with the vocoder). Held-out Libri-Light small: val loss 0.292, MAE 0.14 frames,
+  duration correlation 0.886, total-length ratio 0.986.
+
+## Channel check (measuring only; Whisper large-v3, English, greedy, whisper text normaliser)
+`lj_test` = 40 LJ Speech test utterances through units -> vocoder vs the LJ transcripts.
+`real f` = the 50 pack `real_XX.wav` through units -> vocoder (full rate) vs Whisper on the original `real_XX.wav`
+(so it measures words lost in the channel, not recogniser errors; one item, real_02, is not English).
+`real f-dedup` = same, but cross-stream deduplicated and re-timed by the duration predictor.
+
+| vocoder step | lj_test WER | real f WER | real f-dedup WER |
+|---:|---:|---:|---:|
+| 4,000 | 3.6% | 28.0% | – |
+| 6,000 | 3.6% | 25.8% | 26.9% (dur. step 500) |
+| 12,000 | 4.2% | 25.1% | 25.0% |
+| 24,000 | 3.2% | 24.3% | 25.1% |
+| 48,000 | 3.0% | 23.4% | 24.4% |
+| 72,000 | 2.7% | 23.7% | 25.2% |
+| 96,000 | 3.3% | 23.9% | 24.3% |
+| 114,141 | 2.7% | 23.7% | 23.1% |
+
+Every step's WER is in `wer_log.jsonl`. Run-to-run noise is about +-1.5 points (one round gave 31% for f-dedup).
+The vocoder plateaus early: the ~24% word loss on conversational speech is in the units (SpidR 2.0 trained on
+read LibriSpeech), not in the vocoder. Track E's full-rate units of real_XX are identical to ours (49/50 items
+bit-identical, 1 code of 2,994 differs in real_36).
