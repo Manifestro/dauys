@@ -4,7 +4,15 @@
 set -uo pipefail
 source "$(dirname "$0")/dy32d_env.sh"
 until [[ -e $W/run/DONE ]]; do pgrep -f "dy32d.py [t]rain" > /dev/null || { echo "TRAIN NOT RUNNING AND NO DONE"; break; }; sleep 30; done
+export SNAP=$W/snap-final
 bash "$repo/scripts/dy32d_gen.sh" "" || { echo "FINAL GEN FAILED"; exit 1; }
+KEEP_SNAP=1 bash "$repo/scripts/dy32d_gen.sh" -t06 0.6 0.9 || echo "FINAL T06 GEN FAILED"
+aws s3 sync $S3D/prompts_x/ $W/prompts_x/ --only-show-errors
+if ls $W/prompts_x/prompt_*.wav > /dev/null 2>&1; then
+  KEEP_SNAP=1 bash "$repo/scripts/dy32d_gen.sh" -x 0.8 0.95 $W/prompts_x || echo "EXTENSION GEN FAILED"
+else
+  echo "no extension pack in S3"
+fi
 aws s3 sync $W/logs/ $S3D/d/logs/ --only-show-errors
 aws s3 cp $W/run/metadata.json $S3D/d/metadata.json --only-show-errors
 python - <<PY || { echo "HF UPLOAD FAILED"; exit 1; }
