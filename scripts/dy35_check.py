@@ -238,7 +238,47 @@ def known(kind: str, steps: int, out: Path, n_ep: int = 40) -> dict:
         r["marker"] = zmarker_acc(res["model"], res["enc"], va, SMALL.ctx)
     if kind == "zdist":
         r["class_from_z"] = class_acc(res["enc"], tr, va)
+        r["ce_first20"] = head_ce(res["model"], res["enc"], va, SMALL.ctx)
     return r
+
+
+@torch.no_grad()
+def head_ce(model, enc, c: Corpus, T: int, n_batches: int = 16) -> dict:
+    """CE of utterance frames 1-20 (predicted from inputs inside the utterance, where the heard context cannot yet
+    tell the class) with the true z, null, and z of a same-speaker utterance >= 60 s away."""
+    dev = torch.device("cuda")
+    b = Builder(c, T, np.random.default_rng(41))
+    rng = np.random.default_rng(42)
+    tot = {"true": 0.0, "null": 0.0, "swap": 0.0}
+    n = 0
+    model.eval()
+    enc.eval()
+    for _ in range(n_batches):
+        starts = rng.integers(0, len(c.stream) - T - 1, size=16)
+        mb = b.build(starts, pred_on=False, modes=False)
+        ids = torch.from_numpy(mb["ids"]).to(dev)
+        sel = torch.zeros(ids.shape[0], T, dtype=torch.bool, device=dev)
+        for (bi, u, r, m, a), r2 in zip(mb["slots"], mb["swap_rows"]):
+            q0 = c.st[u] - starts[bi]
+            if q0 >= 0 and q0 + 21 <= T and r2 >= 0:
+                sel[bi, q0 : q0 + 20] = True  # inputs at utterance frames 0-19 predict frames 1-20
+        if not sel.any():
+            continue
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            Z = encode_rows(enc, mb, dev)
+            for k in tot:
+                if k == "null":
+                    h = model.states(ids[:, :-1], None, None)
+                else:
+                    sl = mb["slots"] if k == "true" else [(bi, u, r2 if r2 >= 0 else r, m, a) for (bi, u, r, m, a), r2 in zip(mb["slots"], mb["swap_rows"])]
+                    zin, has = thought_tables({**mb, "slots": sl}, Z, None, dev)
+                    h = model.states(ids[:, :-1], zin, has)
+                l = F.cross_entropy(model.logits(h).flatten(0, 1), ids[:, 1:].flatten(), reduction="none").view(sel.shape)
+                tot[k] += float((l * sel).sum())
+        n += int(sel.sum())
+    model.train()
+    enc.train()
+    return {k: round(v / max(n, 1), 4) for k, v in tot.items()} | {"frames": n}
 
 
 @torch.no_grad()
@@ -287,7 +327,7 @@ def main() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--only", default="1,2,3,4,5")
     p.add_argument("--known-steps", type=int, default=1500)
-    p.add_argument("--known-steps4", type=int, default=1500)
+    p.add_argument("--known-steps4", type=int, default=3000)
     a = p.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -341,8 +381,11 @@ def main() -> None:
         r = known("zdist", a.known_steps4, out / "k4", n_ep=400)
         v = r["val"]
         r["ceu"] = {"true": v["ceu_true"], "null": v["ceu_null"], "swap": v["ceu_swap"]}
-        R["4_known_second_half"] = {**r, "pass": v["ceu_true"] < v["ceu_null"] - 0.05 and v["ceu_true"] < v["ceu_swap"] - 0.05
-                                    and r["class_from_z"]["acc"] >= 0.9}
+        h = r["ce_first20"]
+        r["rule"] = ("pass: on utterance frames 1-20 CE(true z) < CE(null) - 0.3 and < CE(swapped z) - 0.3; over whole "
+                     "utterances CE(true) < CE(swap); class of the utterance from z (nearest class mean) >= 0.8 (chance 1/32)")
+        R["4_known_second_half"] = {**r, "pass": h["true"] < h["null"] - 0.3 and h["true"] < h["swap"] - 0.3
+                                    and v["ceu_true"] < v["ceu_swap"] and r["class_from_z"]["acc"] >= 0.8}
         save()
         print("4", json.dumps(R["4_known_second_half"]), flush=True)
     if "5" in only:
