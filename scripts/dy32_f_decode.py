@@ -395,11 +395,12 @@ def track(args) -> None:
 
     os.environ["AIRON_URL"] = os.environ.get("AIRON_URL", "").removesuffix("/v1")
     runs = {}
-    ids_file, seen_file = W / "airon_runs.json", W / "airon_seen.json"
+    # one process per Airon run (a second airon.init in the same process finishes the first run)
+    ids_file, seen_file = W / f"airon_runs_{args.key}.json", W / f"airon_seen_{args.key}.json"
     seen = json.loads(seen_file.read_text()) if seen_file.exists() else {}
     files = {"vocoder": VOC_DIR / "metrics-0.jsonl", "duration": None, "wer": W / "wer_log.jsonl"}
     while True:
-        for name in ("vocoder", "duration", "wer"):
+        for name in {"vocoder": ("vocoder", "wer"), "duration": ("duration",)}[args.key]:
             f = files[name]
             if name == "duration":
                 cands = sorted(DUR_DIR.glob("*.jsonl")) if DUR_DIR.exists() else []
@@ -448,6 +449,7 @@ def main() -> None:
     a = sp.add_parser("round"); a.add_argument("--vocoder"); a.add_argument("--duration"); a.add_argument("--no-wer", action="store_true")
     a.add_argument("--only", nargs="*", help="only these gen variants")
     a = sp.add_parser("track"); a.add_argument("--once", action="store_true")
+    a.add_argument("--key", default="vocoder", choices=["vocoder", "duration"])
     args = p.parse_args()
     if args.cmd == "extract":
         extract(args.wavs, args.out)

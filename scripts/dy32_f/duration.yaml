@@ -1,4 +1,5 @@
 # DY-32 F: duration predictor (gslm2 template) on full-rate codes of Libri-Light small; validation on held-out small segments.
+# Shortened for the deadline (shares the GPU with the vocoder): batch 32, 6000 steps instead of 64 x 25000.
 train_dirs:
 - /opt/dlami/nvme/w/units/ll/5/duration_predictor
 valid_dirs:
@@ -20,13 +21,13 @@ encoder_type: conformer
 attention_heads: 4
 conv_kernel: 17
 ffn_expansion: 4
-batch_size: 64
+batch_size: 32
 max_seq_len: 2048
 num_workers: 4
-max_steps: 25000
+max_steps: 6000
 lr: 3e-3
 weight_decay: 1e-5
-warmup_steps: 1000
+warmup_steps: 500
 log_interval: 100
-val_interval: 1000
+val_interval: 500
 seed: 0
