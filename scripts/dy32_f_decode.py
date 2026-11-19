@@ -181,6 +181,46 @@ class Decoder:
             return None
 
 
+def _streams(u) -> list[list[int]]:
+    return [[int(x) for x in s.split()] for s in u.split("|")] if isinstance(u, str) else [list(map(int, s)) for s in u]
+
+
+def decode_gen(dec: Decoder, manifest: Path, out: Path, prompt_full: dict[str, list[list[int]]],
+               max_frames: int = 500, voc_ctx: int = 100) -> list[dict]:
+    """Release recipe for LM continuations (gslm2.synthesis_continuations): durations are predicted on the
+    deduplicated context + continuation, only the continuation is expanded and capped at 10 s (500 frames); the vocoder
+    sees the last 2 s of the full-rate prompt before it and that part is cut from the output (continuation only)."""
+    import numpy as np
+    import soundfile as sf
+    from gslm2.duration.predict import expand_streams, predict_durations
+
+    out.mkdir(parents=True, exist_ok=True)
+    log = []
+    for line in manifest.read_text().splitlines():
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        rid = Path(str(r.get("audio", r.get("fileid")))).stem
+        cont = _streams(r["units"])
+        ctx = _streams(r["context_units"]) if r.get("context_units") else [[] for _ in range(6)]
+        if int(r.get("unit_offset", 0)) != 0:
+            raise ValueError(f"{manifest}: unit_offset != 0 not handled for continuations")
+        full_in = [c + s for c, s in zip(ctx, cont)]
+        with dec.torch.inference_mode():
+            d = predict_durations(dec.dur, full_in, log_duration=bool(dec.dur_cfg.get("log_duration", True)))
+        n = len(ctx[0])
+        exp = [s[:max_frames] for s in expand_streams(cont, d[n:])]
+        pf = prompt_full.get(rid)
+        left = [s[-voc_ctx:] for s in pf] if pf else [[] for _ in range(6)]
+        k = len(left[0])
+        a = dec.vocode([l + e for l, e in zip(left, exp)])[k * 320:]
+        a = 0.95 * a / max(float(np.abs(a).max()), 1e-6)
+        sf.write(out / f"{rid}.wav", a, SR)
+        log.append({"id": rid, "context_positions": n, "continuation_positions": len(cont[0]),
+                    "expanded_frames": len(exp[0]), "vocoder_left_context_frames": k, "seconds": round(len(a) / SR, 2)})
+    return log
+
+
 def decode_manifest(dec: Decoder, manifest: Path, out: Path, mode: str = "auto") -> list[dict]:
     """mode: full (rows are full-rate), dedup (cross-dedup full-rate rows first, then predict durations), auto."""
     import soundfile as sf
@@ -269,37 +309,45 @@ def round_(args) -> None:
     keys = s3_ls(f"{S3}/e/")
     for k in keys:
         rel = k.split("outputs/dauys/dy32/e/", 1)[1]
-        if rel.startswith(("resynth_units/", "gen_units/")):
+        if rel.startswith(("resynth_units/", "gen_units/", "prompt_units/fullrate/")) and not rel.endswith("all.jsonl"):
             dst = tmp / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             sh(f"aws s3 cp {BUCKET}/{k} {dst} --only-show-errors")
-    rs = tmp / "resynth_units"
-    for f in sorted(rs.glob("*.jsonl")) if rs.exists() else []:
-        kind = "dedup" if "dedup" in f.stem else "full" if ("full" in f.stem) else None
-        if kind is None or (kind == "dedup" and dur is None):
+
+    def cat(files: list[Path], name: str) -> Path:
+        m = tmp / f"_{name}.jsonl"
+        m.write_text("".join(f.read_text().strip() + "\n" for f in files))
+        return m
+
+    for kind, name in (("fullrate", "e-fullrate"), ("dedup", "e-dedup")):
+        files = sorted((tmp / "resynth_units" / kind).glob("[0-9]*.jsonl"))
+        if not files or (kind == "dedup" and dur is None):
             continue
-        name = "e-fullrate" if kind == "full" else "e-dedup"
         d = R / "resynth" / name
-        log = decode_manifest(dec, f, d, kind)
-        json.dump({**base, "input": f"track E units {f.name}", "items": log}, open(d / "info.json", "w"), indent=1)
+        log = decode_manifest(dec, cat(files, name), d, "full" if kind == "fullrate" else "dedup")
+        json.dump({**base, "input": f"track E units resynth_units/{kind}/XX.jsonl of real_XX.wav"
+                   + ("" if kind == "fullrate" else "; durations predicted (none kept)"), "items": log},
+                  open(d / "info.json", "w"), indent=1)
         dests.append((d, f"resynth/{name}"))
+    prompt_full = {}
+    for f in sorted((tmp / "prompt_units/fullrate").glob("[0-9]*.jsonl")):
+        r = json.loads(f.read_text().splitlines()[0])
+        prompt_full[Path(str(r.get("audio", f.stem))).stem] = _streams(r.get("units", r.get("audio_repr")))
     gu = tmp / "gen_units"
     for vdir in sorted(p for p in gu.iterdir() if p.is_dir()) if gu.exists() else []:
-        files = sorted(vdir.glob("*.jsonl"))
-        if not files or dur is None:
+        files = sorted(vdir.glob("[0-9]*.jsonl"))
+        if not files or dur is None or (args.only and vdir.name not in args.only):
             continue
         d = R / "gen" / f"e-{vdir.name}"
-        logs = []
-        for f in files:
-            m = tmp / f"_one_{vdir.name}_{f.stem}.jsonl"
-            rows = [l for l in f.read_text().splitlines() if l.strip()]
-            # one continuation per file XX.jsonl: name the WAV after the file
-            m.write_text("\n".join(json.dumps({**json.loads(l), "id": f.stem if len(rows) == 1 else
-                                               f"{f.stem}_{i}"}) for i, l in enumerate(rows)) + "\n")
-            logs += decode_manifest(dec, m, d, "auto")
+        logs = decode_gen(dec, cat(files, f"gen_{vdir.name}"), d, prompt_full)
         e_info = vdir / "info.json"
+        if not e_info.exists():
+            sh(f"aws s3 cp {S3}/e/gen_units/{vdir.name}/info.json {e_info} --only-show-errors", check=False)
         json.dump({**base, "lm": json.loads(e_info.read_text()) if e_info.exists() else f"track E variant {vdir.name}",
-                   "rough": "duration predicted per six-tuple (LM output carries no durations); single-speaker LJ voice; "
+                   "decoding": "release recipe: durations predicted on dedup context+continuation, continuation expanded "
+                               "and capped at 500 frames (10 s); vocoder sees the last 2 s of the full-rate prompt, cut "
+                               "from the output (continuation only)",
+                   "rough": "durations predicted per six-tuple (LM output carries none); single-speaker LJ Speech voice; "
                             "prosody not preserved by design", "items": logs}, open(d / "info.json", "w"), indent=1)
         dests.append((d, f"gen/e-{vdir.name}"))
 
@@ -391,6 +439,7 @@ def main() -> None:
     a = sp.add_parser("wer"); a.add_argument("--wavs", nargs="+", type=Path); a.add_argument("--refs", type=Path)
     a = sp.add_parser("transcribe"); a.add_argument("--wavs", nargs="+", type=Path); a.add_argument("--out", type=Path)
     a = sp.add_parser("round"); a.add_argument("--vocoder"); a.add_argument("--duration"); a.add_argument("--no-wer", action="store_true")
+    a.add_argument("--only", nargs="*", help="only these gen variants")
     a = sp.add_parser("track"); a.add_argument("--once", action="store_true")
     args = p.parse_args()
     if args.cmd == "extract":
