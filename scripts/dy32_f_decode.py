@@ -340,7 +340,8 @@ def track(args) -> None:
 
     os.environ["AIRON_URL"] = os.environ.get("AIRON_URL", "").removesuffix("/v1")
     runs = {}
-    seen = {}
+    ids_file, seen_file = W / "airon_runs.json", W / "airon_seen.json"
+    seen = json.loads(seen_file.read_text()) if seen_file.exists() else {}
     files = {"vocoder": VOC_DIR / "metrics-0.jsonl", "duration": None, "wer": W / "wer_log.jsonl"}
     while True:
         for name in ("vocoder", "duration", "wer"):
@@ -355,8 +356,12 @@ def track(args) -> None:
                 if key not in runs:
                     cfg = {"commit": os.environ.get("DY21_COMMIT", ""), "part": key,
                            "params": {"vocoder": 13406594}.get(key)}
+                    ids = json.loads(ids_file.read_text()) if ids_file.exists() else {}
+                    kw = {"run_id": ids[key], "resume": "allow"} if key in ids else {}
                     runs[key] = airon.init(project="dauys", name=f"dy32-f-{key}", config=cfg, experiment=EXPERIMENT,
-                                           tags=["dy32", "dy32-f", key])
+                                           tags=["dy32", "dy32-f", key], **kw)
+                    ids[key] = runs[key].id
+                    ids_file.write_text(json.dumps(ids))
                 runs[name] = runs[key]
             lines = f.read_text().splitlines()
             for l in lines[seen.get(name, 0):]:
@@ -371,6 +376,7 @@ def track(args) -> None:
                 if vals:
                     runs[name].log(vals, step=step)
                 seen[name] = seen.get(name, 0) + 1
+        seen_file.write_text(json.dumps(seen))
         if args.once:
             break
         time.sleep(60)
