@@ -45,7 +45,7 @@ def cmd_table(a) -> None:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     files = sorted(Path(a.utt).glob("*.npz"))
-    cols = {k: [] for k in ("file", "piece", "s", "e", "piece_orig", "ep", "spk", "t0", "t1", "held")}
+    cols = {k: [] for k in ("fi", "piece", "s", "e", "piece_orig", "ep", "spk", "t0", "t1", "held")}
     codes, offs, pos, ep_base = [], [], 0, 0
     for fi, f in enumerate(files):
         z = np.load(f)
@@ -63,7 +63,7 @@ def cmd_table(a) -> None:
             codes.append(tok[a0 + si : a0 + ei].astype(np.int16))
             offs.append(pos)
             pos += ei - si
-        cols["file"].append(np.full(len(m), fi))
+        cols["fi"].append(np.full(len(m), fi))
         cols["piece"].append(p)
         cols["s"].append(s)
         cols["e"].append(e)
