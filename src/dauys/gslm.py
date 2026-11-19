@@ -165,7 +165,7 @@ class CodeHiFiGAN(nn.Module):
 
     @torch.no_grad()
     def forward(self, units: np.ndarray, dur_prediction: bool = False, spkr: int = 0, style: int = 0) -> np.ndarray:
-        dev = self.conv_pre.weight.device
+        dev = self.dict.weight.device
         u = torch.as_tensor(np.asarray(units, np.int64), device=dev)
         if dur_prediction:
             u = self.frames(u)
