@@ -124,6 +124,7 @@ def roll(m, prefix: torch.Tensor, sil: torch.Tensor, n_gen: int = 0, force=None,
     lp = torch.zeros(B, P - 1, device=dev)
     h_prev = None
     switches = torch.zeros(B, dtype=torch.long, device=dev)
+    pick = None
     eos = lm_of(m).head.out_features - 1
     for t in range(P + n_gen):
         x = toks[t]
@@ -138,10 +139,16 @@ def roll(m, prefix: torch.Tensor, sil: torch.Tensor, n_gen: int = 0, force=None,
                 has = has | ended
                 switches += ended.long()
             if t == P and n_gen and force is not None:
-                if isinstance(force, str):  # "pred" or "near": z_hat at the last prompt frame (or its nearest neighbour)
+                if isinstance(force, str):  # "pred", "near" or "samp": z_hat at the last prompt frame, or a bank thought
                     f = m.zhat(h_prev)
                     if force == "near":
-                        f = near_bank[(f @ near_bank.T).argmax(1)]
+                        pick = (f @ near_bank.T).argmax(1)
+                        f = near_bank[pick]
+                    elif force == "samp":  # one of the top 50 by cosine, probability ~ exp(cosine / 0.1)
+                        v, ix = (f @ near_bank.T).topk(50, dim=1)
+                        j = torch.multinomial(torch.softmax(v / 0.1, -1), 1, generator=gen)
+                        pick = ix.gather(1, j)[:, 0]
+                        f = near_bank[pick]
                 else:
                     f = force
                 cur, has, run = f.float(), torch.ones_like(has), torch.zeros_like(run)
@@ -155,7 +162,8 @@ def roll(m, prefix: torch.Tensor, sil: torch.Tensor, n_gen: int = 0, force=None,
         elif t >= P - 1 and t < P + n_gen - 1:
             lg[:, eos] = -float("inf")
             toks.append(sample_next(lg, temp, top_p, gen))
-    return torch.stack(toks, 1), h_prev, lp, cache, {"switches": switches.cpu().tolist(), "cur": cur, "has": has}
+    return torch.stack(toks, 1), h_prev, lp, cache, {"switches": switches.cpu().tolist(), "cur": cur, "has": has,
+                                                     "pick": None if pick is None else pick.cpu().tolist()}
 
 
 def sil_mask(path: str, dev) -> torch.Tensor:
@@ -205,7 +213,7 @@ def cmd_p1(a) -> None:
         Z = {u: zz[i] for i, u in enumerate(allu)}
 
         def head_acc(sub, H: int, null: bool = False) -> tuple[float, int, list]:
-            hit, ranks = 0, []
+            hit, ranks, hits = 0, [], []
             for b0 in range(0, len(sub), a.batch):
                 S = sub[b0 : b0 + a.batch]
                 pre = torch.stack([torch.from_numpy(va.stream[va.st[u] - H : va.st[u]].astype(np.int64)) for u, _ in S]).to(dev)
@@ -217,12 +225,23 @@ def cmd_p1(a) -> None:
                 zh = m.zhat(h)
                 C = torch.stack([torch.stack([Z[u]] + [Z[d] for d in ds]) for u, ds in S])
                 s = torch.einsum("bd,bcd->bc", zh, C)
-                hit += int((s[:, 0] > s[:, 1:].max(1).values).sum())  # strict: a tie is a miss
+                ok = s[:, 0] > s[:, 1:].max(1).values  # strict: a tie is a miss
+                hit += int(ok.sum())
+                hits += ok.cpu().tolist()
                 ranks += (s[:, 1:] >= s[:, :1]).sum(1).cpu().tolist()
+            head_acc.hits = hits
             return hit / len(sub), len(sub), ranks
 
         acc, n, ranks = head_acc(A, HEARD)
         res["head_15s"] = {"acc16": acc, "n": n, "ci95": wilson(round(acc * n), n), "mean_rank": float(np.mean(ranks))}
+        # by the speaker of the segment right before the anchor in its piece (any length): same / other / none
+        hits = np.array(head_acc.hits)
+        prev = np.array([va.prev_spk[u] for u, _ in A])
+        own = np.array([va.spk[u] % 64 for u, _ in A])
+        res["head_15s_by_prev_speaker"] = {}
+        for k, sel in (("same", prev == own), ("different", (prev >= 0) & (prev != own)), ("none_in_piece", prev < 0)):
+            kk, nn_ = int(hits[sel].sum()), int(sel.sum())
+            res["head_15s_by_prev_speaker"][k] = {"acc16": kk / max(nn_, 1), "n": nn_, "ci95": wilson(kk, nn_)}
         acc, n, _ = head_acc(A, HEARD, null=True)
         res["head_15s_heard_without_thoughts"] = {"acc16": acc, "n": n, "ci95": wilson(round(acc * n), n)}
         sub = [x for x in A if va.sin[x[0]] >= 1500]
@@ -359,7 +378,7 @@ def cmd_p2a(a) -> None:
                 zin = (z if z is not None else torch.zeros(len(S), 64, device=dev))[:, None].expand(-1, L, -1)
                 e = embed(m, x, zin, hasv)
                 hh = blocks(m, e, cache, HEARD)
-            l = F.cross_entropy(m.logits(hh[:, :-1]).flatten(0, 1), x[:, 1:].flatten(), reduction="none").view(len(S), L - 1)
+            l = F.cross_entropy(m.logits(hh[:, :-1].float()).flatten(0, 1), x[:, 1:].flatten(), reduction="none").view(len(S), L - 1)
             out[k] += ((l * mask).sum(1) / mask.sum(1)).cpu().tolist()
         print(json.dumps({"done": b0 + len(S)}), flush=True)
     r = {k: float(np.mean(v)) for k, v in out.items()}
@@ -424,19 +443,21 @@ def cmd_gen(a) -> None:
 
     def batched(m, x, **kw):
         g = torch.Generator(device=dev).manual_seed(1234)
-        outs, sw = [], []
+        outs, sw, picks = [], [], []
         for b0 in range(0, len(x), a.batch):
             kk = {k: (v[b0 : b0 + a.batch] if k == "force" and torch.is_tensor(v) else v) for k, v in kw.items()}
             t, _, _, _, info = roll(m, x[b0 : b0 + a.batch], sil, n_gen=n, gen=g, **kk)
             outs.append(t)
             sw += info["switches"]
+            picks += info["pick"] or []
+        batched.picks = picks
         return torch.cat(outs), sw
 
     modes = a.modes.split(",")
     if any(md.startswith("t-") for md in modes):
         m, enc, ck = load_t(a.ckpt, dev)
         tinfo = {"checkpoint": a.ckpt, "step": ck["step"], "val": ck["val"], "config": ck["cfg"]}
-    if any(md in ("t-pred", "t-oracle", "t-swap", "t-near", "b-turn") for md in modes):
+    if any(md in ("t-pred", "t-oracle", "t-swap", "t-near", "t-samp", "b-turn") for md in modes):
         names, x, L = prompts(a.pack, "prompt_*.wav", "stream")
         cz = np.load(Path(a.pack) / "codes.npz")
     for md in modes:
@@ -448,21 +469,28 @@ def cmd_gen(a) -> None:
                       "step": bck.get("step"), "val": bck.get("val"), "prompt_seen_s": L / 50, "thought": "none"})
             del bm
             torch.cuda.empty_cache()
-        elif md in ("t-pred", "t-oracle", "t-swap", "t-near"):
+        elif md in ("t-pred", "t-oracle", "t-swap", "t-near", "t-samp"):
             force, bank = "pred", None
             if md in ("t-oracle", "t-swap"):
                 key = "real" if md == "t-oracle" else "swap"
                 force = zs_codes(enc, [cz[f"{key}_{i}"] for i in names], dev)
-            if md == "t-near":
-                bank = torch.load(a.bank, map_location=dev)["z"].float()
-                force = "near"
+            if md in ("t-near", "t-samp"):
+                bk = torch.load(a.bank, map_location=dev, weights_only=False)
+                bank = bk["z"].float()
+                force = md[2:]
             toks, sw = batched(m, x, force=force, near_bank=bank)
+            extra = {}
+            if md in ("t-near", "t-samp"):
+                extra = {"bank_pick_train_utt_ids": {pid: int(bk["utt_ids"][i]) for pid, i in zip(names, batched.picks)},
+                         "bank_size": int(len(bank)), "bank_step": bk["step"]}
             desc = {"t-pred": "z_hat at the last prompt frame, then the pause rule",
                     "t-oracle": "first utterance: z of real_NNN (its alone-encoded codes); then the pause rule",
                     "t-swap": "first utterance: z of swap_NNN; then the pause rule",
-                    "t-near": "first utterance: nearest neighbour (cosine) of z_hat among z of 100,000 training utterances; then the pause rule"}[md]
+                    "t-near": "first utterance: nearest neighbour (cosine) of z_hat among z of 100,000 training utterances; then the pause rule",
+                    "t-samp": "first utterance: one of the 100,000 training-utterance z sampled from the top 50 by cosine to z_hat, "
+                              "probability ~ exp(cosine / 0.1) (drawn from the folder's generator, so the token draws differ from t-near); then the pause rule"}[md]
             write_gen(ch, cb, Path(a.out) / md, names, toks, n, {**base, **tinfo, "prompt_seen_s": L / 50, "thought": desc,
-                      "thought_switches_after_start": sw})
+                      "thought_switches_after_start": sw, **extra})
         elif md in ("t-t10", "t-t10-x"):
             nm, xx, LL = prompts(a.t10 if md == "t-t10" else a.t10x, "prompt_*.wav", "chunked")
             toks, sw = batched(m, xx)
@@ -518,7 +546,7 @@ def cmd_g1(a) -> None:
             res[c].append((-lp[:, P - 1 :]).cpu().numpy())
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 hh = m.states(x[:, :-1])
-            l = F.cross_entropy(m.logits(hh[:, P - 1 :]).flatten(0, 1), x[:, P:].flatten(), reduction="none").view(len(W), -1)
+            l = F.cross_entropy(m.logits(hh[:, P - 1 :].float()).flatten(0, 1), x[:, P:].flatten(), reduction="none").view(len(W), -1)
             res[c + "_null"].append(l.cpu().numpy())
         print(json.dumps({"done": b0 + len(W)}), flush=True)
     res = {k: np.concatenate(v) for k, v in res.items()}
