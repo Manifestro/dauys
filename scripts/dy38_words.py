@@ -530,6 +530,7 @@ def cmd_base(a) -> None:
 def make_encoder():
     import torch
     import torch.nn as nn
+    import torch.utils.checkpoint
 
     class Enc(nn.Module):
         def __init__(self, d_in=PCA_DIM, d=384, layers=4, heads=6, ff=1536, out=256, maxlen=MAXF + 2):
@@ -544,7 +545,14 @@ def make_encoder():
 
         def forward(self, x, mask):  # x [B, L, 256], mask [B, L] True = valid
             h = self.inp(x) + self.pos[: x.shape[1]]
-            h = self.norm(self.tr(h, src_key_padding_mask=~mask))
+            pad = ~mask
+            for layer in self.tr.layers:
+                if self.training and torch.is_grad_enabled():  # recompute activations: batch 2048 x 3 fits a 24 GB GPU
+                    h = torch.utils.checkpoint.checkpoint(lambda t, l=layer: l(t, src_key_padding_mask=pad), h,
+                                                          use_reentrant=False)
+                else:
+                    h = layer(h, src_key_padding_mask=pad)
+            h = self.norm(h)
             w = self.att(h).squeeze(-1).masked_fill(~mask, -1e4)
             z = (torch.softmax(w, -1).unsqueeze(-1) * h).sum(1)
             return nn.functional.normalize(self.out(z), dim=-1)
@@ -785,11 +793,19 @@ def cmd_check(a) -> None:
     B = 2048
     idx = torch.randint(0, len(S), (B,), device="cuda")
     x, m = P.batch(idx, aug=True)
-    x2, m2 = P.batch(torch.randint(0, len(S), (B,), device="cuda"), aug=True)
+    x2, m2 = P.batch(idx, aug=True)  # true pairs: the same pieces, another augmentation
+    xn, mn = P.batch(torch.randint(0, len(S), (B,), device="cuda"), aug=True)
+    model.eval()
     with torch.no_grad():
-        l0 = float(info_nce(model(x, m), model(x2, m2), model(x2, m2), 0.07))
-    R["init_loss"] = {"value": round(l0, 4), "ln_B+1": round(math.log(B + 1), 4),
-                      "pass": abs(l0 - math.log(B + 1)) / math.log(B + 1) < 0.15}
+        za, zp, zn = model(x, m), model(x2, m2), model(xn, mn)
+        l_true = float(info_nce(za, zp, zn, 0.07))
+        l_perm = float(info_nce(za, zp[torch.randperm(B, device="cuda")], zn, 0.07))
+    model.train()
+    # known answer: an untrained encoder already maps the same piece (two augmentations) closer than other pieces,
+    # so the loss on true pairs is below the loss with the positives shuffled; with shuffled positives the loss is
+    # the no-information level for this temperature (not ln(B+1): random-init vectors are not spread uniformly)
+    R["init_loss"] = {"true_pairs": round(l_true, 4), "shuffled_pairs": round(l_perm, 4),
+                      "ln_B+1": round(math.log(B + 1), 4), "pass": l_true < l_perm}
     # known answer: the piece with itself (two augmentations) is learnable fast
     opt = torch.optim.AdamW(model.parameters(), 3e-4)
     for st in range(200):
