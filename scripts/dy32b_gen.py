@@ -72,9 +72,8 @@ def main() -> None:
             "sampling": {"temperature": a.temp, "top_p": a.top_p, "seed": a.seed, "eos_banned": True,
                          "batch": "all prompts in one batch, one generator"},
             "prompt_seen_s": keep / cb.rate, "prompt_codes": keep, "generated_codes": n, "generated_s": n / cb.rate,
-            "units": f"WavLM-Large layer 6, {cb.rate} Hz, K={cb.K} canonical codebook fitted on LJSpeech only "
-                     "(cosine nearest centroid); s3 outputs/dauys/dy32/b/centroids/lj_k2000_r25",
-            "decoder": "per-code decode table (mean LJ frame pair) -> kNN-VC prematched HiFi-GAN, 16 kHz, LJSpeech voice",
+            "units": f"WavLM-Large layer 6 (kNN-VC), {cb.rate} Hz, K={cb.K}, cosine nearest centroid, codebook {a.cb}",
+            "decoder": "centroid lookup -> kNN-VC prematched HiFi-GAN, 16 kHz",
             "rep4_mean": rep, "note": a.note, "codes": {pid: r.tolist() for pid, r in zip(ids, u)}}
     (out / "info.json").write_text(json.dumps(info, indent=1))
     print("GEN DONE", len(ids), json.dumps({k: info[k] for k in ("step", "val", "prompt_seen_s", "rep4_mean")}), flush=True)

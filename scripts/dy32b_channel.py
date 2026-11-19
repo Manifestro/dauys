@@ -88,7 +88,11 @@ def pool(f: torch.Tensor, rate: int) -> torch.Tensor:
 
 class Codebook:
     def __init__(self, path: str, device: str = "cuda") -> None:
-        z = torch.load(path, map_location=device)
+        if path.endswith(".npy"):  # track A centroids (K, 1024): 50 Hz, cosine assignment, decode = centroid lookup
+            c = torch.from_numpy(np.load(path).astype(np.float32)).to(device)
+            z = {"cent_n": F.normalize(c, dim=-1), "dec": c[:, None], "rate": 50, "meta": {"source": path}}
+        else:
+            z = torch.load(path, map_location=device)
         self.cent_n, self.dec, self.rate, self.meta = z["cent_n"], z["dec"], z["rate"], z["meta"]
         self.K = self.cent_n.shape[0]
 

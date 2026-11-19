@@ -2,7 +2,7 @@
 
 Per shard: pieces >= 5 s, each cut into 20 s windows, WavLM-Large layer-6 features per window (batched by length
 with a padding mask), codes per window by the canonical (LJ) codebook and the control (corpus) codebook, joined per
-piece. ``<shard>.npz``: ``tok`` int16 canonical codes, ``tok_c`` int16 corpus codes, ``index`` [n, 2] (start, len).
+piece. ``<shard>.npz``: ``tok`` int16 codes by --cb, ``tok_c`` int16 codes by --cb2, ``index`` [n, 2] (start, len).
 The next shard downloads in the background; uploads to S3 run in the background; shards already in --dst are skipped.
 
     python scripts/dy32b_units.py run --part 0/3 --work /opt/dlami/nvme/w0 --cb /data/b/cb/lj_k2000_r25.pt \

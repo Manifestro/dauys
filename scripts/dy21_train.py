@@ -32,11 +32,11 @@ def held_out(name: str) -> bool:
     return int(hashlib.sha1(name.encode()).hexdigest(), 16) % 50 == 0
 
 
-def load_stream(files: list[Path]) -> np.ndarray:
+def load_stream(files: list[Path], key: str = "tok") -> np.ndarray:
     parts = []
     for f in files:
         z = np.load(f)
-        tok, index = z["tok"], z["index"]
+        tok, index = z[key], z["index"]
         for st, n in index:
             u = tok[st : st + n]
             u = u[u < K]
@@ -71,6 +71,7 @@ def main() -> None:
     p.add_argument("--experiment", default=EXPERIMENT, help="Airon experiment title")
     p.add_argument("--name", default="", help="Airon run name (default dy21-s<seed>)")
     p.add_argument("--patience", type=int, default=0, help="stop after this many validations without a new best (0 = off)")
+    p.add_argument("--key", default="tok", help="npz array with the units")
     p.add_argument("--k", type=int, default=8192, help="unit vocabulary size K (EOS = K, vocab = K + 1)")
     p.add_argument("--stop-at", type=float, default=0, help="unix time: validate, keep best and stop after it (0 = off)")
     args = p.parse_args()
@@ -85,7 +86,7 @@ def main() -> None:
     files = sorted(Path(args.units).glob("*.npz"))[: args.limit or None]
     tr_files = [f for f in files if not held_out(f.stem)]
     va_files = [f for f in files if held_out(f.stem)] or files[-1:]
-    train, val = load_stream(tr_files), load_stream(va_files)
+    train, val = load_stream(tr_files, args.key), load_stream(va_files, args.key)
     if args.small:
         cfg = LMConfig(vocab=K + 1, d=256, layers=4, heads=4, ffn=1024, ctx=256)
     elif args.cfg:
