@@ -407,7 +407,7 @@ def z_rows(model, T: dict, rows: np.ndarray) -> np.ndarray:
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
         for s in range(0, len(rows), step):
             us = [co[off[u] : off[u + 1]].astype(np.int64) for u in rows[s : s + step]]
-            out[s : s + len(us)] = model.enc.encode_many(us).float().cpu().numpy()
+            out[s : s + len(us)] = model.enc.encode_many(us, budget=int(os.environ.get("ENC_BUDGET", 16384))).float().cpu().numpy()
     return out
 
 
