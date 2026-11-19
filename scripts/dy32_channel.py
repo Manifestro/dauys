@@ -154,6 +154,10 @@ class Table:
              "audio -> recogniser; error vs the same recogniser on the original audio. Letters = "
              "wav2vec2-large-960h-lv60-self greedy CTC (as dy31); Whisper = large-v3-turbo (second opinion). "
              f"Updated {time.strftime('%Y-%m-%d %H:%M')} UTC.", "",
+             "**Status (00:36 UTC):** idea 2 (one canonical voice) is REFUTED at the channel level by the pre-registered "
+             "rule: whole-corpus codes beat LJSpeech-only codes at every K and both frame rates (by 0.06-0.11). Idea 1 "
+             "(several streams) is NOT CONFIRMED at the channel level: the gain over the best single stream is 0.02-0.04 "
+             "< 0.05. Both get a downstream test in the evaluation (gen/b vs gen/g-lj for idea 2; gen/b vs gen/c for idea 1).", "",
              "| channel | rate | letters WER median | mean | letters CER median | Whisper WER median | mean | description |",
              "|---|---|---|---|---|---|---|---|"]
         for n, r in sorted(self.rows.items(), key=lambda x: x[1]["letters_wer"]["median"]):
@@ -473,6 +477,38 @@ def mimi(device, R, measure, todo) -> None:
     del m
 
 
+def filecheck(a) -> None:
+    """Re-measure channels from the published fp16 centroid files (what other tracks use)."""
+    import torch
+
+    device = torch.device("cuda")
+    ref = json.loads((W / "ref.json").read_text())
+    R = reals()
+    rec, tab, knn = Rec(device), Table(), KNN(device)
+    F = [knn.feats(w) for w in R]
+    cdir = W / "centroids"
+    for name in a.names:
+        C = torch.from_numpy(np.load(cdir / f"{name}.npy")).float().to(device)
+        variants = [(f"{name}-L{L}", L) for L in (1, 2, 4)] if name.startswith("rvq") else [(name, 0)]
+        for row, L in variants:
+            waves = []
+            for f in F:
+                if L:
+                    r, d = f.float(), torch.zeros_like(f.float())
+                    for c in C[:L]:
+                        q = c[assign(r, c, cos=False)]
+                        d, r = d + q, r - q
+                elif C.shape[1] == 2048:
+                    d = C[assign(pairs(f), C, cos=True)].reshape(-1, 1024)[: len(f)]
+                else:
+                    d = C[assign(f, C, cos=True)]
+                waves.append(knn.vocode(d))
+            h = rec(waves)
+            sc = score(ref, h)
+            tab.add(f"file-{row}", f"same channel decoded from the published fp16 file {name}.npy (README recipe)", "as above", sc, h)
+            log("ROW", f"file-{row}", sc["letters_wer"]["median"])
+
+
 def measure_dirs(a) -> None:
     import torch
 
@@ -514,8 +550,10 @@ def main() -> None:
     x.add_argument("--desc", default="")
     x.add_argument("--rate", default="?")
     x.add_argument("--skip-existing", action="store_true")
+    x = s.add_parser("filecheck")
+    x.add_argument("--names", nargs="+", default=["km-corpus-K2000", "km-lj-K2000", "rvq-corpus-1024x4"])
     a = p.parse_args()
-    {"lab": lab, "measure": measure_dirs}[a.cmd](a)
+    {"lab": lab, "measure": measure_dirs, "filecheck": filecheck}[a.cmd](a)
 
 
 if __name__ == "__main__":

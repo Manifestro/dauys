@@ -240,6 +240,30 @@ def main() -> None:
         L.append(f"| {n} | {s['judge']['Dc']['D']:.2f} ± {s['judge']['Dc']['ci95']:.2f} | {s['judge']['Dr']['D']:.2f} | {s['verdict']['verdict']} | "
                  f"{s['words_in_heldout_vocab']:.3f} | {s['gpt2'].get('median_logppl', float('nan')):.2f} | {s['rep4_words']:.3f} | "
                  f"{s['words_median']:.0f} | {s['empty_share']:.2f} | {s['gen_seconds_median']:.1f} |")
+    pairs_ = [("idea 2 downstream (one voice vs corpus codes)", "g-lj", "b"), ("idea 1 downstream (several streams vs one)", "c", "b"),
+              ("idea 3 (continuous vs discrete input)", "d-cont", "d-disc")]
+    pairs_ += [(f"{t} (early)", x + "-early", y + "-early") for t, x, y in pairs_]
+    fo = summary["folders"]
+    cmp_ = []
+    for title, x, y in pairs_:
+        if x in fo and y in fo:
+            g = fo[x]["judge"]["Dc"]["D"] - fo[y]["judge"]["Dc"]["D"]
+            cmp_.append({"pair": title, "x": x, "y": y, "Dc_x": fo[x]["judge"]["Dc"]["D"], "Dc_y": fo[y]["judge"]["Dc"]["D"],
+                         "Dc_gap": round(g, 4), "invocab_x": fo[x]["words_in_heldout_vocab"], "invocab_y": fo[y]["words_in_heldout_vocab"]})
+    others = [n for n in fo if not n.startswith("e-") and n != "anchor-real"]
+    for e in [n for n in fo if n.startswith("e-")]:
+        for o in others:
+            cmp_.append({"pair": "GSLM2 vs other", "x": e, "y": o, "Dc_x": fo[e]["judge"]["Dc"]["D"], "Dc_y": fo[o]["judge"]["Dc"]["D"],
+                         "Dc_gap": round(fo[e]["judge"]["Dc"]["D"] - fo[o]["judge"]["Dc"]["D"], 4),
+                         "invocab_x": fo[e]["words_in_heldout_vocab"], "invocab_y": fo[o]["words_in_heldout_vocab"]})
+    summary["comparisons"] = cmp_
+    (E / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
+    if cmp_:
+        L += ["", "## Paired comparisons (Dc; the 95 % CI of one Dc on 50 pairs is about ±0.13, so gaps below ~0.1 are within noise)", "",
+              "| comparison | x | y | Dc x | Dc y | gap x-y | in-vocab x | in-vocab y |", "|---|---|---|---|---|---|---|---|"]
+        for c in cmp_:
+            L.append(f"| {c['pair']} | {c['x']} | {c['y']} | {c['Dc_x']:.2f} | {c['Dc_y']:.2f} | {c['Dc_gap']:+.2f} | "
+                     f"{c['invocab_x']:.3f} | {c['invocab_y']:.3f} |")
     if "idea3" in summary:
         i3 = summary["idea3"]
         L += ["", f"Idea 3 (d-cont Dc - d-disc Dc >= {IDEA3_GAP}): gap {i3['Dc_gap_cont_minus_disc']:+.3f} -> "

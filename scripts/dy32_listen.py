@@ -107,6 +107,7 @@ def main() -> None:
         wer = f"letters WER median {row['letters_wer']['median']:.3f}, Whisper {row['whisper_wer']['median']:.3f}" if row else "not measured yet"
         L.append(f"- **{name}** ({'track output' if d.parent == X else 'track A channel lab'}): {what}; {wer}")
     (out / "listen.md").write_text("\n".join(L) + "\n")
+    sh(f"aws s3 sync {out}/ {S3}/eval/{a.round}/listen/ --only-show-errors")
     sh(f"aws s3 sync {out}/ {S3}/eval/listen/ --only-show-errors")
     if a.hf:
         import os
