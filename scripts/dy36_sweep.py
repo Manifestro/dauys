@@ -247,7 +247,7 @@ def bag_rows(name: str, Y: "Yard", fit_docs: list[str], sub_docs: list[str], ref
         r["features"] = int(Xs.shape[1])
         res.append(r)
         log(json.dumps(r))
-        for dim in (64, 256):
+        for dim in [d for d in (64, 256) if d < Xs.shape[1]]:
             svd = TruncatedSVD(dim, random_state=0).fit(v.transform(fit_docs))
             r = Y.score(svd.transform(Xr), svd.transform(Xs))
             r["cand"] = f"{name}-ng{ng[0]}{ng[1]}-svd{dim}"
