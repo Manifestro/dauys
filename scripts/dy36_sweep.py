@@ -200,6 +200,49 @@ def cmd_block1(a) -> None:
         print(r["cand"], r["diff"], r["ci95"])
 
 
+def cmd_block1x(a) -> None:
+    """Extensions around the best block-1 rows: more PCs removed, PCA whitening, z-score + PC removal, concatenations."""
+    T = load_table(Path(a.dict))
+    Y = Yard(T, Path(a.ctl))
+    out = Path(a.out)
+    P = np.load(out / "pooled.npz")
+    ns, nc = len(Y.sub), len(Y.sub) + len(Y.refs)
+    res = []
+
+    def run(name, M):
+        r = Y.score(M[ns:nc], M[:ns])
+        r["cand"] = name
+        res.append(r)
+        log(json.dumps(r))
+
+    def zs(X):
+        return (X - X[:ns].mean(0)) / (X[:ns].std(0) + 1e-6)
+
+    def whiten(X, drop, keep):
+        mu = X[:ns].mean(0)
+        _, S, Vt = np.linalg.svd(X[:ns] - mu, full_matrices=False)
+        V = Vt[drop:keep].T
+        return ((X - mu) @ V) / S[drop:keep]
+
+    for k in [x for x in a.layers.split(",") if x]:
+        X = P[k][:nc]
+        for pc in (10, 20, 30, 50, 100):
+            run(f"{k}-c{pc}", pc_remove(X, X[:ns], pc))
+            run(f"{k}-dc{pc}", pc_remove(zs(X), zs(X)[:ns], pc))
+        for drop, keep in ((0, 64), (0, 256), (10, 256), (10, 512), (30, 512)):
+            run(f"{k}-white{drop}-{keep}", whiten(X, drop, keep))
+    for combo in ("W18+W21", "W15+W18+W21", "W18+H18", "W18+W21+H18"):
+        X = np.concatenate([zs(P[k][:nc]) for k in combo.split("+")], 1)
+        for pc in (10, 30):
+            run(f"{combo}-dc{pc}", pc_remove(X, X[:ns], pc))
+        run(f"{combo}-white10-512", whiten(X, 10, 512))
+    res.sort(key=lambda r: -r["diff"])
+    (out / "block1x.json").write_text(json.dumps(res, indent=1))
+    log("BLOCK1X DONE")
+    for r in res[:15]:
+        print(r["cand"], r["diff"], r["ci95"])
+
+
 def kmeans(X, k: int, iters: int = 25, seed: int = 0):
     """Euclidean k-means on GPU (k-means++-lite init: random distinct rows)."""
     import torch
@@ -300,7 +343,7 @@ def cmd_block2(a) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("cmd", choices=["feats", "block1", "block2"])
+    p.add_argument("cmd", choices=["feats", "block1", "block1x", "block2"])
     p.add_argument("--parts", default="super")
     p.add_argument("--layers", default="")
     p.add_argument("--feats", default="/data/d36/sweep", help="folder of the feats pass")
@@ -311,7 +354,7 @@ def main() -> None:
     p.add_argument("--out", default="/data/d36/sweep")
     p.add_argument("--batch-sec", type=float, default=400.0)
     a = p.parse_args()
-    {"feats": cmd_feats, "block1": cmd_block1, "block2": cmd_block2}[a.cmd](a)
+    {"feats": cmd_feats, "block1": cmd_block1, "block1x": cmd_block1x, "block2": cmd_block2}[a.cmd](a)
 
 
 if __name__ == "__main__":
