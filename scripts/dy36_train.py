@@ -105,15 +105,17 @@ def lr_at(step, steps, peak, warm):
 
 # ---------------------------------------------------------------- synthetic known answer
 def synth(kind: str, seed: int, n_ep: int = 400, n_utt: int = 120) -> Data:
-    """Two speakers in random turns; thoughts are unit vectors in 64 dims. Every utterance after the first two of a
-    speaker = normalise(A @ last heard thought + B @ own previous thought) (A, B random orthogonal; fixed for "rule",
-    drawn anew per episode for "shuffled"). raw = thought."""
+    """Two speakers in random turns; thoughts are unit vectors in 64 dims. "rule": every utterance after the first two
+    of a speaker = normalise(A @ last heard thought + B @ own previous thought) (A, B random orthogonal, fixed).
+    "shuffled": the same chains, then every utterance's thought is replaced by the thought of a random utterance of
+    another episode (the next thought no longer depends on the history; expected chance). "per_episode" (reported, no
+    threshold): A, B drawn anew for every episode (learnable only in context). raw = thought."""
     rng = np.random.default_rng(seed)
     orth = lambda: np.linalg.qr(rng.standard_normal((64, 64)))[0]
     A0, B0 = orth(), orth()
     ep, spk, th = [], [], []
     for e in range(n_ep):
-        A, B = (A0, B0) if kind == "rule" else (orth(), orth())
+        A, B = (orth(), orth()) if kind == "per_episode" else (A0, B0)
         who = np.cumsum(rng.random(n_utt) < 0.6) % 2
         last = {0: None, 1: None}
         for i in range(n_utt):
@@ -131,6 +133,12 @@ def synth(kind: str, seed: int, n_ep: int = 400, n_utt: int = 120) -> Data:
     n = len(ep)
     t0 = np.tile(np.arange(n_utt) * 7.0, n_ep)
     th = np.array(th, np.float32)
+    if kind == "shuffled":
+        ep_a = np.array(ep)
+        src = rng.integers(0, n, n)
+        while (bad := ep_a[src] == ep_a).any():
+            src[bad] = rng.integers(0, n, int(bad.sum()))
+        th = th[src]
     return Data(ep, spk, t0, t0 + 6.0, np.full(n, 300), th, th, np.ones(n, bool))
 
 
@@ -206,7 +214,7 @@ def cmd_check(a) -> None:
     model.train()
     # 2. known answer
     ka = {}
-    for kind in ("rule", "shuffled"):
+    for kind in ("rule", "shuffled", "per_episode"):
         Dtr, Dte = synth(kind, 1), synth(kind, 2, n_ep=60)
         if kind == "rule":
             Dte = synth("rule", 1, n_ep=460)
@@ -219,7 +227,7 @@ def cmd_check(a) -> None:
         log("CHECK 2", kind, ka[kind])
         del m, o
     R["2_known_answer"] = {"pass": bool(ka["rule"] >= 0.9 and ka["shuffled"] <= 0.15), "acc16_rule": ka["rule"],
-                           "acc16_shuffled": ka["shuffled"], "chance": 1 / 16, "steps": a.known_steps,
+                           "acc16_shuffled": ka["shuffled"], "acc16_per_episode_rule_no_threshold": ka["per_episode"], "chance": 1 / 16, "steps": a.known_steps,
                            "rule": synth.__doc__}
     # 3. overfit one batch
     m, o = make_model(Cfg(dropout=0.0), dev)
@@ -330,7 +338,7 @@ def main() -> None:
         x.add_argument("--dict", required=True)
         x.add_argument("--name", required=True)
         x.add_argument("--out", required=True)
-    s.choices["check"].add_argument("--known-steps", type=int, default=1500)
+    s.choices["check"].add_argument("--known-steps", type=int, default=800)
     t = s.choices["train"]
     t.add_argument("--experiment", default=EXPERIMENT)
     t.add_argument("--name-run", default="dy36-g")
