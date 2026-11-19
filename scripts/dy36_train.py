@@ -276,12 +276,13 @@ def cmd_train(a) -> None:
     q: queue.Queue = queue.Queue(maxsize=8)
     stop = threading.Event()
 
-    def producer():
+    def producer(k: int):
+        r = np.random.default_rng([a.seed, k])  # one generator per thread
         while not stop.is_set():
-            q.put(train_batch(Dt, rng, a.batch))
+            q.put(train_batch(Dt, r, a.batch))
 
-    for _ in range(3):
-        threading.Thread(target=producer, daemon=True).start()
+    for k in range(3):
+        threading.Thread(target=producer, args=(k,), daemon=True).start()
     best, bad, hist, t0 = -1.0, 0, [], time.time()
     for st in range(a.steps):
         for g in opt.param_groups:
