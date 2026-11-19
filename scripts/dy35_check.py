@@ -336,6 +336,11 @@ def main() -> None:
         R["5_overfit_dry"] = r
         save()
         print("5", json.dumps(r), flush=True)
+    lines = ["# DY-35 t: checklist before training", "",
+             f"Silence/same-speaker threshold fixed before training: cos(decoy vector, mean vector of the anchor speaker) >= {SIM_THR}.", ""]
+    for k, v in R.items():
+        lines += [f"## {k}: {'PASS' if v.get('pass') else 'FAIL'}", "", "```json", json.dumps(v, indent=1), "```", ""]
+    (out / "checklist.md").write_text("\n".join(lines))
     print("CHECK DONE", json.dumps({k: v.get("pass") for k, v in R.items()}), flush=True)
 
 
