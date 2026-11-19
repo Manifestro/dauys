@@ -21,7 +21,7 @@ import soundfile as sf
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent))
-from dy32c_units import LAYERS, VOC_REPO, Units, piece_codes, sh
+from dy32c_units import LAYERS, VOC_REPO, RVQUnits, Units, piece_codes, sh
 
 BUCKET = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/dy32"
 SR = 16000
@@ -89,6 +89,38 @@ def read_pack(dst: Path, kind: str = "real") -> tuple[list[str], list[np.ndarray
     return names, waves
 
 
+def cmd_rvq(a) -> None:
+    """Round trip through the four-level layer-6 RVQ channel: rvq4 (all levels) and rvq1 (level 0 alone)."""
+    dev = torch.device("cuda")
+    out = Path(a.out)
+    names, waves = read_pack(Path(a.pack))
+    u = RVQUnits(dev)
+    toks = piece_codes(u, [(w * 32768.0).clip(-32768, 32767).astype(np.int16) for w in waves])
+    res = {}
+    for v, L in (("rvq4", 4), ("rvq2", 2), ("rvq1", 1)):
+        (out / v).mkdir(parents=True, exist_ok=True)
+        res[v] = [u.decode(t[:, :L]) for t in toks]
+        for n, w in zip(names, res[v]):
+            sf.write(out / v / f"{n}.wav", w, SR)
+    np.savez(out / "real_units_rvq.npz", **{n: t for n, t in zip(names, toks)})
+    del u
+    torch.cuda.empty_cache()
+    k = min(a.n_asr, len(names))
+    ref = whisper(waves[:k], dev)
+    asr = {"pieces": k, "whisper": ASR, "ref": ref, "wer": {}}
+    for v in res:
+        hyp = whisper(res[v][:k], dev)
+        asr["wer"][v] = {"corpus": corpus_wer(ref, hyp), "median": float(np.nanmedian([wer(r, h) for r, h in zip(ref, hyp)])), "hyp": hyp}
+        print("ASR", v, "corpus", round(asr["wer"][v]["corpus"], 4), "median", round(asr["wer"][v]["median"], 4), flush=True)
+    (out / "asr_rvq.json").write_text(json.dumps(asr, indent=2))
+    if a.s3:
+        for dst, v in (("c", "rvq4"), ("c-multi", "rvq4"), ("c-single", "rvq1")):
+            sh(f"aws s3 rm {BUCKET}/resynth/{dst}/ --recursive --only-show-errors")
+            sh(f"aws s3 sync {out / v} {BUCKET}/resynth/{dst}/ --only-show-errors")
+        sh(f"aws s3 cp {out / 'asr_rvq.json'} {BUCKET}/c/resynth_asr_rvq.json --only-show-errors")
+        print("UPLOADED resynth", flush=True)
+
+
 def cmd_pack(a) -> None:
     dev = torch.device("cuda")
     out = Path(a.out)
@@ -136,8 +168,13 @@ def main() -> None:
     x.add_argument("--out", required=True)
     x.add_argument("--n-asr", type=int, default=50)
     x.add_argument("--s3", action="store_true")
+    x = s.add_parser("rvq")
+    x.add_argument("--pack", default="/opt/dlami/nvme/pack")
+    x.add_argument("--out", required=True)
+    x.add_argument("--n-asr", type=int, default=50)
+    x.add_argument("--s3", action="store_true")
     a = p.parse_args()
-    {"pack": cmd_pack}[a.cmd](a)
+    {"pack": cmd_pack, "rvq": cmd_rvq}[a.cmd](a)
 
 
 if __name__ == "__main__":
