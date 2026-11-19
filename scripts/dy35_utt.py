@@ -346,7 +346,7 @@ def cmd_run(a) -> None:
     order = [n for n in names if held_out(n)] + [n for n in names if not held_out(n)]
     k, n = map(int, a.part.split("/"))
     done = set(listing(a.dst, dirs=False))
-    mine = [x for x in order[k::n] if x not in done]
+    mine = [x for x in (a.shards.split(",") if a.shards else order[k::n]) if x not in done]
     print(json.dumps({"part": a.part, "todo": len(mine), "all": len(order), "held": [x for x in order if held_out(x)]}), flush=True)
     dl, up = ThreadPoolExecutor(1), ThreadPoolExecutor(1)
     ups, failed, lock = [], [], threading.Lock()
@@ -410,6 +410,7 @@ def main() -> None:
         x.add_argument("--half", action="store_true")
     s.choices["run"].add_argument("--part", default="0/1")
     s.choices["run"].add_argument("--dst", default=DST)
+    s.choices["run"].add_argument("--shards", default="", help="explicit comma-separated shard list (overrides --part)")
     s.choices["one"].add_argument("--shard", required=True)
     s.choices["one"].add_argument("--max-pieces", type=int, default=0)
     a = p.parse_args()
