@@ -339,7 +339,7 @@ def main() -> None:
                      f"{u['words_median']:.0f} / {u['whisper_words_median']:.0f} | {u['empty_share']:.2f} | {u['speech_seconds_median']:.1f} |")
     pairs_ = [("idea 2 downstream (one voice vs corpus codes)", "g-lj", "b"), ("idea 1 downstream (several streams vs one)", "c", "b"),
               ("idea 3 (continuous vs discrete input)", "d-cont", "d-disc"), ("codebook size (8000 vs 2000)", "h-k8000", "b")]
-    pairs_ += [(f"{t} (early)", x + "-early", y + "-early") for t, x, y in pairs_]
+    pairs_ += [(f"{t} ({suf[1:]})", x + suf, y + suf) for suf in ("-early", "-t10") for t, x, y in pairs_]
     fo = summary["folders"]
     cmp_ = []
     for title, x, y in pairs_:
