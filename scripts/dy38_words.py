@@ -93,6 +93,7 @@ def cmd_select(a) -> None:
             if t >= hours * 3600:
                 break
             r = np.flatnonzero(held & (T["ep"] == e))
+            r = r[np.cumsum(sec[r]) <= a.per_rec_min * 60]  # at most per_rec_min minutes per recording: more voices
             rows.append(r)
             t += float(sec[r].sum())
         return np.sort(np.concatenate(rows))
@@ -1046,6 +1047,7 @@ def main() -> None:
     p.add_argument("--hours", type=float, default=200)
     p.add_argument("--dev_hours", type=float, default=2)
     p.add_argument("--test_hours", type=float, default=5)
+    p.add_argument("--per_rec_min", type=float, default=10)
     p.add_argument("--limit_hours", type=float, default=0)
     p.add_argument("--pca_hours", type=float, default=3)
     p.add_argument("--batch_sec", type=float, default=600)
