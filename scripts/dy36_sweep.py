@@ -261,7 +261,7 @@ def cmd_block2(a) -> None:
     T = load_table(Path(a.dict))
     Y = Yard(T, Path(a.ctl))
     out = Path(a.out)
-    off = np.load(out / "frame_off.npy")
+    out.mkdir(parents=True, exist_ok=True)
     nsub = len(Y.sub)
     res = []
     rng = np.random.default_rng(0)
@@ -279,7 +279,8 @@ def cmd_block2(a) -> None:
     # new units on a layer's frames: k-means fitted on frames of the subset utterances (training audio, ~14 h; a
     # 1.5M-frame sample); idf/SVD fitted on the subset documents (unsupervised; no text)
     for key in [x for x in a.layers.split(",") if x]:
-        Fm = np.load(out / f"frames_{key}.npy", mmap_mode="r")
+        off = np.load(Path(a.feats) / "frame_off.npy")
+        Fm = np.load(Path(a.feats) / f"frames_{key}.npy", mmap_mode="r")
         ns = int(off[nsub])
         samp = np.sort(rng.choice(ns, min(ns, 1500000), replace=False))
         Xs = np.asarray(Fm[samp], np.float32)
@@ -302,6 +303,7 @@ def main() -> None:
     p.add_argument("cmd", choices=["feats", "block1", "block2"])
     p.add_argument("--parts", default="super")
     p.add_argument("--layers", default="")
+    p.add_argument("--feats", default="/data/d36/sweep", help="folder of the feats pass")
     p.add_argument("--dict", default="/data/d36/dict")
     p.add_argument("--ctl", default="/data/d36/ctl")
     p.add_argument("--held", default="/opt/dlami/nvme/held")
