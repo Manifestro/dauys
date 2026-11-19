@@ -366,6 +366,7 @@ def train(args, tr: Corpus, va: Corpus, cfg: LMConfig, out: Path, log=print, met
     vb_builder = Builder(va, T, np.random.default_rng(1234))
     vstarts = np.random.default_rng(1234).integers(0, len(va.stream) - T - 1, size=args.val_windows)
     vbatches = [vb_builder.build(vstarts[i : i + 16], pred_on=False, modes=False) for i in range(0, len(vstarts), 16)]
+    out.mkdir(parents=True, exist_ok=True)
     pc = param_counts(model, enc)
     meta = {"run_id": str(uuid.uuid4()), "params": pc, "config": vars(cfg), "args": vars(args),
             "train_files": len(tr.names), "val_files": va.names, "train_tokens": int(len(tr.stream)),
