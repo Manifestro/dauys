@@ -367,7 +367,7 @@ def track(args) -> None:
                 step = int(r.pop("step", 0))
                 vals = {(k if name != "wer" else f"wer/{k}"): v for k, v in r.items() if isinstance(v, int | float)}
                 if name == "duration":
-                    vals = {f"duration/{k}": v for k, v in vals.items()}
+                    vals = {f"duration/{r.get('type', 'train')}/{k}": v for k, v in vals.items()}
                 if vals:
                     runs[name].log(vals, step=step)
                 seen[name] = seen.get(name, 0) + 1
