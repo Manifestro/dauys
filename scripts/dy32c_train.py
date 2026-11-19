@@ -1,8 +1,8 @@
-"""DY-32 track C training: multi-stream delay-pattern LM (src/dauys/dy32c_lm.py) on six-stream WavLM units.
+"""DY-32 track C training: multi-stream delay-pattern LM (src/dauys/dy32c_lm.py) on parallel code streams.
 
-``--units DIR`` holds ``<shard>.npz`` (tok int16 [frames, 6] in layer order 1, 3, 7, 12, 18, 23; index). The model
-streams are these layers in ``--order`` (default 23,18,12,7,3,1: deepest first, so the acoustic layers are predicted
-after the content layers of the same frame). Pieces >= 16 frames are joined with an EOS frame, the whole stream is put
+``--units DIR`` holds ``<shard>.npz`` (tok int16 [frames, S]; index). The model streams are the npz columns in
+``--order`` (default 0,1,2,3 = residual levels coarse to fine, so each finer level of a frame is predicted after the
+coarser ones). Pieces >= 16 frames are joined with an EOS frame, the whole stream is put
 in the delay layout once, batches are random windows of ctx + 1 positions. Held out (dy21_train.held_out) shards are
 validation only. Best checkpoint by validation CE (mean over streams). ``--stop-utc HH:MM`` ends training at that
 time (validation + checkpoint first). Tracked in Airon like dy21_train.
@@ -26,7 +26,6 @@ import torch
 from dauys.dy32c_lm import MSConfig, MultiStreamLM, delay, loss
 from dy21_train import held_out, lr_at
 
-LAYERS = (1, 3, 7, 12, 18, 23)
 EXPERIMENT = "DY-32: канал, через который слова выживают, без текста — три идеи и повтор GSLM параллельными ветками"
 
 
@@ -54,7 +53,10 @@ def main() -> None:
     p.add_argument("--warmup", type=int, default=1000)
     p.add_argument("--val-every", type=int, default=1000)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--order", default="23,18,12,7,3,1")
+    p.add_argument("--order", default="0,1,2,3", help="npz columns in model stream order (rvq: levels 0..3; "
+                   "sb six-layer units: 5,4,3,2,1,0 = layers 23..1)")
+    p.add_argument("--k", type=int, default=1024, help="codes per stream")
+    p.add_argument("--units-desc", default="kNN-VC WavLM-Large layer 6, residual k-means 4 x 1024 (track A corpus codebooks), 50 Hz")
     p.add_argument("--cfg", default="", help="d,layers,heads,ffn,ctx; default MSConfig()")
     p.add_argument("--stop-utc", default="", help="HH:MM UTC: validate, checkpoint and stop at this time")
     p.add_argument("--limit", type=int, default=0)
@@ -68,12 +70,12 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda")
     order = [int(x) for x in args.order.split(",")]
-    cols = [LAYERS.index(L) for L in order]
+    cols = order
     if args.cfg:
         d, layers, heads, ffn, ctx = map(int, args.cfg.split(","))
-        cfg = MSConfig(streams=len(cols), d=d, layers=layers, heads=heads, ffn=ffn, ctx=ctx)
+        cfg = MSConfig(streams=len(cols), k=args.k, d=d, layers=layers, heads=heads, ffn=ffn, ctx=ctx)
     else:
-        cfg = MSConfig(streams=len(cols))
+        cfg = MSConfig(streams=len(cols), k=args.k)
     PAD = cfg.k + 1
     stop_at = None
     if args.stop_utc:
@@ -98,10 +100,10 @@ def main() -> None:
     opt = torch.optim.AdamW([{"params": decay, "weight_decay": 0.1}, {"params": other, "weight_decay": 0.0}],
                             lr=args.lr, betas=(0.9, 0.95), fused=True)
     meta = {"run_id": str(uuid.uuid4()), "params": model.parameters_count(), "config": {**vars(cfg), "vocab": cfg.vocab},
-            "args": vars(args), "stream_layers": order, "train_files": len(tr_files), "val_files": len(va_files),
+            "args": vars(args), "stream_columns": order, "train_files": len(tr_files), "val_files": len(va_files),
             "train_positions": int(len(train)), "train_hours": round(len(train) / 50 / 3600, 1),
             "val_positions": int(len(val)), "val_files_names": [f.stem for f in va_files],
-            "units": "WavLM-Large layers 1,3,7,12,18,23, SpeechBrain LibriSpeech k-means K=1000, 50 Hz",
+            "units": args.units_desc,
             "git": os.environ.get("DY21_COMMIT", "")}
     (out / "metadata.json").write_text(json.dumps(meta, indent=2))
     print(json.dumps({k: v for k, v in meta.items() if k != "val_files_names"}), flush=True)
@@ -122,7 +124,7 @@ def main() -> None:
             per += np.array([part[f"ce_s{k}"] for k in range(cfg.streams)])
             nb += 1
         model.train()
-        return {"ce": tot / nb, **{f"ce_L{order[k]}": float(per[k] / nb) for k in range(cfg.streams)}}
+        return {"ce": tot / nb, **{f"ce_c{order[k]}": float(per[k] / nb) for k in range(cfg.streams)}}
 
     def checkpoint(step: int) -> bool:
         nonlocal best

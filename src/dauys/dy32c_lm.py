@@ -21,7 +21,7 @@ from dauys.dy21_lm import Block
 @dataclass
 class MSConfig:
     streams: int = 6
-    k: int = 1000
+    k: int = 1024
     d: int = 1024
     layers: int = 24
     heads: int = 16

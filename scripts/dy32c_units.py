@@ -1,4 +1,6 @@
-"""DY-32 track C units: six streams of WavLM-Large k-means codes per 20 ms frame (SpeechBrain DASB recipe).
+"""DY-32 track C units. Default (--kind rvq, adopted 00:40 UTC on the coordinator's advice): four residual k-means
+levels (K=1024 each) of kNN-VC's WavLM-Large layer-6 features with track A's corpus codebooks, decoded by summing the
+centroids into kNN-VC's prematched HiFi-GAN (RVQUnits). First try (--kind sb): six streams of WavLM-Large k-means codes per 20 ms frame (SpeechBrain DASB recipe).
 
 Streams = WavLM-Large (microsoft/wavlm-large) hidden states of layers 1, 3, 7, 12, 18, 23 (hidden_states[L], the
 waveform layer-normalised first, no output norm, as speechbrain DiscreteSSL/WavLM), each assigned to the nearest of
@@ -31,7 +33,7 @@ from dy21_train import held_out
 from dy30_units import SRC, fetch, listing, sh
 
 BUCKET = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs"
-DST = f"{BUCKET}/dauys/dy32/c/units"
+DST = f"{BUCKET}/dauys/dy32/c/units-rvq4"  # the SpeechBrain six-layer units (first try) are in units/
 SR = 16000
 WIN = 20 * SR
 LOOK = 80  # 400-sample receptive field, hop 320: WIN + 80 samples -> exactly WIN / 320 frames
@@ -98,6 +100,69 @@ class Units:
         return [tok[i, : n[i]] for i in range(len(wavs))]
 
 
+RVQ_S3 = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/dy32/a/centroids/rvq-corpus-1024x4.npy"
+RVQ_LOCAL = "/opt/dlami/nvme/rvq-corpus-1024x4.npy"
+
+
+def knn_vc(device):
+    """kNN-VC (github.com/bshall/knn-vc, MIT): its WavLM-Large and the prematched HiFi-GAN (layer-6 features -> 16 kHz)."""
+    return torch.hub.load("bshall/knn-vc", "knn_vc", prematched=True, trust_repo=True, pretrained=True, device=str(device))
+
+
+def rvq_books(levels: int = 4) -> torch.Tensor:
+    """[levels, 1024, 1024] float32: track A's residual k-means on corpus WavLM-Large layer-6 features (L2)."""
+    if not Path(RVQ_LOCAL).exists():
+        sh(f"aws s3 cp {RVQ_S3} {RVQ_LOCAL} --only-show-errors")
+    return torch.from_numpy(np.load(RVQ_LOCAL).astype(np.float32))[:levels]
+
+
+class RVQUnits:
+    """Residual k-means codes of kNN-VC's WavLM-Large layer-6 features (as track A's rvq-corpus channel: raw waveform,
+    no normalisation, output_layer=6), batched in fp16 with a padding mask. codes -> [frames, levels] int16."""
+
+    def __init__(self, device, levels: int = 4, dtype=torch.float16, knn=None) -> None:
+        self.device, self.dtype = device, dtype
+        torch.backends.cudnn.benchmark = True
+        self.knn = knn or knn_vc(device)
+        self.wavlm = self.knn.wavlm.eval()
+        self.C = rvq_books(levels).to(device)
+        self.C2 = (self.C ** 2).sum(-1)
+
+    @torch.no_grad()
+    def feats(self, wavs: list[np.ndarray]) -> tuple[torch.Tensor, list[int]]:
+        n = [n_frames(len(w)) for w in wavs]
+        T = -(-max(len(w) for w in wavs) // SR) * SR + LOOK
+        x = torch.zeros(len(wavs), T)
+        pad = torch.ones(len(wavs), T, dtype=torch.bool)
+        for i, w in enumerate(wavs):
+            x[i, : len(w)] = torch.from_numpy(w)
+            pad[i, : len(w)] = False
+        x, pad = x.to(self.device), pad.to(self.device)
+        with torch.autocast("cuda", dtype=self.dtype, enabled=self.dtype != torch.float32):
+            f = self.wavlm.extract_features(x, padding_mask=pad if pad.any() else None, output_layer=6,
+                                            ret_layer_results=False)[0]
+        return f.float(), n
+
+    @torch.no_grad()
+    def codes(self, wavs: list[np.ndarray]) -> list[np.ndarray]:
+        f, n = self.feats(wavs)
+        r = f
+        res = []
+        for j in range(len(self.C)):
+            a = (self.C2[j][None, None] - 2 * r @ self.C[j].T).argmin(-1)
+            res.append(a)
+            r = r - self.C[j][a]
+        tok = torch.stack(res, -1).cpu().numpy().astype(np.int16)
+        return [tok[i, : n[i]] for i in range(len(wavs))]
+
+    @torch.no_grad()
+    def decode(self, tok: np.ndarray) -> np.ndarray:
+        """[T, L] codes of the first L levels -> float32 16 kHz wave (summed centroids -> prematched HiFi-GAN)."""
+        t = torch.from_numpy(tok.astype(np.int64)).to(self.device)
+        d = sum(self.C[j][t[:, j]] for j in range(t.shape[1]))
+        return self.knn.vocode(d[None]).reshape(-1).float().cpu().numpy()
+
+
 def piece_windows(w: np.ndarray) -> list[np.ndarray]:
     """20 s windows (+ look-ahead); a tail shorter than 1 s is dropped (its few frames are lost)."""
     return [w[i : i + WIN + LOOK] for i in range(0, len(w), WIN) if len(w) - i >= SR]
@@ -116,7 +181,8 @@ def piece_codes(u: Units, pieces: list[np.ndarray], batch: int = BATCH) -> list[
     per = [[] for _ in pieces]
     for i, (k, j, _) in enumerate(wins):
         per[k].append(out[i])
-    return [np.concatenate(r) if r else np.zeros((0, len(LAYERS)), np.int16) for r in per]
+    S = next(iter(out.values())).shape[1] if out else len(LAYERS)
+    return [np.concatenate(r) if r else np.zeros((0, S), np.int16) for r in per]
 
 
 def save(path: Path, toks: list[np.ndarray]) -> int:
@@ -124,7 +190,7 @@ def save(path: Path, toks: list[np.ndarray]) -> int:
     for t in toks:
         index.append((pos, len(t)))
         pos += len(t)
-    tok = np.concatenate(toks) if toks else np.zeros((0, len(LAYERS)), np.int16)
+    tok = np.concatenate(toks)
     np.savez(path, tok=tok, index=np.asarray(index, np.int64).reshape(-1, 2))
     return pos
 
@@ -132,7 +198,7 @@ def save(path: Path, toks: list[np.ndarray]) -> int:
 def cmd_run(a) -> None:
     work = Path(a.work)
     work.mkdir(parents=True, exist_ok=True)
-    u = Units(torch.device("cuda"))
+    u = RVQUnits(torch.device("cuda")) if a.kind == "rvq" else Units(torch.device("cuda"))
     done = set(listing(a.dst, dirs=False))
     if a.shards:
         mine = [s for s in a.shards.split(",") if s not in done]
@@ -186,7 +252,7 @@ def cmd_known(a) -> None:
     """Batched fp16 path vs a one-piece-at-a-time fp32 path (whole piece, no windows) on the first pieces of a shard:
     share of identical codes per stream. Window cuts and fp16 change a few codes; the bar is >= 0.85 per stream."""
     dev = torch.device("cuda")
-    u = Units(dev)
+    u = RVQUnits(dev) if a.kind == "rvq" else Units(dev)
     _, pieces, _ = fetch(a.src, a.shard, Path(a.work))
     use = [w[: 50 * SR] for w in pieces[: a.pieces]]
     t0 = time.time()
@@ -195,7 +261,7 @@ def cmd_known(a) -> None:
     print("batched x_realtime", round(sum(len(w) for w in use) / SR / (time.time() - t0), 1), flush=True)
     u.dtype = torch.float32
     ref = [u.codes([w.astype(np.float32) / 32768.0])[0] for w in use]
-    agree = np.zeros(len(LAYERS))
+    agree = np.zeros(ref[0].shape[1])
     nf = 0
     for r, x in zip(ref, new):
         m = min(len(r), len(x))
@@ -203,7 +269,7 @@ def cmd_known(a) -> None:
         nf += m
     agree = agree / max(nf, 1)
     lens = [(len(r), len(x)) for r, x in zip(ref, new)]
-    res = {"shard": a.shard, "pieces": len(use), "frames": nf, "agree_per_stream": dict(zip(map(str, LAYERS), agree.round(4).tolist())),
+    res = {"shard": a.shard, "pieces": len(use), "frames": nf, "agree_per_stream": agree.round(4).tolist(),
            "len_ref_new_first": lens[:5], "pass": bool(agree.min() >= 0.85)}
     print("KNOWN", json.dumps(res), flush=True)
     sys.exit(0 if res["pass"] else 1)
@@ -221,11 +287,13 @@ def main() -> None:
     x.add_argument("--max-shards", type=int, default=0)
     x.add_argument("--held", action="store_true", help="include held-out shards in --part")
     x.add_argument("--keep", default="", help="also keep the npz in this dir")
+    x.add_argument("--kind", default="rvq", choices=["rvq", "sb"])
     x = s.add_parser("known")
     x.add_argument("--shard", required=True)
     x.add_argument("--work", required=True)
     x.add_argument("--src", default=SRC)
     x.add_argument("--pieces", type=int, default=20)
+    x.add_argument("--kind", default="rvq", choices=["rvq", "sb"])
     a = p.parse_args()
     {"run": cmd_run, "known": cmd_known}[a.cmd](a)
 
