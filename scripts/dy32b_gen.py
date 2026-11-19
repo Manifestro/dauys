@@ -103,6 +103,11 @@ def main() -> None:
             x = torch.cat([x, nxt], 1)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 h = cached_states(m, nxt, cache, x.shape[1] - 1)[:, -1]
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            full = m.states(x)[:, -1]
+        diff2 = float((full.float() - h.float()).abs().mean())
+        print("cache check after generation: mean abs diff", round(diff2, 5), flush=True)
+        assert diff2 < 0.05, "incremental cached forward differs from UnitLM.states"
     gen = x[:, -n:]
     for pid, c in zip(ids, gen):
         sf.write(out / f"{pid}.wav", ch.vocode(cb.decode(c)), SR)
