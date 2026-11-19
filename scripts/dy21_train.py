@@ -25,6 +25,7 @@ from dauys.dy21_lm import LMConfig, UnitLM, ema_update, loss, make_target
 
 K = 8192
 EOS = K
+DEDUP = False
 EXPERIMENT = "DY-21: языковая модель слогов на ~20 тыс. ч моно-подкастов (300–500M + JEPA) — появляются ли слова"
 
 
@@ -40,6 +41,8 @@ def load_stream(files: list[Path]) -> np.ndarray:
         for st, n in index:
             u = tok[st : st + n]
             u = u[u < K]
+            if DEDUP and len(u):
+                u = u[np.r_[True, u[1:] != u[:-1]]]
             if len(u) >= 16:
                 parts.append(u.astype(np.int16))
                 parts.append(np.array([EOS], np.int16))
@@ -53,6 +56,7 @@ def lr_at(step: int, steps: int, peak: float, warmup: int) -> float:
 
 
 def main() -> None:
+    global K, EOS, DEDUP
     p = argparse.ArgumentParser()
     p.add_argument("--units", required=True)
     p.add_argument("--out", required=True)
@@ -71,7 +75,12 @@ def main() -> None:
     p.add_argument("--experiment", default=EXPERIMENT, help="Airon experiment title")
     p.add_argument("--name", default="", help="Airon run name (default dy21-s<seed>)")
     p.add_argument("--patience", type=int, default=0, help="stop after this many validations without a new best (0 = off)")
+    p.add_argument("--k", type=int, default=K, help="unit vocabulary size (EOS = k); default the DY-21 8192")
+    p.add_argument("--dedup", action="store_true", help="collapse runs of equal units (GSLM-style) when loading")
+    p.add_argument("--save-every", type=int, default=0, help="also save last.pt every this many steps (0 = off)")
+    p.add_argument("--stop-at", type=float, default=0, help="unix time: stop (after saving) once passed (0 = off)")
     args = p.parse_args()
+    K, EOS, DEDUP = args.k, args.k, args.dedup
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     out = Path(args.out)
@@ -83,12 +92,12 @@ def main() -> None:
     va_files = [f for f in files if held_out(f.stem)] or files[-1:]
     train, val = load_stream(tr_files), load_stream(va_files)
     if args.small:
-        cfg = LMConfig(d=256, layers=4, heads=4, ffn=1024, ctx=256)
+        cfg = LMConfig(vocab=K + 1, d=256, layers=4, heads=4, ffn=1024, ctx=256)
     elif args.cfg:
         d, layers, heads, ffn, ctx = map(int, args.cfg.split(","))
-        cfg = LMConfig(d=d, layers=layers, heads=heads, ffn=ffn, ctx=ctx)
+        cfg = LMConfig(vocab=K + 1, d=d, layers=layers, heads=heads, ffn=ffn, ctx=ctx)
     else:
-        cfg = LMConfig()
+        cfg = LMConfig(vocab=K + 1)
     T = cfg.ctx
     vrng = np.random.default_rng(1234)
     vstarts = vrng.integers(0, len(val) - T - 1, size=256)
@@ -170,6 +179,12 @@ def main() -> None:
                 if args.patience and stale >= args.patience:
                     print(json.dumps({"early_stop": step + 1, "best_ce": best}), flush=True)
                     break
+        if args.save_every and (step + 1) % args.save_every == 0:
+            torch.save({"model": model.state_dict(), "cfg": vars(cfg), "step": step + 1, "val": None}, out / "last.pt")
+        if args.stop_at and time.time() > args.stop_at:
+            torch.save({"model": model.state_dict(), "cfg": vars(cfg), "step": step + 1, "val": None}, out / "last.pt")
+            print(json.dumps({"time_stop": step + 1, "best_ce": best}), flush=True)
+            break
     (out / "DONE").write_text(f"{best}\n")
     run.finish()
     print("TRAIN DONE", best, flush=True)
