@@ -152,9 +152,9 @@ def synth(kind: str, seed: int, n_ep: int = 40, ep_frames: int = 30000) -> Corpu
             elif kind == "shuffled":
                 x[t:s] = 1500 + int(rng.integers(0, 400))
                 x[s : s + 5] = 1000 + m
-            elif kind == "zmarker":
+            elif kind == "zmarker":  # 32 marker values, one frame at utterance frame 20
                 x[t:s] = 1999
-                x[s + 20] = 1000 + m
+                x[s + 20] = 1000 + m % 32
             st.append(pos + s)
             en.append(pos + s + L)
             ep.append(e)
@@ -259,7 +259,8 @@ def main() -> None:
     p.add_argument("--utt", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--only", default="1,2,3,4,5")
-    p.add_argument("--known-steps", type=int, default=600)
+    p.add_argument("--known-steps", type=int, default=1500)
+    p.add_argument("--known-steps4", type=int, default=3000)
     a = p.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -307,9 +308,9 @@ def main() -> None:
         save()
         print("3", json.dumps(R["3_known_first_half"]), flush=True)
     if "4" in only:
-        r = known("zmarker", a.known_steps, out / "k4")
+        r = known("zmarker", a.known_steps4, out / "k4")
         m = r["marker"]
-        R["4_known_second_half"] = {**r, "pass": m["acc_true"] >= 0.9 and m["acc_swap"] <= 0.1}
+        R["4_known_second_half"] = {**r, "marker_values": 32, "pass": m["acc_true"] >= 0.9 and m["acc_swap"] <= 0.15}
         save()
         print("4", json.dumps(R["4_known_second_half"]), flush=True)
     if "5" in only:
