@@ -51,7 +51,10 @@ class Yard:
         """vr [500, d] reference vectors, vs [8000, d] subset vectors (any scale; cosine)."""
         vr = vr / np.maximum(np.linalg.norm(vr, axis=1, keepdims=True), 1e-12)
         vs = vs / np.maximum(np.linalg.norm(vs, axis=1, keepdims=True), 1e-12)
-        nb = (vr @ vs.T).argmax(1)
+        return self.score_nb((vr @ vs.T).argmax(1))
+
+    def score_nb(self, nb: np.ndarray) -> dict:
+        """nb [500]: index into the subset of each reference's neighbour."""
         assert not np.isin(self.T["ep"][self.sub[nb]], self.T["ep"][self.refs]).any()
         cn = np.array([self.Er[i] @ self.Es[nb[i]] for i in range(len(self.refs))])
         d = cn - self.cos_rand
@@ -197,9 +200,108 @@ def cmd_block1(a) -> None:
         print(r["cand"], r["diff"], r["ci95"])
 
 
+def kmeans(X, k: int, iters: int = 25, seed: int = 0):
+    """Euclidean k-means on GPU (k-means++-lite init: random distinct rows)."""
+    import torch
+
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    X = torch.as_tensor(X, device="cuda", dtype=torch.float32)
+    C = X[torch.randperm(len(X), generator=g, device="cuda")[:k]].clone()
+    for _ in range(iters):
+        a = torch.cat([torch.cdist(x, C).argmin(1) for x in X.split(65536)])
+        S = torch.zeros_like(C).index_add_(0, a, X)
+        n = torch.bincount(a, minlength=k).float()
+        emp = n == 0
+        C = torch.where(emp[:, None], C, S / n.clamp(min=1)[:, None])
+    return C
+
+
+def assign(F, C) -> np.ndarray:
+    import torch
+
+    F = torch.as_tensor(np.asarray(F, np.float32), device="cuda")
+    return torch.cat([torch.cdist(x, C).argmin(1) for x in F.split(65536)]).cpu().numpy()
+
+
+def merge(x: np.ndarray) -> np.ndarray:
+    return x[np.r_[True, x[1:] != x[:-1]]] if len(x) else x
+
+
+def docs(seqs) -> list[str]:
+    return [" ".join(f"u{c}" for c in merge(np.asarray(q))) for q in seqs]
+
+
+def bag_rows(name: str, Y: "Yard", fit_docs: list[str], sub_docs: list[str], ref_docs: list[str], res: list) -> None:
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    for ng in ((1, 1), (1, 3), (2, 4), (3, 5)):
+        v = TfidfVectorizer(token_pattern=r"\S+", lowercase=False, ngram_range=ng, min_df=2, sublinear_tf=True,
+                            dtype=np.float32)
+        v.fit(fit_docs)
+        Xs, Xr = v.transform(sub_docs), v.transform(ref_docs)
+        sim = (Xr @ Xs.T).toarray()
+        nb = sim.argmax(1)
+        r = Y.score_nb(nb)
+        r["cand"] = f"{name}-ng{ng[0]}{ng[1]}-sparse"
+        r["features"] = int(Xs.shape[1])
+        res.append(r)
+        log(json.dumps(r))
+        for dim in (64, 256):
+            svd = TruncatedSVD(dim, random_state=0).fit(v.transform(fit_docs))
+            r = Y.score(svd.transform(Xr), svd.transform(Xs))
+            r["cand"] = f"{name}-ng{ng[0]}{ng[1]}-svd{dim}"
+            res.append(r)
+            log(json.dumps(r))
+
+
+def cmd_block2(a) -> None:
+    from sklearn.cluster import KMeans
+
+    T = load_table(Path(a.dict))
+    Y = Yard(T, Path(a.ctl))
+    out = Path(a.out)
+    off = np.load(out / "frame_off.npy")
+    nsub = len(Y.sub)
+    res = []
+    rng = np.random.default_rng(0)
+    co, coff = T["codes"], T["code_off"]
+    # cheap variant: super-codes = k-means of the K2000 layer-6 centroids; stored codes remapped; idf/SVD fitted on
+    # 100k random training utterances (codes already exist)
+    if "super" in a.parts:
+        cent = np.load(a.cb).astype(np.float32)
+        fit_rows = rng.choice(np.flatnonzero(~T["held"]), 100000, replace=False)
+        for k in (50, 100, 200, 500):
+            lab = KMeans(k, n_init=4, random_state=0).fit(cent / np.linalg.norm(cent, axis=1, keepdims=True)).labels_
+            get = lambda us: [lab[co[coff[u] : coff[u + 1]]] for u in us]
+            bag_rows(f"K2000->{k}", Y, docs(get(fit_rows)), docs(get(Y.sub)), docs(get(Y.refs)), res)
+            (out / "block2.json").write_text(json.dumps(sorted(res, key=lambda r: -r["diff"]), indent=1))
+    # new units on a layer's frames: k-means fitted on frames of the subset utterances (training audio, ~14 h; a
+    # 1.5M-frame sample); idf/SVD fitted on the subset documents (unsupervised; no text)
+    for key in [x for x in a.layers.split(",") if x]:
+        Fm = np.load(out / f"frames_{key}.npy", mmap_mode="r")
+        ns = int(off[nsub])
+        samp = np.sort(rng.choice(ns, min(ns, 1500000), replace=False))
+        Xs = np.asarray(Fm[samp], np.float32)
+        for k in (50, 100, 200, 500):
+            C = kmeans(Xs, k)
+            lab = assign(Fm[: int(off[-1])], C)
+            seqs = [lab[off[i] : off[i + 1]] for i in range(len(off) - 1)]
+            sd, rd = docs(seqs[:nsub]), docs(seqs[nsub:])
+            bag_rows(f"{key}-K{k}", Y, sd, sd, rd, res)
+            (out / "block2.json").write_text(json.dumps(sorted(res, key=lambda r: -r["diff"]), indent=1))
+    res.sort(key=lambda r: -r["diff"])
+    (out / "block2.json").write_text(json.dumps(res, indent=1))
+    log("BLOCK2 DONE")
+    for r in res[:15]:
+        print(r["cand"], r["diff"], r["ci95"])
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("cmd", choices=["feats", "block1"])
+    p.add_argument("cmd", choices=["feats", "block1", "block2"])
+    p.add_argument("--parts", default="super")
+    p.add_argument("--layers", default="")
     p.add_argument("--dict", default="/data/d36/dict")
     p.add_argument("--ctl", default="/data/d36/ctl")
     p.add_argument("--held", default="/opt/dlami/nvme/held")
@@ -207,7 +309,7 @@ def main() -> None:
     p.add_argument("--out", default="/data/d36/sweep")
     p.add_argument("--batch-sec", type=float, default=400.0)
     a = p.parse_args()
-    {"feats": cmd_feats, "block1": cmd_block1}[a.cmd](a)
+    {"feats": cmd_feats, "block1": cmd_block1, "block2": cmd_block2}[a.cmd](a)
 
 
 if __name__ == "__main__":
