@@ -292,6 +292,14 @@ def cmd_resynth(a) -> None:
     print("RESYNTH DONE", len(pieces), flush=True)
 
 
+def cmd_export(a) -> None:
+    """The same codebook as .npz (float32 cent, cent_n, dec; rate) for users without torch."""
+    z = torch.load(a.cb, map_location="cpu")
+    np.savez(a.out, cent=z["cent"].numpy(), cent_n=z["cent_n"].numpy(), dec=z["dec"].numpy(), rate=z["rate"],
+             meta=json.dumps(z["meta"]))
+    print("EXPORTED", a.out, json.dumps(z["meta"]), flush=True)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     s = p.add_subparsers(dest="cmd", required=True)
@@ -311,13 +319,16 @@ def main() -> None:
     x.add_argument("--cb", required=True)
     x.add_argument("--pack", required=True)
     x.add_argument("--out", required=True)
+    x = s.add_parser("export")
+    x.add_argument("--cb", required=True)
+    x.add_argument("--out", required=True)
     a = p.parse_args()
     if a.cmd == "fit-lj":
         cmd_fit(a, "lj")
     elif a.cmd == "fit-corpus":
         cmd_fit(a, "corpus")
     else:
-        {"check": cmd_check, "resynth": cmd_resynth}[a.cmd](a)
+        {"check": cmd_check, "resynth": cmd_resynth, "export": cmd_export}[a.cmd](a)
 
 
 if __name__ == "__main__":
