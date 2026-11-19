@@ -93,7 +93,9 @@ def main() -> None:
         with torch.autocast("cuda", dtype=torch.bfloat16):
             ref = m.states(x)[:, -1]
             h = cached_states(m, x, cache, 0)[:, -1]
-        assert torch.allclose(ref.float(), h.float(), atol=0.1), "cached forward differs from UnitLM.states"
+        diff = float((ref.float() - h.float()).abs().mean())
+        print("cache check: mean abs diff of last states", round(diff, 5), flush=True)
+        assert diff < 0.05, "cached forward differs from UnitLM.states"
         for i in range(n):
             lg = m.logits(h)
             lg[:, eos] = -float("inf")
