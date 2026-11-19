@@ -96,7 +96,8 @@ class Units:
 
 
 def piece_windows(w: np.ndarray) -> list[np.ndarray]:
-    return [w[i : i + WIN + LOOK] for i in range(0, len(w), WIN)]
+    """20 s windows (+ look-ahead); a tail shorter than 1 s is dropped (its few frames are lost)."""
+    return [w[i : i + WIN + LOOK] for i in range(0, len(w), WIN) if len(w) - i >= SR]
 
 
 def piece_codes(u: Units, pieces: list[np.ndarray], batch: int = BATCH) -> list[np.ndarray]:
