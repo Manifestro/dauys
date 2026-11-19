@@ -74,6 +74,7 @@ def main() -> None:
     p.add_argument("--batch-sec", type=float, default=240.0)
     p.add_argument("--mem-frac", type=float, default=0.45)
     p.add_argument("--knn", type=int, default=KNN)
+    p.add_argument("--s3sub", default="pairs", help="S3 folder under dy36/d/")
     p.add_argument("--far", action="store_true", help="farther of two candidate target voices")
     p.add_argument("--part", default="", help="k/n: this machine takes every n-th shard of the list from k")
     p.add_argument("--skip", type=int, default=0, help="skip this many shards of the seeded list (already done elsewhere)")
@@ -112,7 +113,7 @@ def main() -> None:
 
     def uploader() -> None:
         while (x := upq.get()) is not None:
-            subprocess.run(f"aws s3 cp {x} {S3D}/pairs/{x.name} --only-show-errors", shell=True)
+            subprocess.run(f"aws s3 cp {x} {S3D}/{a.s3sub}/{x.name} --only-show-errors", shell=True)
 
     up = threading.Thread(target=uploader)
     up.start()
