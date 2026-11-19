@@ -138,6 +138,8 @@ class Table:
         self.rows = json.loads(self.f.read_text()) if self.f.exists() else {}
 
     def add(self, name: str, desc: str, rate: str, sc: dict, texts: dict) -> None:
+        if self.f.exists():  # several processes add rows: merge with what is on disk
+            self.rows = json.loads(self.f.read_text())
         self.rows[name] = {"desc": desc, "rate": rate, **{k: {x: y for x, y in v.items()} for k, v in sc.items()},
                            "texts_first5": {k: v[:5] for k, v in texts.items()}}
         self.f.write_text(json.dumps(self.rows, indent=1))
