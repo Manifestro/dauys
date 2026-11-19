@@ -388,17 +388,36 @@ def cmd_gen(a) -> None:
     dev = torch.device("cuda")
     sil = sil_mask(a.silence, dev)
     ch, cb = Channel(), Codebook(CB)
+    import dy35_utt
+
+    vad, spk = dy35_utt.Vad("cuda"), dy35_utt.Spk("cuda")
     n = 500
     samp = {"temperature": 1.0, "top_p": 1.0, "seed": 1234, "eos_banned": True, "batch": a.batch,
             "generator": "one per folder (seed 1234), batches in prompt order"}
-    base = {"sampling": samp, "generated_s": 10.0, "units": "WavLM-Large layer 6, 50 Hz, K2000 corpus codebook, prompt wav encoded alone",
+    base = {"sampling": samp, "generated_s": 10.0, "units": "WavLM-Large layer 6, 50 Hz, K2000 corpus codebook; prompt codes as in training (turn pack: the stored training-stream codes; DY-32 packs: the prompt segmented by voice activity + speakers and every utterance / gap chunk encoded alone)",
             "decoder": "centroid lookup -> kNN-VC prematched HiFi-GAN, 16 kHz", "pause_rule": json.loads(Path(a.silence).read_text())["rule"] + "; pause = 15 frames"}
 
-    def prompts(folder: str, pat: str):
+    def prompts(folder: str, pat: str, coding: str):
+        """coding: 'stream' = the training-identical codes stored in the pack's codes.npz (prompt_stream_NNN);
+        'chunked' = the prompt audio segmented exactly as dy35_utt.py (voice activity + speakers clustered within
+        the prompt; every utterance and every gap chunk encoded alone); 'one' = the whole prompt as one chunk."""
         fs = sorted(Path(folder).glob(pat))
         names = [f.stem.split("_", 1)[1] for f in fs]
-        wavs = [sf.read(f, dtype="float32")[0] for f in fs]
-        codes = chunk_codes(ch, cb, [w * 1.0 for w in wavs])
+        if coding == "stream":
+            cz = np.load(Path(folder) / "codes.npz")
+            codes = [torch.from_numpy(cz[f"prompt_stream_{n_}"].astype(np.int64)).to(dev) for n_ in names]
+        else:
+            wavs = [sf.read(f, dtype="float32")[0] for f in fs]
+            if coding == "one":
+                codes = chunk_codes(ch, cb, [w * 1.0 for w in wavs])
+            else:
+                import dy35_utt
+
+                pcs = [np.clip(w * 32768.0, -32768, 32767).astype(np.int16) for w in wavs]
+                meta = [{"ep": n_, "start": 0.0} for n_ in names]
+                res, st = dy35_utt.process("prompts", pcs, list(range(len(pcs))), meta, vad, spk, ch, cb, 0.7, False)
+                codes = [torch.from_numpy(res["tok"][a0 : a0 + n0].astype(np.int64)).to(dev) for a0, n0 in res["index"]]
+                print(json.dumps({"prompt_segmentation": folder, **st}), flush=True)
         L = min(len(c) for c in codes)
         x = torch.stack([torch.cat([torch.tensor([EOS], device=dev), c[-L:]]) for c in codes]).long()
         return names, x, L
@@ -418,7 +437,7 @@ def cmd_gen(a) -> None:
         m, enc, ck = load_t(a.ckpt, dev)
         tinfo = {"checkpoint": a.ckpt, "step": ck["step"], "val": ck["val"], "config": ck["cfg"]}
     if any(md in ("t-pred", "t-oracle", "t-swap", "t-near", "b-turn") for md in modes):
-        names, x, L = prompts(a.pack, "prompt_*.wav")
+        names, x, L = prompts(a.pack, "prompt_*.wav", "stream")
         cz = np.load(Path(a.pack) / "codes.npz")
     for md in modes:
         t0 = time.time()
@@ -445,7 +464,7 @@ def cmd_gen(a) -> None:
             write_gen(ch, cb, Path(a.out) / md, names, toks, n, {**base, **tinfo, "prompt_seen_s": L / 50, "thought": desc,
                       "thought_switches_after_start": sw})
         elif md in ("t-t10", "t-t10-x"):
-            nm, xx, LL = prompts(a.t10 if md == "t-t10" else a.t10x, "prompt_*.wav")
+            nm, xx, LL = prompts(a.t10 if md == "t-t10" else a.t10x, "prompt_*.wav", "chunked")
             toks, sw = batched(m, xx)
             write_gen(ch, cb, Path(a.out) / md, nm, toks, n, {**base, **tinfo, "prompt_seen_s": LL / 50,
                       "thought": "pause rule over prompt and continuation (null before the first pause)", "thought_switches": sw})
