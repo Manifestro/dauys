@@ -33,7 +33,10 @@ def main() -> None:
     m = DiscreteSSL(save, ssl, kmeans_dataset="LibriSpeech", vocoder_repo_id=VOC, num_clusters=1000, device="cuda").to(device)
     m.codec_vocoder.mods.to(device)
     m.codec_vocoder.device = "cuda"
-    log("layers", m.ssl_layer_ids)
+    m.eval()
+    ssl.eval()
+    m.codec_vocoder.mods.eval()
+    log("layers", m.ssl_layer_ids, "training flags", ssl.training, m.training)
     R = reals()
     ref = json.loads((W / "ref.json").read_text())
     rec, tab = Rec(device), Table()
