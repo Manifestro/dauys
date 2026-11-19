@@ -196,8 +196,10 @@ class Builder:
                     pools[c.grp[u]] = rng.permutation(g)
                 pool = pools[c.grp[u]]
                 m = c.eligible_mask(np.array([u]), pool)[0]
+                m &= (c.en[pool] <= w) | (c.st[pool] >= c.st[u])  # never a candidate inside the heard part
                 ds = pool[m][:N_SAME]
-                assert len(ds) == N_SAME
+                if len(ds) < N_SAME:
+                    continue
                 anchors.append((b, int(c.st[u] - 1 - w), row(int(u)), [row(int(d)) for d in ds], int(u)))
         # other recordings: from everything encoded in this micro-batch (+ random extra utterances)
         extra = rng.choice(c.n, 64, replace=False)
@@ -209,7 +211,10 @@ class Builder:
         rows_ep = c.ep[rows_u]
         A = []
         for b, p, tr, same, u in anchors:
-            oth = np.flatnonzero(rows_ep != c.ep[u])
+            w = starts[b]
+            # other recordings, never overlapping the heard part of this anchor (the window may start in a piece of
+            # another episode, whose utterances the sequence has heard)
+            oth = np.flatnonzero((rows_ep != c.ep[u]) & ((c.en[rows_u] <= w) | (c.st[rows_u] >= c.st[u])))
             oth = rng.choice(oth, n_other, replace=len(oth) < n_other)
             A.append((b, p, [tr] + same + oth.tolist()))
         lens = c.len[rows_u]
