@@ -48,7 +48,7 @@ class Encoder(nn.Module):
         return F.normalize(self.out(m).float(), dim=-1)
 
     @torch.no_grad()
-    def encode_many(self, utts: list, budget: int = 65536) -> torch.Tensor:
+    def encode_many(self, utts: list, budget: int = 16384) -> torch.Tensor:
         dev = self.emb.weight.device
         order = sorted(range(len(utts)), key=lambda i: -len(utts[i]))
         out = [None] * len(utts)

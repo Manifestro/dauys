@@ -73,6 +73,8 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--batch-sec", type=float, default=240.0)
     p.add_argument("--mem-frac", type=float, default=0.45)
+    p.add_argument("--part", default="", help="k/n: this machine takes every n-th shard of the list from k")
+    p.add_argument("--skip", type=int, default=0, help="skip this many shards of the seeded list (already done elsewhere)")
     a = p.parse_args()
     from dy32b_channel import Channel
 
@@ -81,7 +83,11 @@ def main() -> None:
     out = Path(a.out) / "pairs"
     out.mkdir(parents=True, exist_ok=True)
     work = Path(a.work)
-    shards = [f for f in pick_shards(T, files, a.n_train, a.seed) if not (out / f"{files[f]}.npz").exists()]
+    shards = pick_shards(T, files, a.n_train, a.seed)[a.skip :]
+    if a.part:
+        k, n = map(int, a.part.split("/"))
+        shards = shards[k::n]
+    shards = [f for f in shards if not (out / f"{files[f]}.npz").exists()]
     log("shards", len(shards), [files[f] for f in shards][:5])
     torch.cuda.set_per_process_memory_fraction(a.mem_frac)
     ch = Channel()
