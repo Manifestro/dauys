@@ -256,7 +256,8 @@ def asr_model():
 
 def transcribe(paths: list[Path]) -> dict[str, str]:
     m = asr_model()
-    return {p.stem: m.transcribe(str(p), language="en", fp16=True, temperature=0.0)["text"].strip() for p in paths}
+    return {p.stem: m.transcribe(str(p), language="en", fp16=True, temperature=0.0,
+                                      condition_on_previous_text=False)["text"].strip() for p in paths}
 
 
 def wer(hyps: dict[str, str], refs: dict[str, str]) -> float:
@@ -351,6 +352,14 @@ def round_(args) -> None:
                             "prosody not preserved by design", "items": logs}, open(d / "info.json", "w"), indent=1)
         dests.append((d, f"gen/e-{vdir.name}"))
 
+    json.dump(report, open(R / "round.json", "w"), indent=1)
+    for d, rel in dests:  # audio first, measuring after
+        upload_dir(d, f"{S3}/{rel}/")
+        upload_dir(d, f"{S3}/f/step{step}/{rel}/")
+    sh(f"aws s3 cp {R / 'round.json'} {S3}/f/step{step}/round.json --only-show-errors")
+    sh(f"aws s3 cp {R / 'round.json'} {S3}/f/latest_round.json --only-show-errors")
+    print("UPLOADED", step, [r for _, r in dests], flush=True)
+
     # 3) measure: Whisper WER on LJ test (vs LJ text) and on resynth/f (vs Whisper on the original real_XX.wav)
     if not args.no_wer:
         mres = {}
@@ -364,7 +373,7 @@ def round_(args) -> None:
         rr = W / "own/real_refs.json"
         if rr.exists():
             refs = json.load(open(rr))
-            for name in ("f", "f-dedup", "e-fullrate", "e-dedup"):
+            for name in ("f", "f-dedup"):  # e-* use the same units (checked bit-identical)
                 d = R / "resynth" / name
                 if d.exists():
                     mres[f"real_{name}_wer"] = wer(transcribe(sorted(d.glob("*.wav"))), refs)
@@ -373,12 +382,10 @@ def round_(args) -> None:
         with open(W / "wer_log.jsonl", "a") as f:
             f.write(json.dumps({"step": step, **mres}) + "\n")
 
-    json.dump(report, open(R / "round.json", "w"), indent=1)
-    for d, rel in dests:
-        upload_dir(d, f"{S3}/{rel}/")
-        upload_dir(d, f"{S3}/f/step{step}/{rel}/")
-    sh(f"aws s3 cp {R / 'round.json'} {S3}/f/step{step}/round.json --only-show-errors")
-    sh(f"aws s3 cp {R / 'round.json'} {S3}/f/latest_round.json --only-show-errors")
+    if not args.no_wer:
+        json.dump(report, open(R / "round.json", "w"), indent=1)
+        sh(f"aws s3 cp {R / 'round.json'} {S3}/f/step{step}/round.json --only-show-errors")
+        sh(f"aws s3 cp {R / 'round.json'} {S3}/f/latest_round.json --only-show-errors")
     print("ROUND DONE", step, [r for _, r in dests], flush=True)
 
 
