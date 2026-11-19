@@ -25,6 +25,38 @@ from dauys.dy16_model import sample_next
 from dauys.dy21_lm import LMConfig, UnitLM
 
 
+def rope_at(x: torch.Tensor, pos0: int, base: float = 10000.0) -> torch.Tensor:
+    """dy21_lm.rope for positions pos0 .. pos0 + t - 1."""
+    b, h, t, d = x.shape
+    half = d // 2
+    freq = base ** (-torch.arange(half, device=x.device, dtype=torch.float32) / half)
+    ang = (pos0 + torch.arange(t, device=x.device, dtype=torch.float32))[:, None] * freq[None]
+    cos, sin = ang.cos().to(x.dtype), ang.sin().to(x.dtype)
+    x1, x2 = x[..., :half], x[..., half:]
+    return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], -1)
+
+
+def cached_states(m: UnitLM, ids: torch.Tensor, cache: list, pos0: int) -> torch.Tensor:
+    """UnitLM.states for new tokens ids [B, t] at positions pos0.. with a key/value cache (one entry per block)."""
+    import torch.nn.functional as F
+
+    x = m.emb(ids)
+    for j, blk in enumerate(m.blocks):
+        b, t, d = x.shape
+        q, k, v = blk.qkv(blk.n1(x)).view(b, t, 3, blk.heads, d // blk.heads).permute(2, 0, 3, 1, 4)
+        q, k = rope_at(q, pos0), rope_at(k, pos0)
+        if len(cache) > j:
+            k, v = torch.cat([cache[j][0], k], 2), torch.cat([cache[j][1], v], 2)
+            cache[j] = (k, v)
+        else:
+            cache.append((k, v))
+        a = F.scaled_dot_product_attention(q, k, v, is_causal=t > 1)
+        x = x + blk.out(a.transpose(1, 2).reshape(b, t, d))
+        g, u = blk.up(blk.n2(x)).chunk(2, -1)
+        x = x + blk.down(F.silu(g) * u)
+    return m.norm(x)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", required=True)
@@ -55,13 +87,20 @@ def main() -> None:
     keep = min(L, cfg.ctx - n - 1)
     x = torch.stack([torch.cat([torch.tensor([eos], device=dev), c[-keep:]]) for c in codes]).long()
     g = torch.Generator(device=dev).manual_seed(a.seed)
+    assert x.shape[1] + n <= cfg.ctx, "prompt + continuation must fit the context (no sliding window here)"
+    cache: list = []
     with torch.no_grad():
-        for _ in range(n):
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                h = m.states(x[:, -cfg.ctx :])
-            lg = m.logits(h[:, -1])
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            ref = m.states(x)[:, -1]
+            h = cached_states(m, x, cache, 0)[:, -1]
+        assert torch.allclose(ref.float(), h.float(), atol=0.1), "cached forward differs from UnitLM.states"
+        for i in range(n):
+            lg = m.logits(h)
             lg[:, eos] = -float("inf")
-            x = torch.cat([x, sample_next(lg, a.temp, a.top_p, g)[:, None]], 1)
+            nxt = sample_next(lg, a.temp, a.top_p, g)[:, None]
+            x = torch.cat([x, nxt], 1)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                h = cached_states(m, nxt, cache, x.shape[1] - 1)[:, -1]
     gen = x[:, -n:]
     for pid, c in zip(ids, gen):
         sf.write(out / f"{pid}.wav", ch.vocode(cb.decode(c)), SR)
