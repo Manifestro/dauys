@@ -143,6 +143,7 @@ def main() -> None:
     E = W / "eval" / a.round
     G = W / "gen"
     E.mkdir(parents=True, exist_ok=True)
+    G.mkdir(parents=True, exist_ok=True)
     sh(f"aws s3 sync {S3}/gen/ {G}/ --only-show-errors --exclude '*.pt'")
     names = sorted(x.name for x in G.iterdir() if x.is_dir())
     if a.only:

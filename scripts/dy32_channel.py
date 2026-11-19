@@ -482,6 +482,8 @@ def measure_dirs(a) -> None:
     tab = Table()
     for spec in a.dirs:
         name, d = spec.split("=", 1)
+        if a.skip_existing and name in tab.rows:
+            continue
         waves = load_wavs(Path(d))
         if waves is None:
             log("incomplete folder, skipped", name)
@@ -511,6 +513,7 @@ def main() -> None:
     x.add_argument("--dirs", nargs="+", required=True, help="name=folder with 00.wav..49.wav")
     x.add_argument("--desc", default="")
     x.add_argument("--rate", default="?")
+    x.add_argument("--skip-existing", action="store_true")
     a = p.parse_args()
     {"lab": lab, "measure": measure_dirs}[a.cmd](a)
 
