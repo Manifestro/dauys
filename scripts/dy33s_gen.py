@@ -131,8 +131,8 @@ def generate_guided(model, prompts: np.ndarray, swaps: np.ndarray, n_new: int, w
                 bk = next(b for b, (s0, e0) in GBUCKETS.items() if s0 <= st < e0)
                 stats.setdefault(f"absd_{bk}", []).append(d[Hm].abs().float().mean().item())
                 if w == 0:
-                    stats.setdefault("w0_max_abs_q_minus_p", [0.0])[0] = max(stats["w0_max_abs_q_minus_p"][0],
-                                                                              float((q - pt).abs().max()))
+                    m0 = stats.setdefault("w0_max_abs_q_minus_p", [0.0])
+                    m0[0] = max(m0[0], float((q - pt).abs().max()))
         nxt = torch.stack(nxt, 1)
         for k in range(S):
             if t - k < 0 or t - k >= total:
