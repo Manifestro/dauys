@@ -439,10 +439,30 @@ def cmd_gen(a) -> None:
     print("GEN DONE", a.variant, flush=True)
 
 
+def cmd_transcribe(a) -> None:
+    """Whisper transcripts of a folder of XX.wav (measuring only), next to the prompt and real-continuation transcripts."""
+    dev = torch.device("cuda")
+    d, pack = Path(a.work), Path(a.pack)
+    ids = sorted(f.stem for f in d.glob("[0-9][0-9].wav"))
+    hyp = whisper([read16(d / f"{i}.wav") for i in ids], dev)
+    pr = whisper([read16(pack / f"prompt_{i}.wav") for i in ids], dev)
+    re_ = whisper([read16(pack / f"real_{i}.wav") for i in ids], dev)
+    rows = [{"id": i, "prompt": p, "real": r, "generated": h, "words": len(norm(h).split()),
+             "distinct_word_share": round(len(set(norm(h).split())) / max(len(norm(h).split()), 1), 3)}
+            for i, p, r, h in zip(ids, pr, re_, hyp)]
+    summ = {"n": len(rows), "median_words": float(np.median([r["words"] for r in rows])),
+            "median_distinct_word_share": float(np.median([r["distinct_word_share"] for r in rows])),
+            "empty": sum(r["words"] == 0 for r in rows)}
+    (d / "transcripts.json").write_text(json.dumps({"asr": ASR, "summary": summ, "rows": rows}, indent=2))
+    print("TRANSCRIBED", d.name, json.dumps(summ), flush=True)
+    if a.upload:
+        sh(f"aws s3 cp {d / 'transcripts.json'} {OUT}/g/transcripts/{d.name}.json --only-show-errors")
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     s = p.add_subparsers(dest="cmd", required=True)
-    for name in ("channel", "released", "layers", "units", "gen"):
+    for name in ("channel", "released", "layers", "units", "gen", "transcribe"):
         x = s.add_parser(name)
         x.add_argument("--models", default="/data/m")
         x.add_argument("--pack", default="/data/pack")
@@ -473,7 +493,8 @@ def main() -> None:
     x.add_argument("--variant", default="g-ours")
     x.add_argument("--dedup", type=int, default=1)
     a = p.parse_args()
-    {"channel": cmd_channel, "released": cmd_released, "layers": cmd_layers, "units": cmd_units, "gen": cmd_gen}[a.cmd](a)
+    {"channel": cmd_channel, "released": cmd_released, "layers": cmd_layers, "units": cmd_units, "gen": cmd_gen,
+     "transcribe": cmd_transcribe}[a.cmd](a)
 
 
 if __name__ == "__main__":
