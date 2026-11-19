@@ -147,7 +147,7 @@ def me_of(c: Corpus, ep: int, seq: int) -> int:
 
 def frame_roles(c: Corpus, fs: np.ndarray, seq: int) -> tuple[np.ndarray, set]:
     eps = np.unique(fs[fs >= 0] // 64)
-    me = {me_of(c, int(e), seq) for e in eps}
+    me = {me_of(c, int(e), seq) for e in eps} - {-1}  # a recording without utterances has no "me"
     r = np.where(fs < 0, ROLE_NONE, np.where(np.isin(fs, list(me)), ROLE_ME, ROLE_OTHER)).astype(np.int64)
     return r, me
 
