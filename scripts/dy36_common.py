@@ -206,4 +206,8 @@ class Judge:
                 "skipped_empty": len(prompts) - n, "mean_p": round(float(p.mean()), 4) if n else float("nan"),
                 "p_first_order": round(float(pa.mean()), 4) if n else float("nan"),
                 "p_second_order": round(float(pb.mean()), 4) if n else float("nan"),
+                # the answer flips with the order = the judge picks the same position both times
+                "order_flip_share": round(float(((pa > 0.5) != (pb > 0.5)).mean()), 4) if n else float("nan"),
+                "consistent_x_share": round(float(((pa > 0.5) & (pb > 0.5)).mean()), 4) if n else float("nan"),
+                "consistent_y_share": round(float(((pa < 0.5) & (pb < 0.5)).mean()), 4) if n else float("nan"),
                 "per_item": {int(i): round(float(q), 4) for i, q in zip(idx, p)}}
