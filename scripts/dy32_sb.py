@@ -1,7 +1,7 @@
 """DY-32 track A, job 2 (b): multi-layer discrete WavLM codes with SpeechBrain's ready unit vocoder.
 
 microsoft/wavlm-large hidden layers 1, 3, 7, 12, 18, 23 -> k-means K=1000 per layer (speechbrain k-means trained on
-LibriSpeech audio, no text) -> speechbrain/hifigan-wavlm-l1-3-7-12-18-23-k1000-LibriTTS (unit HiFi-GAN trained on
+LibriSpeech audio, no text; files in speechbrain/hifigan-wavlm-k1000-LibriTTS) -> that repo's unit HiFi-GAN (trained on
 LibriTTS audio, attention pooling over layers; missing layers are filled with the padding token, as
 DiscreteSSL.decode does). All six layers and subsets; rows go to the dy32_channel table.
 
@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from dy32_channel import S3, W, Rec, Table, log, reals, score, sh, write
 
-VOC = "speechbrain/hifigan-wavlm-l1-3-7-12-18-23-k1000-LibriTTS"
+VOC = "speechbrain/hifigan-wavlm-k1000-LibriTTS"  # holds the k-means and a 6-layer unit vocoder (vocab 6001)
 SUBSETS = [[1, 3, 7, 12, 18, 23], [3, 7, 12, 18, 23], [1, 3, 7, 12], [3, 7, 12], [7, 12, 18], [7, 12], [3, 7], [7], [12], [1, 3]]
 
 
