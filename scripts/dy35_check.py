@@ -220,8 +220,8 @@ def zmarker_acc(model, enc, c: Corpus, T: int, n_batches: int = 8) -> dict:
     return {f"acc_{k}": round(v / max(n, 1), 4) for k, v in hit.items()} | {"targets": n}
 
 
-def known(kind: str, steps: int, out: Path) -> dict:
-    tr, va = synth(kind, 1), synth(kind, 2, n_ep=10)
+def known(kind: str, steps: int, out: Path, n_ep: int = 40) -> dict:
+    tr, va = synth(kind, 1, n_ep=n_ep), synth(kind, 2, n_ep=10)
     t = time.time()
     res = train(small_args(steps, str(out)), tr, va, SMALL, out, log=lambda s: None)
     r = {"kind": kind, "steps": steps, "train_s": round(time.time() - t, 1), "val": res["history"][-1]}
@@ -308,7 +308,9 @@ def main() -> None:
         save()
         print("3", json.dumps(R["3_known_first_half"]), flush=True)
     if "4" in only:
-        r = known("zmarker", a.known_steps4, out / "k4")
+        # 2000 episodes (60M frames): with a small corpus the model memorises the random training sequences and
+        # predicts the training markers from context, so it never needs z
+        r = known("zmarker", a.known_steps4, out / "k4", n_ep=2000)
         m = r["marker"]
         R["4_known_second_half"] = {**r, "marker_values": 32, "pass": m["acc_true"] >= 0.9 and m["acc_swap"] <= 0.15}
         save()
