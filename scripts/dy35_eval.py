@@ -195,43 +195,55 @@ def cmd_p1(a) -> None:
     va = load_corpus(sorted(f for f in Path(a.utt).glob("*.npz") if held_out(f.stem)))
     sil = sil_mask(a.silence, dev)
     A = anchors(va, a.n, 2026)
-    m, enc, ck = load_t(a.ckpt, dev)
-    res = {"anchors": len(A), "step": ck["step"], "val": ck["val"]}
-    Z = {}
-    allu = sorted({u for x in A for u in [x[0]] + x[1]})
-    zz = zs(enc, va, allu, dev)
-    Z = {u: zz[i] for i, u in enumerate(allu)}
+    res = {"anchors": len(A), "anchor_ids": [x[0] for x in A]}
+    parts = a.parts.split(",")
+    if "head" in parts:
+        m, enc, ck = load_t(a.ckpt, dev)
+        res.update({"step": ck["step"], "val": ck["val"]})
+        allu = sorted({u for x in A for u in [x[0]] + x[1]})
+        zz = zs(enc, va, allu, dev)
+        Z = {u: zz[i] for i, u in enumerate(allu)}
 
-    def head_acc(sub, H: int, null: bool = False) -> tuple[float, int, list]:
-        hit, ranks = 0, []
-        for b0 in range(0, len(sub), a.batch):
-            S = sub[b0 : b0 + a.batch]
-            pre = torch.stack([torch.from_numpy(va.stream[va.st[u] - H : va.st[u]].astype(np.int64)) for u, _ in S]).to(dev)
-            if null:
-                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    h = m.states(pre)[:, -1]
-            else:
-                _, h, _, _, _ = roll(m, pre, sil)
-            zh = m.zhat(h)
-            C = torch.stack([torch.stack([Z[u]] + [Z[d] for d in ds]) for u, ds in S])
-            s = torch.einsum("bd,bcd->bc", zh, C)
-            hit += int((s[:, 0] > s[:, 1:].max(1).values).sum())  # strict: a tie is a miss
-            ranks += (s[:, 1:] >= s[:, :1]).sum(1).cpu().tolist()
-        return hit / len(sub), len(sub), ranks
+        def head_acc(sub, H: int, null: bool = False) -> tuple[float, int, list]:
+            hit, ranks = 0, []
+            for b0 in range(0, len(sub), a.batch):
+                S = sub[b0 : b0 + a.batch]
+                pre = torch.stack([torch.from_numpy(va.stream[va.st[u] - H : va.st[u]].astype(np.int64)) for u, _ in S]).to(dev)
+                if null:
+                    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                        h = m.states(pre)[:, -1]
+                else:
+                    _, h, _, _, _ = roll(m, pre, sil)
+                zh = m.zhat(h)
+                C = torch.stack([torch.stack([Z[u]] + [Z[d] for d in ds]) for u, ds in S])
+                s = torch.einsum("bd,bcd->bc", zh, C)
+                hit += int((s[:, 0] > s[:, 1:].max(1).values).sum())  # strict: a tie is a miss
+                ranks += (s[:, 1:] >= s[:, :1]).sum(1).cpu().tolist()
+            return hit / len(sub), len(sub), ranks
 
-    acc, n, ranks = head_acc(A, HEARD)
-    res["head_15s"] = {"acc16": acc, "n": n, "ci95": wilson(round(acc * n), n), "mean_rank": float(np.mean(ranks))}
-    acc, n, _ = head_acc(A, HEARD, null=True)
-    res["head_15s_heard_without_thoughts"] = {"acc16": acc, "n": n, "ci95": wilson(round(acc * n), n)}
-    sub = [x for x in A if va.sin[x[0]] >= 1500]
-    res["head_by_heard"] = {}
-    for H in (250, 750, 1500):
-        acc, n, _ = head_acc(sub, H)
-        res["head_by_heard"][f"{H // 50}s"] = {"acc16": acc, "n": n, "ci95": wilson(round(acc * n), n)}
-    print(json.dumps(res), flush=True)
-    del m, enc
-    torch.cuda.empty_cache()
+        acc, n, ranks = head_acc(A, HEARD)
+        res["head_15s"] = {"acc16": acc, "n": n, "ci95": wilson(round(acc * n), n), "mean_rank": float(np.mean(ranks))}
+        acc, n, _ = head_acc(A, HEARD, null=True)
+        res["head_15s_heard_without_thoughts"] = {"acc16": acc, "n": n, "ci95": wilson(round(acc * n), n)}
+        sub = [x for x in A if va.sin[x[0]] >= 1500]
+        res["head_by_heard"] = {}
+        for H in (250, 750, 1500):
+            acc, n, _ = head_acc(sub, H)
+            res["head_by_heard"][f"{H // 50}s"] = {"acc16": acc, "n": n, "ci95": wilson(round(acc * n), n)}
+        print(json.dumps({k: v for k, v in res.items() if k != "anchor_ids"}), flush=True)
+        del m, enc
+        torch.cuda.empty_cache()
     # model b: length-normalised log-likelihood of each candidate after the heard 15 s
+    if "b" in parts:
+        p1_b(a, va, A, res, dev)
+    if "acoustic" in parts:
+        p1_acoustic(a, va, A, res)
+    res["chance"] = 1 / 16
+    Path(a.out).write_text(json.dumps(res, indent=1))
+    print("P1 DONE", json.dumps({k: v for k, v in res.items() if k != "anchor_ids"}), flush=True)
+
+
+def p1_b(a, va, A, res, dev) -> None:
     bm, bck = load_b(a.bckpt, dev)
     hit = 0
     for b0 in range(0, len(A), 2):
@@ -259,7 +271,9 @@ def cmd_p1(a) -> None:
     print(json.dumps(res["model_b_15s"]), flush=True)
     del bm
     torch.cuda.empty_cache()
-    # acoustic baseline
+
+
+def p1_acoustic(a, va, A, res) -> None:
     ch = Channel()
     piece_audio = PieceAudio(a.held, a.utt)
     hit = 0
@@ -276,9 +290,6 @@ def cmd_p1(a) -> None:
         hit += int((s[:, 0] > s[:, 1:].max(1).values).sum())
     res["acoustic_15s"] = {"acc16": hit / len(A), "n": len(A), "ci95": wilson(hit, len(A)),
                            "rule": "cosine of mean WavLM-L6 feature (candidate alone) to mean over the last 2 s heard (alone)"}
-    res["chance"] = 1 / 16
-    Path(a.out).write_text(json.dumps(res, indent=1))
-    print("P1 DONE", json.dumps(res), flush=True)
 
 
 class PieceAudio:
@@ -505,12 +516,38 @@ def cmd_g1(a) -> None:
     print("G1 DONE", json.dumps(out["results"], default=float), flush=True)
 
 
+def cmd_bce(a) -> None:
+    """Model b's held-out CE (256 random 2048-frame windows, seed 1234, as dy21_train validation) on the DY-32 b codes
+    (20 s windows) and on the DY-35 chunked codes (WavLM alone per utterance / gap chunk) of the same held-out shards."""
+    from dy21_train import load_stream
+
+    dev = torch.device("cuda")
+    bm, bck = load_b(a.bckpt, dev)
+    out = {"b_step": bck.get("step"), "b_val_reported": bck.get("val")}
+    streams = {"dy32b_codes": load_stream(sorted(Path(a.b_units).glob("*.npz")), "tok"),
+               "dy35_chunked_codes": load_corpus(sorted(f for f in Path(a.utt).glob("*.npz") if held_out(f.stem))).stream}
+    for k, st in streams.items():
+        T = 2048
+        starts = np.random.default_rng(1234).integers(0, len(st) - T - 1, size=256)
+        tot = n = 0
+        for i in range(0, 256, 32):
+            x = torch.from_numpy(np.stack([st[s_ : s_ + T + 1] for s_ in starts[i : i + 32]]).astype(np.int64)).to(dev)
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                h = bm.states(x[:, :-1])
+            tot += float(F.cross_entropy(bm.logits(h).flatten(0, 1), x[:, 1:].flatten(), reduction="sum"))
+            n += x[:, 1:].numel()
+        out[k] = {"ce": tot / n, "tokens": int(len(st))}
+        print(k, out[k], flush=True)
+    Path(a.out).write_text(json.dumps(out, indent=1))
+    print("BCE DONE", json.dumps(out), flush=True)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     s = p.add_subparsers(dest="cmd", required=True)
-    for name in ("p1", "p2a", "gen", "bank", "g1"):
+    for name in ("p1", "p2a", "gen", "bank", "g1", "bce"):
         x = s.add_parser(name)
-        x.add_argument("--ckpt", required=True)
+        x.add_argument("--ckpt", default="/data/t/run/best.pt")
         x.add_argument("--utt", default="/opt/dlami/nvme/utt")
         x.add_argument("--held", default="/opt/dlami/nvme/held")
         x.add_argument("--silence", default="/data/t/prompts_turn/silence.json")
@@ -518,6 +555,7 @@ def main() -> None:
         x.add_argument("--out", default="")
         x.add_argument("--n", type=int, default=1200)
         x.add_argument("--batch", type=int, default=100)
+    s.choices["p1"].add_argument("--parts", default="head,b,acoustic")
     g = s.choices["gen"]
     g.add_argument("--pack", default="/data/t/prompts_turn")
     g.add_argument("--t10", default="/data/t/pack32")
@@ -525,8 +563,9 @@ def main() -> None:
     g.add_argument("--bank", default="/data/t/bank.pt")
     g.add_argument("--modes", default="t-pred,t-oracle,t-swap,t-near,b-turn,t-t10,t-t10-x")
     s.choices["bank"].add_argument("--bank", default="/data/t/bank.pt")
+    s.choices["bce"].add_argument("--b-units", default="/opt/dlami/nvme/b_held")
     a = p.parse_args()
-    {"p1": cmd_p1, "p2a": cmd_p2a, "gen": cmd_gen, "bank": cmd_bank, "g1": cmd_g1}[a.cmd](a)
+    {"p1": cmd_p1, "p2a": cmd_p2a, "gen": cmd_gen, "bank": cmd_bank, "g1": cmd_g1, "bce": cmd_bce}[a.cmd](a)
 
 
 if __name__ == "__main__":
