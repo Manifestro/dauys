@@ -1,7 +1,8 @@
 # DY-32 F: unit HiFi-GAN on full-rate six-stream LJ Speech codes (gslm2 template; one GPU, bf16).
+# Validation uses the first 16 valid utterances: full-length validation of all 250 with cudnn.benchmark took >12 min.
 workdir: /opt/dlami/nvme/w/runs/vocoder
 train_manifest: /opt/dlami/nvme/w/units/lj/5/unit_vocoder/ljspeech_train.jsonl
-val_manifest: /opt/dlami/nvme/w/units/lj/5/unit_vocoder/ljspeech_valid.jsonl
+val_manifest: /opt/dlami/nvme/w/units/lj/5/unit_vocoder/ljspeech_valid16.jsonl
 n_units: [256, 256, 256, 256, 256, 256]
 agg_type: concat_lin
 max_epochs: 2000
@@ -14,6 +15,6 @@ segment_size: 8960
 units_hop_size: 320
 dtype: bfloat16
 log_interval: 100
-val_interval: 4000
+val_interval: 6000
 max_steps: 500000
 num_workers: 7
