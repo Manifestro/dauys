@@ -73,6 +73,8 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--batch-sec", type=float, default=240.0)
     p.add_argument("--mem-frac", type=float, default=0.45)
+    p.add_argument("--knn", type=int, default=KNN)
+    p.add_argument("--far", action="store_true", help="farther of two candidate target voices")
     p.add_argument("--part", default="", help="k/n: this machine takes every n-th shard of the list from k")
     p.add_argument("--skip", type=int, default=0, help="skip this many shards of the seeded list (already done elsewhere)")
     a = p.parse_args()
@@ -179,12 +181,26 @@ def main() -> None:
             h = np.bincount(np.concatenate([co[off[rows[j]] : off[rows[j] + 1]] for j in pools[s]]).astype(np.int64), minlength=K)
             vhist[k] = (h / h.sum()).astype(np.float16)
             vframes[k] = len(P)
-        # targets: NV distinct speakers of other recordings
+        # targets: NV distinct speakers of other recordings; with --far: of 2 * NV random candidates the NV whose pool
+        # mean feature is farthest (cosine) from the source speaker's mean feature in this shard
         ep = T["ep"][rows]
         tgt = np.full((len(rows), NV), -1, np.int64)
+        if a.far:
+            smean = {}
+            for s in sp_u:
+                js = np.flatnonzero(spk == s)
+                smean[int(s)] = torch.cat([feats[j] for j in js]).float().mean(0).numpy()
+            vn = vfeat.astype(np.float32) / np.linalg.norm(vfeat.astype(np.float32), axis=1, keepdims=True)
         for j in range(len(rows)):
             el = np.flatnonzero(sp_ep != ep[j])
-            if len(el) >= NV:
+            if len(el) < NV:
+                continue
+            if a.far:
+                c = rng.choice(el, min(2 * NV, len(el)), replace=False)
+                m = smean[int(spk[j])]
+                cs = vn[c] @ (m / np.linalg.norm(m))
+                tgt[j] = sp_ok[c[np.argsort(cs)[:NV]]]
+            else:
                 tgt[j] = sp_ok[rng.choice(el, NV, replace=False)]
         tempo = rng.uniform(TMIN, TMAX, size=(len(rows), NV)).astype(np.float32)
         conv: list = [None] * (len(rows) * NV)
@@ -199,7 +215,7 @@ def main() -> None:
             Y = torch.empty_like(X)
             for c0 in range(0, len(X), 8192):
                 sim = F.normalize(X[c0 : c0 + 8192].float(), dim=-1).half() @ Pn.T
-                nn = sim.topk(KNN, dim=-1).indices
+                nn = sim.topk(a.knn, dim=-1).indices
                 Y[c0 : c0 + 8192] = P[nn].float().mean(1).half()
             for (j, v), y in zip(jv, Y.split(lens)):
                 n2 = max(2, int(round(len(y) * tempo[j, v])))
@@ -212,7 +228,7 @@ def main() -> None:
         res = {"uid": uid, "tgt": tgt[ok], "tempo": tempo[ok], "codes": np.concatenate(cl),
                "off": np.concatenate([[0], np.cumsum([len(c) for c in cl])]).astype(np.int64),
                "spk": sp_ok, "vfeat": vfeat, "vhist": vhist, "vframes": vframes,
-               "info": np.array(json.dumps({"knn": KNN, "nv": NV, "pool_min": POOL_MIN, "pool_max": POOL_MAX,
+               "info": np.array(json.dumps({"knn": a.knn, "far": a.far, "nv": NV, "pool_min": POOL_MIN, "pool_max": POOL_MAX,
                                             "tempo": [TMIN, TMAX], "agree_requant": agree / max(tot, 1)}))}
         f = out / f"{files[fi]}.npz"
         np.savez(f.with_suffix(".tmp.npz"), **res)

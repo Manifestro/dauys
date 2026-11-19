@@ -70,6 +70,33 @@ class Encoder(nn.Module):
         return out
 
 
+class LocalEncoder(Encoder):
+    """Variant E: no global mixing. Embedding -> `layers` residual conv blocks (kernel `kern`, GLU, RMSNorm), receptive
+    field 1 + layers * (kern - 1) frames (6 x 7 -> 37 frames = +-360 ms at 50 Hz) -> per-frame MLP -> mean over the
+    valid frames -> linear -> z (64-d, L2). Padding frames are zeroed before every convolution."""
+
+    def __init__(self, d: int = 512, layers: int = 6, kern: int = 7) -> None:
+        nn.Module.__init__(self)
+        self.emb = nn.Embedding(K + 1, d)
+        self.norms = nn.ModuleList(nn.RMSNorm(d) for _ in range(layers))
+        self.convs = nn.ModuleList(nn.Conv1d(d, 2 * d, kern, padding=kern // 2) for _ in range(layers))
+        self.mlp = nn.Sequential(nn.RMSNorm(d), nn.Linear(d, 2 * d), nn.GELU(), nn.Linear(2 * d, d))
+        self.norm = nn.RMSNorm(d)
+        self.out = nn.Linear(d, ZDIM)
+        _init(self)
+
+    def forward(self, codes: torch.Tensor, lens: torch.Tensor) -> torch.Tensor:
+        keep = (torch.arange(codes.shape[1], device=codes.device)[None] < lens[:, None])[..., None]
+        x = self.emb(codes) * keep
+        for n, c in zip(self.norms, self.convs):
+            h = (n(x) * keep).transpose(1, 2)
+            x = x + F.glu(c(h), dim=1).transpose(1, 2)
+        x = x + self.mlp(x)
+        x = self.norm(x) * keep
+        m = x.sum(1) / lens[:, None].to(x.dtype)
+        return F.normalize(self.out(m).float(), dim=-1)
+
+
 class Decoder(nn.Module):
     def __init__(self, d: int = 512, layers: int = 2, heads: int = 8, ffn: int = 1344) -> None:
         super().__init__()
@@ -91,10 +118,11 @@ class Decoder(nn.Module):
 
 
 class ModelD(nn.Module):
-    def __init__(self, enc_layers: int = 6, dec_layers: int = 2) -> None:
+    def __init__(self, enc_layers: int = 6, dec_layers: int = 2, enc_type: str = "global", bag: bool = False) -> None:
         super().__init__()
-        self.enc = Encoder(layers=enc_layers)
+        self.enc = LocalEncoder(layers=enc_layers) if enc_type == "local" else Encoder(layers=enc_layers)
         self.dec = Decoder(layers=dec_layers)
+        self.bag = nn.Linear(ZDIM, K) if bag else None
 
 
 def mask_input(codes: torch.Tensor, lens: torch.Tensor, rate: float, gen=None) -> torch.Tensor:

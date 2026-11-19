@@ -63,6 +63,12 @@ def step_loss(model, a, la, b, lb, v, args, gen=None):
     lg = model.dec(bin_, lb, za, v)
     tgt = keep & ~vis
     ce = F.cross_entropy(lg[tgt].float(), b[tgt])
+    if model.bag is not None and args.bag > 0:
+        h = torch.zeros(len(b), K, device=b.device).scatter_add_(1, b * keep, keep.float())
+        h = h * IDF.to(b.device)[None]
+        h = h / h.sum(1, keepdim=True).clamp(min=1e-6)
+        bag = -(h * F.log_softmax(model.bag(za).float(), -1)).sum(1).mean()
+        ce = ce + args.bag * bag
     nce = torch.zeros((), device=a.device)
     if args.nce > 0:
         zb = model.enc(mask_input(b, lb, args.mask_a, gen), lb)
@@ -70,10 +76,41 @@ def step_loss(model, a, la, b, lb, v, args, gen=None):
     return ce + args.nce * nce, ce, nce
 
 
+IDF = torch.ones(K)
+
+
+def set_idf(T: dict, n: int = 50000) -> None:
+    """Smooth idf of codes over a seeded sample of training utterances (for the bag target of variant E)."""
+    global IDF
+    rng = np.random.default_rng(0)
+    rows = rng.choice(np.flatnonzero(~T["held"]), n, replace=False)
+    df = np.zeros(K)
+    for u in rows:
+        df[np.unique(T["codes"][T["code_off"][u] : T["code_off"][u + 1]])] += 1
+    IDF = torch.from_numpy((np.log((1 + n) / (1 + df)) + 1).astype(np.float32))
+
+
+def distort(x: np.ndarray, rng, seg=(15, 30), tempo=(0.8, 1.25), p_drop=0.05, p_dup=0.05) -> np.ndarray:
+    """Variant E, voice-B side: a new tempo factor every 0.3-0.6 s (nearest-frame resampling), then random frame drops
+    and duplications."""
+    out, i = [], 0
+    while i < len(x):
+        L = int(rng.integers(seg[0], seg[1] + 1))
+        part = x[i : i + L]
+        n2 = max(1, int(round(len(part) * rng.uniform(*tempo))))
+        out.append(part[np.minimum((np.arange(n2) * len(part) / n2).astype(np.int64), len(part) - 1)])
+        i += L
+    y = np.concatenate(out)
+    r = rng.random(len(y))
+    y = np.repeat(y, np.where(r < p_drop, 0, np.where(r > 1 - p_dup, 2, 1)))
+    return y if len(y) >= 10 else x
+
+
 # ---------------------------------------------------------------- real pairs
 class Pairs:
-    def __init__(self, T: dict, d: Path) -> None:
+    def __init__(self, T: dict, d: Path, distort_b: bool = False) -> None:
         self.T, self.d = T, Path(d)
+        self.distort_b, self.rng = distort_b, np.random.default_rng(12345)
         self.seen: set = set()
         self.codes, self.offs, self.vfeat = [], [], []
         self.p_sh, self.p_j, self.p_uid, self.p_v = [], [], [], []
@@ -115,9 +152,12 @@ class Pairs:
         o = self.offs[self.sh[i]]
         return self.codes[self.sh[i]][o[self.j[i]] : o[self.j[i] + 1]].astype(np.int64)
 
-    def batch(self, idx) -> tuple:
+    def batch(self, idx, train: bool = True) -> tuple:
         a, la = pad([self.a(i) for i in idx])
-        b, lb = pad([self.b(i) for i in idx])
+        bs = [self.b(i) for i in idx]
+        if train and self.distort_b:
+            bs = [distort(x, self.rng)[:1400] for x in bs]
+        b, lb = pad(bs)
         return a, la, b, lb, torch.from_numpy(self.V[self.v[idx]])
 
 
@@ -181,7 +221,7 @@ def evaluate(model, P: Pairs, vidx: np.ndarray, args) -> dict:
     tot, tot_shuf, n = 0.0, 0.0, 0
     with torch.autocast("cuda", dtype=torch.bfloat16):
         for s in range(0, len(vidx), 100):
-            a, la, b, lb, v = [x.cuda() for x in P.batch(vidx[s : s + 100])]
+            a, la, b, lb, v = [x.cuda() for x in P.batch(vidx[s : s + 100], train=False)]
             za = model.enc(a, la)
             g2 = torch.Generator(device="cuda").manual_seed(4321 + s)
             vis = block_visible(b, lb, args.vis, args.block, g2)
@@ -218,13 +258,15 @@ def cmd_train(a) -> None:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     T = load_table(Path(a.dict))
-    P = Pairs(T, Path(a.pairs))
+    P = Pairs(T, Path(a.pairs), distort_b=a.distort)
+    if a.bag > 0:
+        set_idf(T)
     while P.refresh() == 0 or (~P.held).sum() == 0 or P.held.sum() < 2000:
         log("waiting for pairs (need held-out and training shards)")
         time.sleep(30)
     vidx = val_index(P)
     base = hist_retrieval([P.a(i) for i in vidx], [P.b(i) for i in vidx])
-    model = ModelD(a.enc_layers, a.dec_layers).cuda()
+    model = ModelD(a.enc_layers, a.dec_layers, a.enc_type, a.bag > 0).cuda()
     if a.init:
         model.load_state_dict(torch.load(a.init, map_location="cuda", weights_only=False)["model"])
         log("initialised from", a.init)
@@ -395,7 +437,7 @@ def cmd_synth(a) -> None:
 def load_model(path: str):
     ck = torch.load(path, map_location="cpu", weights_only=False)
     ar = ck["args"]
-    m = ModelD(ar.get("enc_layers", 6), ar.get("dec_layers", 2)).cuda().eval()
+    m = ModelD(ar.get("enc_layers", 6), ar.get("dec_layers", 2), ar.get("enc_type", "global"), ar.get("bag", 0) > 0).cuda().eval()
     m.load_state_dict(ck["model"])
     return m, ck
 
@@ -498,6 +540,9 @@ def main() -> None:
     p.add_argument("--vis", type=float, default=0.2)
     p.add_argument("--block", type=int, default=10)
     p.add_argument("--nce", type=float, default=0.5)
+    p.add_argument("--enc-type", default="global", choices=["global", "local"])
+    p.add_argument("--bag", type=float, default=0.0, help="weight of the tf-idf code-bag target predicted from z alone")
+    p.add_argument("--distort", action="store_true", help="per-segment tempo and frame drop/dup on the voice-B side")
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--warmup", type=int, default=500)
     p.add_argument("--steps", type=int, default=20000)
