@@ -84,18 +84,31 @@ class Vad:
         self.dev = device
 
     @torch.inference_mode()
-    def probs(self, pieces: list[np.ndarray], batch: int = 256) -> list[np.ndarray]:
-        out = []
-        for b in range(0, len(pieces), batch):
-            ps = pieces[b : b + batch]
-            n = max(-(-len(p) // CH) for p in ps)
-            x = torch.zeros(len(ps), n * CH)
-            for i, p in enumerate(ps):
-                x[i, : len(p)] = torch.from_numpy(p.astype(np.float32) / 32768.0)
+    def probs(self, pieces: list[np.ndarray], seg: int = 312, warm: int = 16, batch: int = 8192) -> list[np.ndarray]:
+        """Chunk probabilities per piece. Each piece is cut into streams of ``seg`` chunks (10 s), each stream starts
+        ``warm`` chunks (0.5 s) earlier to warm the recurrent state (those outputs are dropped); all streams of all
+        pieces run as one batch (the per-step cost is launch-bound, so wide batches are nearly free)."""
+        jobs = []  # (piece, first chunk)
+        for k, p in enumerate(pieces):
+            n = -(-len(p) // CH)
+            jobs += [(k, c) for c in range(0, n, seg)]
+        L = (seg + warm) * CH
+        out = [np.zeros(-(-len(p) // CH), np.float32) for p in pieces]
+        for b in range(0, len(jobs), batch):
+            js = jobs[b : b + batch]
+            x = torch.zeros(len(js), L)
+            for i, (k, c) in enumerate(js):
+                a = max(0, (c - warm) * CH)
+                w = pieces[k][a : (c + seg) * CH]
+                off = a - (c - warm) * CH  # chunk c - warm sits at position 0 (zeros before the piece start)
+                x[i, off : off + len(w)] = torch.from_numpy(w.astype(np.float32) / 32768.0)
             x = x.to(self.dev)
             self.m.reset_states()
-            pr = torch.stack([self.m(x[:, j * CH : (j + 1) * CH], SR)[:, 0] for j in range(n)], 1).float().cpu().numpy()
-            out += [pr[i, : -(-len(p) // CH)] for i, p in enumerate(ps)]
+            pr = torch.stack([self.m(x[:, j * CH : (j + 1) * CH], SR)[:, 0] for j in range(seg + warm)], 1)
+            pr = pr[:, warm:].float().cpu().numpy()
+            for i, (k, c) in enumerate(js):
+                m = min(seg, len(out[k]) - c)
+                out[k][c : c + m] = pr[i, :m]
         return out
 
 
