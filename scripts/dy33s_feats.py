@@ -48,11 +48,14 @@ def piece_feats(u: RVQUnits, pieces: list[np.ndarray], batch: int = 24) -> list[
         f, n = u.feats([wins[i][1].astype(np.float32) / 32768.0 for i in part])
         f = f.half().cpu().numpy()
         for j, i in enumerate(part):
-            out[i] = f[j, : min(n[j], WIN // HOP)]
+            out[i] = f[j, : min(n[j], WIN // HOP)].copy()
     per = [[] for _ in pieces]
     for i, (k, _) in enumerate(wins):
-        per[k].append(out[i])
-    return [np.concatenate(r) if r else np.zeros((0, 1024), np.float16) for r in per]
+        per[k].append(i)
+    res = []
+    for idx in per:  # concatenate piece by piece and free the window copies at once (bounded memory)
+        res.append(np.concatenate([out.pop(i) for i in idx]) if idx else np.zeros((0, 1024), np.float16))
+    return res
 
 
 def main() -> None:
