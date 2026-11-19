@@ -389,6 +389,39 @@ def round_(args) -> None:
     print("ROUND DONE", step, [r for _, r in dests], flush=True)
 
 
+def publish(args) -> None:
+    """Checkpoints + entry point + README + logs -> S3 outputs/dauys/dy32/f/ and HF manifestro/dauys-runs dy32/f/."""
+    import shutil
+
+    repo = Path(__file__).resolve().parents[1]
+    P = W / "publish"
+    shutil.rmtree(P, ignore_errors=True)
+    (P / "checkpoints").mkdir(parents=True)
+    voc = Path(args.vocoder) if args.vocoder else latest_vocoder()
+    shutil.copytree(voc, P / "checkpoints" / voc.name)
+    dur = best_duration()
+    if dur is not None:
+        shutil.copy(dur.resolve(), P / "checkpoints" / "duration_best.pt")
+        shutil.copy(DUR_DIR / "config.json", P / "checkpoints" / "duration_config.json")
+        shutil.copy(DUR_DIR / "train_log.jsonl", P / "duration_train_log.jsonl")
+    shutil.copy(VOC_DIR / "metrics-0.jsonl", P / "vocoder_metrics.jsonl")
+    shutil.copy(VOC_DIR / "config.json", P / "vocoder_train_config.json")
+    for f in (W / "wer_log.jsonl", W / "ckpt/spidr/LICENSE"):
+        if f.exists():
+            shutil.copy(f, P / ("gslm2_LICENSE" if f.name == "LICENSE" else f.name))
+    shutil.copy(repo / "scripts/dy32_f_decode.py", P)
+    shutil.copy(repo / "scripts/dy32_f_pod.sh", P)
+    shutil.copytree(repo / "scripts/dy32_f", P / "configs")
+    shutil.copy(repo / "scripts/dy32_f/README.md", P / "README.md")
+    (P / "commit.txt").write_text(sh(f"git -C {repo} rev-parse HEAD"))
+    sh(f"aws s3 cp --recursive {P} {S3}/f/ --only-show-errors")
+    from huggingface_hub import HfApi
+
+    HfApi().upload_folder(folder_path=str(P), repo_id="manifestro/dauys-runs", path_in_repo="dy32/f",
+                          commit_message=f"DY-32 F: decoder {voc.name}")
+    print("PUBLISHED", voc.name, dur, flush=True)
+
+
 def serve(args) -> None:
     """Run a round whenever a new vocoder checkpoint, a first duration predictor or new track E units appear.
     WER is measured only when the vocoder step changed."""
@@ -471,6 +504,7 @@ def main() -> None:
     a = sp.add_parser("round"); a.add_argument("--vocoder"); a.add_argument("--duration"); a.add_argument("--no-wer", action="store_true")
     a.add_argument("--only", nargs="*", help="only these gen variants")
     sp.add_parser("serve")
+    a = sp.add_parser("publish"); a.add_argument("--vocoder")
     a = sp.add_parser("track"); a.add_argument("--once", action="store_true")
     a.add_argument("--key", default="vocoder", choices=["vocoder", "duration"])
     args = p.parse_args()
@@ -486,6 +520,8 @@ def main() -> None:
         json.dump(transcribe(args.wavs), open(args.out, "w"), indent=1)
     elif args.cmd == "round":
         round_(args)
+    elif args.cmd == "publish":
+        publish(args)
     elif args.cmd == "serve":
         serve(args)
     elif args.cmd == "track":
