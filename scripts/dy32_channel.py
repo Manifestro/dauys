@@ -171,14 +171,20 @@ class Table:
                     gw = self.med(b, "whisper_wer") - self.med(a, "whisper_wer")
                     L.append(f"- Idea 2 at {p} K={K}: corpus {self.med(b):.3f} vs one-voice {self.med(a):.3f}, gain {gap:+.3f} "
                              f"(Whisper {gw:+.3f}) -> {'CONFIRMED' if gap >= IDEA_GAP else 'not confirmed'} (needs >= {IDEA_GAP})")
-        singles = [n for n in self.rows if n.startswith(("km-", "km25-"))]
-        multi = [n for n in self.rows if n.startswith("rvq-") or n.startswith("sb-")]
+        nstreams = lambda n: (int(n.split("-L")[-1]) if n.startswith("rvq-") else len(n.split("-L")[-1].split("-"))
+                              if n.startswith("sb-") else 1)
+        singles = [n for n in self.rows if n.startswith(("km-", "km25-", "rvq-", "sb-")) and nstreams(n) == 1]
+        multi = [n for n in self.rows if n.startswith(("rvq-", "sb-")) and nstreams(n) > 1]
         if singles and multi:
             bs = min(singles, key=self.med)
             for m in sorted(multi):
                 gap = self.med(bs) - self.med(m)
                 L.append(f"- Idea 1, {m} vs best single stream {bs} ({self.med(bs):.3f}): {self.med(m):.3f}, gain {gap:+.3f} -> "
                          f"{'CONFIRMED' if gap >= IDEA_GAP else 'not confirmed'} (needs >= {IDEA_GAP})")
+        L += ["", "Notes: Whisper means are dominated by a few pieces where Whisper's text of the original is near empty or "
+              "hallucinated (WER > 1 there); read medians. Corpus k-means = 6.6 h of 48 DuplexChat training shards (same "
+              "domain as the test pieces); one-voice k-means = all of LJSpeech (read speech, 24 h). Idea 1 compares every "
+              "multi-stream row with the best single-stream row (km, km25, rvq-L1, single-layer sb)."]
         (W / "channel.md").write_text("\n".join(L) + "\n")
         try:
             sh(f"aws s3 cp {W}/channel.md {S3}/a/channel.md --only-show-errors && aws s3 cp {W}/channel.json {S3}/a/channel.json --only-show-errors")
