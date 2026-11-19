@@ -401,7 +401,7 @@ def cmd_gen(a) -> None:
         """coding: 'stream' = the training-identical codes stored in the pack's codes.npz (prompt_stream_NNN);
         'chunked' = the prompt audio segmented exactly as dy35_utt.py (voice activity + speakers clustered within
         the prompt; every utterance and every gap chunk encoded alone); 'one' = the whole prompt as one chunk."""
-        fs = sorted(Path(folder).glob(pat))
+        fs = sorted(Path(folder).glob(pat))[: a.limit or None]
         names = [f.stem.split("_", 1)[1] for f in fs]
         if coding == "stream":
             cz = np.load(Path(folder) / "codes.npz")
@@ -582,6 +582,7 @@ def main() -> None:
     g.add_argument("--t10", default="/data/t/pack32")
     g.add_argument("--t10x", default="/data/t/pack32x")
     g.add_argument("--bank", default="/data/t/bank.pt")
+    g.add_argument("--limit", type=int, default=0, help="test: only the first N prompts of each pack")
     g.add_argument("--modes", default="t-pred,t-oracle,t-swap,t-near,b-turn,t-t10,t-t10-x")
     s.choices["bank"].add_argument("--bank", default="/data/t/bank.pt")
     s.choices["bce"].add_argument("--b-units", default="/opt/dlami/nvme/b_held")
