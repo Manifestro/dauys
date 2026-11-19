@@ -16,7 +16,7 @@ until [[ $(aws s3 ls $S3/utt/ | grep -c '\.npz$') -ge 123 ]]; do sleep 30; done
 aws s3 sync $S3/utt/ $U/ --only-show-errors
 echo "utt files: $(ls $U/*.npz | wc -l)  $(date -u +%H:%M)"
 while pgrep -f "[d]y35_check.py --utt /nonexist" >/dev/null; do sleep 20; done  # items 3, 4 write the same json
-python "$repo/scripts/dy35_check.py" --utt $U --out /data/t/check --only 1,2,5 || { echo "CHECKLIST CRASHED"; exit 1; }
+python "$repo/scripts/dy35_check.py" --utt $U --out /data/t/check --only ${ITEMS:-1,2,5} || { echo "CHECKLIST CRASHED"; exit 1; }
 aws s3 cp /data/t/check/checklist.md $S3/checklist.md --only-show-errors
 aws s3 cp /data/t/check/checklist.json $S3/checklist.json --only-show-errors
 python -c "import json,sys; R=json.load(open('/data/t/check/checklist.json')); sys.exit(0 if len(R)==5 and all(v.get('pass') for v in R.values()) else 1)" \

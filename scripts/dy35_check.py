@@ -481,7 +481,7 @@ def main() -> None:
         res = train(args, tr2, va, cfg, out / "dry", log=log)
         sps = [json.loads(l)["steps_per_s"] for l in lines if l.startswith('{"step"') and "steps_per_s" in l]
         r["dry_run"] = {"steps": 200, "train_shards": 2, "val": res["history"], "steps_per_s_last": sps[-3:],
-                        "acc16_logged": [json.loads(l)["acc16"] for l in lines if l.startswith('{"step"') and "acc16" in l][-4:]}
+                        "acc16_logged": [json.loads(l)["acc16"] for l in lines if l.startswith('{"step"') and "steps_per_s" in l][-4:]}
         r["pass"] = r["overfit"]["ce_fell"] and r["overfit"]["nce_fell"] and len(res["history"]) >= 2
         R["5_overfit_dry"] = r
         save()
