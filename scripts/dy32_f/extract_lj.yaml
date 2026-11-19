@@ -1,0 +1,20 @@
+# DY-32 F: full-rate six-stream SpidR 2.0 codes (layers 5-10) of LJ Speech for the unit vocoder (gslm2 template).
+checkpoint: /opt/dlami/nvme/w/ckpt/spidr/final.pt
+model_type: spidr
+layers: [5, 6, 7, 8, 9, 10]
+clustering: codes
+vocab_size: [256, 256, 256, 256, 256, 256]
+deduplicate: false
+cross_stream_deduplicate: false
+chunk_size: 2048
+overwrite_folder: true
+targets:
+  unit_vocoder:
+    manifests:
+    - /opt/dlami/nvme/w/ljprep/manifests/ljspeech_train.csv
+    - /opt/dlami/nvme/w/ljprep/manifests/ljspeech_valid.csv
+    - /opt/dlami/nvme/w/ljprep/manifests/ljspeech_test.csv
+output_folder: /opt/dlami/nvme/w/units/lj
+chunk: true
+batch_size: 16
+encoder_dtype: float32

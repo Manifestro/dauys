@@ -1,0 +1,19 @@
+# DY-32 F: unit HiFi-GAN on full-rate six-stream LJ Speech codes (gslm2 template; one GPU, bf16).
+workdir: /opt/dlami/nvme/w/runs/vocoder
+train_manifest: /opt/dlami/nvme/w/units/lj/5/unit_vocoder/ljspeech_train.jsonl
+val_manifest: /opt/dlami/nvme/w/units/lj/5/unit_vocoder/ljspeech_valid.jsonl
+n_units: [256, 256, 256, 256, 256, 256]
+agg_type: concat_lin
+max_epochs: 2000
+seed: 1234
+lr: 0.0002
+betas: [0.8, 0.99]
+gamma: 0.999
+batch_size: 64
+segment_size: 8960
+units_hop_size: 320
+dtype: bfloat16
+log_interval: 100
+val_interval: 4000
+max_steps: 500000
+num_workers: 7

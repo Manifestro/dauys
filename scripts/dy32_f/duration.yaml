@@ -1,0 +1,32 @@
+# DY-32 F: duration predictor (gslm2 template) on full-rate codes of Libri-Light small; validation on held-out small segments.
+train_dirs:
+- /opt/dlami/nvme/w/units/ll/5/duration_predictor
+valid_dirs:
+- /opt/dlami/nvme/w/units/ll/5/duration_predictor
+train_file_pattern: 'small_segmented_60s_partial*.txt'
+valid_file_pattern: 'small_segmented_60s_dev_partial*.txt'
+output_dir: /opt/dlami/nvme/w/runs/duration
+vocab_size: 256
+num_streams: 6
+max_duration: 50
+log_duration: true
+loss_type: classification
+num_classes: 50
+embed_dim: 192
+hidden_dim: 192
+num_layers: 8
+dropout: 0.1
+encoder_type: conformer
+attention_heads: 4
+conv_kernel: 17
+ffn_expansion: 4
+batch_size: 64
+max_seq_len: 2048
+num_workers: 4
+max_steps: 25000
+lr: 3e-3
+weight_decay: 1e-5
+warmup_steps: 1000
+log_interval: 100
+val_interval: 1000
+seed: 0

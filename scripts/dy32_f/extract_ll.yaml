@@ -1,0 +1,20 @@
+# DY-32 F: full-rate six-stream codes of Libri-Light small (60 s VAD segments) for the duration predictor.
+checkpoint: /opt/dlami/nvme/w/ckpt/spidr/final.pt
+model_type: spidr
+layers: [5, 6, 7, 8, 9, 10]
+clustering: codes
+vocab_size: [256, 256, 256, 256, 256, 256]
+deduplicate: false
+cross_stream_deduplicate: false
+chunk_size: 2048
+overwrite_folder: true
+targets:
+  duration_predictor:
+    manifests:
+    - /opt/dlami/nvme/w/ll/manifests/small_segmented_60s.csv
+    - /opt/dlami/nvme/w/ll/manifests/small_segmented_60s_dev.csv
+distributed_port: 58556
+output_folder: /opt/dlami/nvme/w/units/ll
+chunk: true
+batch_size: 16
+encoder_dtype: float32
