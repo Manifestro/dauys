@@ -139,6 +139,28 @@ def batches(P: Pairs, rng, budget: int, maxb: int):
     return [P.batch(x) for x in out if len(x) >= 8]
 
 
+def same_spk_top1(sim: np.ndarray, spk: np.ndarray) -> tuple[float, float]:
+    """Query = converted copy (column), candidates = originals (rows) of the same source speaker only; top-1 accuracy
+    and the mean number of candidates."""
+    sim = np.asarray(sim)
+    ok, nc = [], []
+    for j in range(sim.shape[1]):
+        c = np.flatnonzero(spk == spk[j])
+        ok.append(c[sim[c, j].argmax()] == j)
+        nc.append(len(c))
+    return float(np.mean(ok)), float(np.mean(nc))
+
+
+def hist_mat(A: list, B: list) -> np.ndarray:
+    def H(xs):
+        h = np.zeros((len(xs), K), np.float32)
+        for i, x in enumerate(xs):
+            h[i] = np.bincount(x, minlength=K)
+        return h / np.linalg.norm(h, axis=1, keepdims=True)
+
+    return H(A) @ H(B).T
+
+
 def hist_retrieval(A: list, B: list) -> float:
     def H(xs):
         h = np.zeros((len(xs), K), np.float32)
@@ -429,6 +451,9 @@ def cmd_checks(a) -> None:
     res["ii_xvoice_top1"] = float(((s.argmax(1) == y).float().mean() + (s.argmax(0) == y).float().mean()) / 2)
     res["ii_hist_baseline"] = hist_retrieval([P.a(i) for i in vidx], [P.b(i) for i in vidx])
     res["ii_n"] = len(vidx)
+    spk = T["spk"][P.uid[vidx]]
+    res["ii_same_spk_top1"], res["ii_same_spk_candidates"] = same_spk_top1(s.cpu().numpy(), spk)
+    res["ii_same_spk_hist_baseline"], _ = same_spk_top1(hist_mat([P.a(i) for i in vidx], [P.b(i) for i in vidx]), spk)
     held = np.flatnonzero(T["held"])
     zD = z_rows(model, T, held)
     res["iii_D"] = probe(zD, T, held)
