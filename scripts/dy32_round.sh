@@ -14,6 +14,8 @@ dirs=(); for d in $X/*/; do [[ -d $d ]] && dirs+=("trk-$(basename $d)=$d"); done
 if (( ${#dirs[@]} )); then
   python "$repo/scripts/dy32_channel.py" measure --skip-existing --dirs "${dirs[@]}" || echo "RESYNTH MEASURE FAILED"
 fi
-python "$repo/scripts/dy32_eval.py" --round $R ${HF:+--hf} --extra anchor-real=/data/dy32/a/anchor_real || echo "EVAL FAILED"
+python "$repo/scripts/dy32_eval.py" --round $R ${HF:+--hf} --extra anchor-real=/data/dy32/a/anchor_real \
+  || { echo "EVAL FAILED once (retry in 60 s; GPU is shared)"; sleep 60; \
+       python "$repo/scripts/dy32_eval.py" --round $R ${HF:+--hf} --extra anchor-real=/data/dy32/a/anchor_real || echo "EVAL FAILED"; }
 python "$repo/scripts/dy32_listen.py" --round $R ${HF:+--hf} || echo "LISTEN FAILED"
 echo "ROUND $R DONE $(date -u +%H:%M) UTC"

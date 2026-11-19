@@ -241,7 +241,7 @@ def main() -> None:
                  f"{s['words_in_heldout_vocab']:.3f} | {s['gpt2'].get('median_logppl', float('nan')):.2f} | {s['rep4_words']:.3f} | "
                  f"{s['words_median']:.0f} | {s['empty_share']:.2f} | {s['gen_seconds_median']:.1f} |")
     pairs_ = [("idea 2 downstream (one voice vs corpus codes)", "g-lj", "b"), ("idea 1 downstream (several streams vs one)", "c", "b"),
-              ("idea 3 (continuous vs discrete input)", "d-cont", "d-disc")]
+              ("idea 3 (continuous vs discrete input)", "d-cont", "d-disc"), ("codebook size (8000 vs 2000)", "h-k8000", "b")]
     pairs_ += [(f"{t} (early)", x + "-early", y + "-early") for t, x, y in pairs_]
     fo = summary["folders"]
     cmp_ = []
