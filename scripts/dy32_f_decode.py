@@ -389,6 +389,28 @@ def round_(args) -> None:
     print("ROUND DONE", step, [r for _, r in dests], flush=True)
 
 
+def serve(args) -> None:
+    """Run a round whenever a new vocoder checkpoint, a first duration predictor or new track E units appear.
+    WER is measured only when the vocoder step changed."""
+    last = {}
+    while True:
+        try:
+            voc = latest_vocoder()
+            dur = best_duration()
+            e = sorted(l for l in s3_ls(f"{S3}/e/") if "/gen_units/" in l or "/resynth_units/" in l)
+            e_sig = sum(hash(x) for x in e)
+            sig = {"step": int(voc.name.split("-")[1]), "dur": dur is not None, "e": e_sig}
+            if sig != last:
+                a = argparse.Namespace(vocoder=str(voc), duration=None, no_wer=sig["step"] == last.get("step"),
+                                       only=None)
+                print(time.strftime("%H:%M:%S", time.gmtime()), "round for", sig, flush=True)
+                round_(a)
+                last = sig
+        except Exception as ex:  # keep serving
+            print("serve error:", repr(ex)[:500], flush=True)
+        time.sleep(60)
+
+
 # ---------------------------------------------------------------- Airon tracking of the gslm2 trainers
 def track(args) -> None:
     import airon
@@ -448,6 +470,7 @@ def main() -> None:
     a = sp.add_parser("transcribe"); a.add_argument("--wavs", nargs="+", type=Path); a.add_argument("--out", type=Path)
     a = sp.add_parser("round"); a.add_argument("--vocoder"); a.add_argument("--duration"); a.add_argument("--no-wer", action="store_true")
     a.add_argument("--only", nargs="*", help="only these gen variants")
+    sp.add_parser("serve")
     a = sp.add_parser("track"); a.add_argument("--once", action="store_true")
     a.add_argument("--key", default="vocoder", choices=["vocoder", "duration"])
     args = p.parse_args()
@@ -463,6 +486,8 @@ def main() -> None:
         json.dump(transcribe(args.wavs), open(args.out, "w"), indent=1)
     elif args.cmd == "round":
         round_(args)
+    elif args.cmd == "serve":
+        serve(args)
     elif args.cmd == "track":
         track(args)
 

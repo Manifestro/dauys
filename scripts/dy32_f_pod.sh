@@ -48,7 +48,7 @@ EOF
   gslm2-extract-units --config $C/extract_ll.yaml && mark ll ;;
 duration)
   envs; gslm2-train-duration $C/duration.yaml && mark duration ;;
-serve)  # one decoding round every ~35 min with the newest vocoder checkpoint (S3 outputs/dauys/dy32/{resynth,gen,f})
-  envs; while true; do python $R/scripts/dy32_f_decode.py round; sleep 2100; done ;;
+serve)  # a decoding round on every new vocoder checkpoint / new track E units (S3 outputs/dauys/dy32/{resynth,gen,f})
+  envs; python $R/scripts/dy32_f_decode.py serve ;;
 *) echo "stage?"; exit 1 ;;
 esac
