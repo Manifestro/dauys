@@ -215,8 +215,8 @@ def cmd_p1(a) -> None:
             zh = m.zhat(h)
             C = torch.stack([torch.stack([Z[u]] + [Z[d] for d in ds]) for u, ds in S])
             s = torch.einsum("bd,bcd->bc", zh, C)
-            hit += int((s.argmax(1) == 0).sum())
-            ranks += (s > s[:, :1]).sum(1).cpu().tolist()
+            hit += int((s[:, 0] > s[:, 1:].max(1).values).sum())  # strict: a tie is a miss
+            ranks += (s[:, 1:] >= s[:, :1]).sum(1).cpu().tolist()
         return hit / len(sub), len(sub), ranks
 
     acc, n, ranks = head_acc(A, HEARD)
@@ -254,7 +254,7 @@ def cmd_p1(a) -> None:
         for i, l in enumerate(lens):
             sc.append(float(lp[i, HEARD - 1 : HEARD - 1 + l].mean()))
         sc = np.array(sc).reshape(len(S), 16)
-        hit += int((sc.argmax(1) == 0).sum())
+        hit += int((sc[:, 0] > sc[:, 1:].max(1)).sum())
     res["model_b_15s"] = {"acc16": hit / len(A), "n": len(A), "ci95": wilson(hit, len(A)), "b_step": bck.get("step")}
     print(json.dumps(res["model_b_15s"]), flush=True)
     del bm
@@ -273,7 +273,7 @@ def cmd_p1(a) -> None:
         fs = ch.feats([w.astype(np.float32) / 32768.0 for w in wavs], batch=32)
         mu = torch.stack([F.normalize(f.mean(0), dim=0) for f in fs]).view(len(S), 17, -1)
         s = torch.einsum("bd,bcd->bc", mu[:, 0], mu[:, 1:])
-        hit += int((s.argmax(1) == 0).sum())
+        hit += int((s[:, 0] > s[:, 1:].max(1).values).sum())
     res["acoustic_15s"] = {"acc16": hit / len(A), "n": len(A), "ci95": wilson(hit, len(A)),
                            "rule": "cosine of mean WavLM-L6 feature (candidate alone) to mean over the last 2 s heard (alone)"}
     res["chance"] = 1 / 16

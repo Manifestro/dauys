@@ -127,7 +127,7 @@ def nce(zh: torch.Tensor, cand: torch.Tensor) -> tuple[torch.Tensor, torch.Tenso
     """zh [A, 64], cand [A, C, 64] with the true one at index 0 -> InfoNCE loss, accuracy among the first 16."""
     lg = torch.einsum("ad,acd->ac", zh.float(), cand.float()) / TAU
     loss = F.cross_entropy(lg, torch.zeros(len(lg), dtype=torch.long, device=lg.device))
-    acc = (lg[:, :16].argmax(1) == 0).float().mean()
+    acc = (lg[:, 0] > lg[:, 1:16].max(1).values).float().mean()  # strict: a tie is a miss
     return loss, acc
 
 

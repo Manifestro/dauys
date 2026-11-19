@@ -170,7 +170,7 @@ def synth(kind: str, seed: int, n_ep: int = 40, ep_frames: int = 30000) -> Corpu
 
 
 def small_args(steps: int, out: str) -> SimpleNamespace:
-    return SimpleNamespace(steps=steps, batch=32, micro=16, lr=1e-3, warmup=50, val_every=steps, val_windows=128,
+    return SimpleNamespace(steps=steps, batch=32, micro=16, lr=3e-4, warmup=50, val_every=steps, val_windows=128,
                            log_every=50, ema=0.999, seed=1, pred_from=10**9, chance_step=10**9, tracking="off",
                            experiment="", name="dy35-check", stop_at=0, no_last=True, limit=0, out=out)
 

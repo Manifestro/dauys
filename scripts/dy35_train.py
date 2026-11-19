@@ -293,6 +293,7 @@ def validate(model, enc, vbatches: list[dict], dev) -> dict:
     n_all = n_u = 0
     hit = n_a = 0
     hit32 = 0
+    zcos = 0.0
     for vb in vbatches:
         ids = torch.from_numpy(vb["ids"]).to(dev)
         x, y = ids[:, :-1], ids[:, 1:]
@@ -311,8 +312,10 @@ def validate(model, enc, vbatches: list[dict], dev) -> dict:
                 ha, cand = anchor_states(vb, h)
                 zh = model.zhat(ha)
                 s = torch.einsum("ad,acd->ac", zh.float(), Z[cand].float())
-                hit += int((s[:, :16].argmax(1) == 0).sum())
-                hit32 += int((s.argmax(1) == 0).sum())
+                hit += int((s[:, 0] > s[:, 1:16].max(1).values).sum())  # strict: a tie is a miss
+                hit32 += int((s[:, 0] > s[:, 1:].max(1).values).sum())
+                zc = F.normalize(Z[cand][:, :16].float(), dim=-1)
+                zcos += float((torch.einsum("acd,aed->ace", zc, zc).sum((1, 2)) - 16).sum() / 240)
                 n_a += len(zh)
             nb = {**vb, "slots": [(b, u, r, 2 if a < 0 else 1, a) for b, u, r, m, a in vb["slots"]]}
             zp, hp = thought_tables(nb, Z, zh_slot, dev)
@@ -327,7 +330,8 @@ def validate(model, enc, vbatches: list[dict], dev) -> dict:
     model.train()
     enc.train()
     out = {k: v / (n_all if k.startswith("ce_") else max(n_u, 1)) for k, v in tot.items()}
-    out.update({"acc16": hit / max(n_a, 1), "acc32": hit32 / max(n_a, 1), "anchors": n_a})
+    out.update({"acc16": hit / max(n_a, 1), "acc32": hit32 / max(n_a, 1), "anchors": n_a,
+                "z_cos_among_16": zcos / max(n_a, 1)})
     return out
 
 
