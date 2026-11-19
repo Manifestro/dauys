@@ -170,6 +170,7 @@ def main() -> None:
     p.add_argument("--only", default="", help="comma list of folder names (default: all complete folders in S3 gen/)")
     p.add_argument("--extra", nargs="*", default=[], help="name=folder of XX.wav evaluated as well (e.g. an anchor)")
     p.add_argument("--hf", action="store_true")
+    p.add_argument("--skip", default="", help="comma list of folder names left out")
     a = p.parse_args()
     device = torch.device("cuda")
     E = W / "eval" / a.round
@@ -180,6 +181,7 @@ def main() -> None:
     names = sorted(x.name for x in G.iterdir() if x.is_dir())
     if a.only:
         names = [n for n in names if n in a.only.split(",")]
+    names = [n for n in names if n not in a.skip.split(",") and n.removesuffix("-x") not in a.skip.split(",")]
     folders = {}
     for n in names:
         miss = [i for i in range(N) if not (G / n / f"{i:02d}.wav").exists()]

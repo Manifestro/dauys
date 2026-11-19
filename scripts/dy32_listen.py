@@ -62,6 +62,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--round", default="early")
     p.add_argument("--hf", action="store_true")
+    p.add_argument("--skip", default="")
     a = p.parse_args()
     out = W / "listen" / a.round
     out.mkdir(parents=True, exist_ok=True)
@@ -74,7 +75,7 @@ def main() -> None:
          "Channels: `<name>__XX` = the original 10 s piece, beep, then the same piece through that channel (pieces 00-02). "
          "Texts below come from the letters recogniser on audio.", "", "## Continuations (gen/)", ""]
     tab = json.loads((W / "channel.json").read_text()) if (W / "channel.json").exists() else {}
-    for d in sorted(x for x in G.iterdir() if x.is_dir() and not x.name.endswith("-x")) if G.exists() else []:
+    for d in sorted(x for x in G.iterdir() if x.is_dir() and not x.name.endswith("-x") and x.name not in a.skip.split(",")) if G.exists() else []:
         if not complete(d, N_GEN):
             L += [f"- **{d.name}**: incomplete, skipped", ""]
             continue
