@@ -14,7 +14,10 @@ W=/data/dy32/a
 for x in b-t10 b-t10-x; do aws s3 sync $B/dy32/gen/$x/ $W/gen/$x/ --only-show-errors; done
 python "$repo/scripts/dy32_eval.py" --round $R --hf --only "$F" --extra anchor-real=$W/anchor_real || { echo "EVAL FAILED"; exit 1; }
 python "$repo/scripts/dy34_eval.py" late --round $R --folders "$F" || echo "LATE FAILED"
-python "$repo/scripts/dy32_listen.py" --round $R --only "$F" --ids 00,01,04,05 --no-resynth || echo "LISTEN FAILED"
+[[ -s /data/dy34/eval/listen_ids.json ]] || python "$repo/scripts/dy34_listen.py" select --out /data/dy34/eval/listen_ids.json
+python "$repo/scripts/dy34_listen.py" build --ids /data/dy34/eval/listen_ids.json --folders b-t10,b-g$w \
+  --labels "unguided,guided w=$w" --out $W/eval/$R/listen && aws s3 sync $W/eval/$R/listen/ $DY_S3/eval/$R/listen/ --only-show-errors \
+  || echo "LISTEN FAILED"
 python - <<EOF || echo "HF FAILED"
 import os
 from huggingface_hub import HfApi
