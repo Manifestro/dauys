@@ -307,13 +307,8 @@ def round_(args) -> None:
     # 2) track E unit sequences
     tmp = W / "e_in"
     tmp.mkdir(exist_ok=True)
-    keys = s3_ls(f"{S3}/e/")
-    for k in keys:
-        rel = k.split("outputs/dauys/dy32/e/", 1)[1]
-        if rel.startswith(("resynth_units/", "gen_units/", "prompt_units/fullrate/")) and not rel.endswith("all.jsonl"):
-            dst = tmp / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            sh(f"aws s3 cp {BUCKET}/{k} {dst} --only-show-errors")
+    for sub in ("resynth_units", "gen_units", "prompt_units/fullrate"):
+        sh(f"aws s3 sync {S3}/e/{sub}/ {tmp / sub}/ --only-show-errors --exclude '*all.jsonl'", check=False)
 
     def cat(files: list[Path], name: str) -> Path:
         m = tmp / f"_{name}.jsonl"
