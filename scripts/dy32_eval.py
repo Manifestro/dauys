@@ -93,6 +93,37 @@ def base(device) -> dict:
     return b
 
 
+def speech_seconds(w: np.ndarray) -> float:
+    """Simple energy VAD: 20 ms frames whose RMS is above -50 dBFS and within 30 dB of the clip's 95th-percentile frame."""
+    f = 320
+    n = len(w) // f
+    if n == 0:
+        return 0.0
+    db = 20 * np.log10(np.sqrt((w[: n * f].reshape(n, f).astype(np.float64) ** 2).mean(1)) + 1e-10)
+    thr = max(-50.0, float(np.percentile(db, 95)) - 30.0)
+    return float((db > thr).sum() * f / SR)
+
+
+def derange(n: int, seed: int = 1234) -> tuple[np.ndarray, np.ndarray]:
+    """j[i] != i (another prompt's generation) and k[i] not in {i, j[i]} (another piece's real), fixed seed."""
+    rng = np.random.default_rng(seed)
+    while True:
+        j = rng.permutation(n)
+        if (j != np.arange(n)).all():
+            break
+    k = np.array([rng.choice([x for x in range(n) if x != i and x != j[i]]) for i in range(n)])
+    return j, k
+
+
+def self_pairs(j, prompts: list[str], g: list[str], jj: np.ndarray, min_words: int) -> dict:
+    """Dself: the model's text for prompt i vs its own text for prompt jj[i], judged against prompt i."""
+    idx = [i for i in range(len(g)) if len(g[i].split()) >= max(min_words, 1) and len(g[jj[i]].split()) >= max(min_words, 1)]
+    if not idx:
+        return {"D": float("nan"), "ci95": float("nan"), "n": 0, "skipped": len(g), "min_words": min_words}
+    r = j.pairs([prompts[i] for i in idx], [g[i] for i in idx], [g[jj[i]] for i in idx])
+    return {**strip_p(r), "skipped": len(g) - len(idx), "min_words": min_words}
+
+
 def transcribe(device, folders: dict[str, Path]) -> dict:
     import torch
     from transformers import pipeline
@@ -112,7 +143,8 @@ def transcribe(device, folders: dict[str, Path]) -> dict:
                                  generate_kwargs={"language": "en", "task": "transcribe"})):
             wt[i] = r["text"].strip()
         out[name] = {"gen": [tx(x) for x in ids], "gen_rep4_letters": float(np.mean([rep4(x) for x in ids])),
-                     "whisper": wt, "seconds": [round(len(w) / SR, 2) for w in waves]}
+                     "whisper": wt, "seconds": [round(len(w) / SR, 2) for w in waves],
+                     "speech_seconds": [round(speech_seconds(w), 2) for w in waves]}
         log("transcribed", name)
     del L, asr
     cleanup()
@@ -164,6 +196,7 @@ def main() -> None:
     prompt_t, real_t, floor_t = b["prompt"], b["real"], b["floor"]
     oi = other_index(N)
     other_t = [real_t[i] for i in oi]
+    dj, dk = derange(N)
     vocab = set(b["vocab"])
 
     j = Judge(device)
@@ -176,7 +209,10 @@ def main() -> None:
     D = {}
     for n in folders:
         g = tr[n]["gen"]
-        D[n] = {"Dr": j.pairs(prompt_t, real_t, g), "Dc": j.pairs(prompt_t, g, other_t)}
+        D[n] = {"Dr": j.pairs(prompt_t, real_t, g), "Dc": j.pairs(prompt_t, g, other_t),
+                "Dc_mis": j.pairs(prompt_t, [g[x] for x in dj], [real_t[x] for x in dk])}
+        D[n]["Dself"] = self_pairs(j, prompt_t, g, dj, 1)
+        D[n]["Dself_5w"] = self_pairs(j, prompt_t, g, dj, 5)
         log("JUDGE", n, json.dumps({k: strip_p(v) for k, v in D[n].items()}))
     del j
     cleanup()
@@ -202,6 +238,8 @@ def main() -> None:
              "words_median": float(np.median([len(t.split()) for t in g])), "empty_share": float(np.mean([not t for t in g])),
              "rep4_words": float(np.mean([word_rep4(t) for t in g])), "rep4_letters": tr[n]["gen_rep4_letters"],
              "gpt2": refs["summary"].get(n, {}), "gen_seconds_median": float(np.median(tr[n]["seconds"])),
+             "speech_seconds_median": float(np.median(tr[n]["speech_seconds"])),
+             "whisper_words_median": float(np.median([len(t.split()) for t in tr[n]["whisper"]])),
              "whisper_words_in_heldout_vocab": in_vocab_share([" ".join(x for x in t.lower().split()) for t in tr[n]["whisper"]], vocab),
              "info": info}
         summary["folders"][n] = s
@@ -235,11 +273,21 @@ def main() -> None:
          f"Real continuation: in-vocab {summary['real']['words_in_heldout_vocab']:.3f}, GPT-2 logppl "
          f"{summary['real'].get('median_logppl', float('nan')):.2f}, rep4 words {summary['real']['rep4_words']:.3f}. "
          f"Floor: GPT-2 logppl {summary['floor'].get('median_logppl', float('nan')):.2f}.", "",
-         "| folder | Dc | Dr | reading | in-vocab | GPT-2 logppl | rep4 words | words median | empty | gen s |", "|---|---|---|---|---|---|---|---|---|---|"]
+         "Added controls (same judge/template/both orders; derangement seed 1234): Dc_mis = another prompt's generation vs a third "
+         "piece's real, judged against prompt i (≈ Dc means the judge prefers the model's style, not its relation to the prompt; "
+         "≈0.5 means Dc reflects the prompt). Dself = the model's text for prompt i vs its own text for another prompt (style "
+         "identical on both sides; > 0.5 = relation to the prompt); pairs with an empty text skipped (n = pairs used); Dself5 = "
+         "only pairs with >= 5 words on both sides. Speech s = energy-VAD seconds of speech in the continuation.", "",
+         "| folder | Dc | Dr | reading | Dc_mis | Dself (n) | Dself5 (n) | in-vocab | GPT-2 logppl | rep4 words | words median (letters / Whisper) | empty | speech s / gen s |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for n, s in summary["folders"].items():
-        L.append(f"| {n} | {s['judge']['Dc']['D']:.2f} ± {s['judge']['Dc']['ci95']:.2f} | {s['judge']['Dr']['D']:.2f} | {s['verdict']['verdict']} | "
+        jd = s["judge"]
+        L.append(f"| {n} | {jd['Dc']['D']:.2f} ± {jd['Dc']['ci95']:.2f} | {jd['Dr']['D']:.2f} | {s['verdict']['verdict']} | "
+                 f"{jd['Dc_mis']['D']:.2f} | {jd['Dself']['D']:.2f} ± {jd['Dself']['ci95']:.2f} ({jd['Dself']['n']}) | "
+                 f"{jd['Dself_5w']['D']:.2f} ({jd['Dself_5w']['n']}) | "
                  f"{s['words_in_heldout_vocab']:.3f} | {s['gpt2'].get('median_logppl', float('nan')):.2f} | {s['rep4_words']:.3f} | "
-                 f"{s['words_median']:.0f} | {s['empty_share']:.2f} | {s['gen_seconds_median']:.1f} |")
+                 f"{s['words_median']:.0f} / {s['whisper_words_median']:.0f} | {s['empty_share']:.2f} | "
+                 f"{s['speech_seconds_median']:.1f} / {s['gen_seconds_median']:.1f} |")
     pairs_ = [("idea 2 downstream (one voice vs corpus codes)", "g-lj", "b"), ("idea 1 downstream (several streams vs one)", "c", "b"),
               ("idea 3 (continuous vs discrete input)", "d-cont", "d-disc"), ("codebook size (8000 vs 2000)", "h-k8000", "b")]
     pairs_ += [(f"{t} (early)", x + "-early", y + "-early") for t, x, y in pairs_]
