@@ -36,7 +36,7 @@ ids = [int(x) for x in "$IDS".split(",")]
 assert sorted(r["ids"]) == sorted(ids), ("listening ids differ from the fixed set", r["ids"], ids)
 EOF
 [[ $? == 0 ]] && python "$repo/scripts/dy34_listen.py" build --ids /data/dy34/eval/listen_ids.json \
-  --folders b-t10,s-t10${G4:+,$G4} --out $E/listen || echo "LISTEN FAILED"
+  --folders b-t10,s-t10${G4:+,$G4} --out $E/listen && python "$repo/scripts/dy33_extras.py" mark_listen --round $R || echo "LISTEN FAILED"
 for f in ref.json eval_base.json eval_base_x.json eval_controls.json; do
   [[ -s $W/$f ]] && aws s3 cp $W/$f $B/dy33/eval/cache/$f --only-show-errors
 done

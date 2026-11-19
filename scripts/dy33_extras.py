@@ -30,6 +30,12 @@ from dy34_extras import FUNCTION_WORDS, copy_table
 W = Path("/data/dy32/a")
 LATE = Path("/data/dy34/late")
 TH_ABS, TH_GAP = 0.65, 0.05
+UNVERIFIED = {"s-g4": "unverified implementation: the w = 0 check failed (12 of 50 pieces identical to S1, 63 % code "
+                      "agreement, distributions within 6e-8)"}
+
+
+def tag(n: str) -> str:
+    return f"{n} (unverified implementation)" if n.split(":")[0] in UNVERIFIED else n
 DECLARED = {"S1 (temperature 1.0)": ("s-t10", "b-t10"), "S2 (repeat-aware sharpening)": ("s-ra08", "b-ra08")}
 
 
@@ -145,7 +151,10 @@ def summary(a) -> None:
                "candidates": [{"sampling": t[0], "folder": t[1], "Dself": t[2], "b_folder": t[3], "b_Dself": t[4]} for t in th]}
     out = {"round": a.round, "time_utc": time.strftime("%Y-%m-%d %H:%M"), "threshold": thr, "table": rows,
            "controls": S["controls"], "copy": X.get("copy"), "paired": X.get("paired"), "paired_question": X.get("paired_question"),
-           "infos": {n: s.get("info") for n, s in fo.items()}}
+           "infos": {n: s.get("info") for n, s in fo.items()},
+           "unverified": {n: v for n, v in UNVERIFIED.items() if n in fo}}
+    for n in out["unverified"]:
+        rows[n]["status"] = UNVERIFIED[n]
     (E / "summary.json").write_text(json.dumps(out, indent=2, ensure_ascii=False))
     ci = lambda d: f"{d['D']:.2f} ± {d['ci95']:.2f} ({d['n']})"
     L = [f"# DY-33 final evaluation ({out['time_utc']} UTC)", "",
@@ -162,10 +171,12 @@ def summary(a) -> None:
     for n, r in rows.items():
         lt = ci(r["late"]["late_Dself"]) if r["late"] else "-"
         ec = r["empty_counts"]
-        L.append(f"| {n} | {r['scope']} | {ci(r['Dself'])} | {ci(r['Dself_5w'])} | {lt} | {r['Dc_mis']['D']:.2f} ± {r['Dc_mis']['ci95']:.2f} | "
+        L.append(f"| {tag(n)} | {r['scope']} | {ci(r['Dself'])} | {ci(r['Dself_5w'])} | {lt} | {r['Dc_mis']['D']:.2f} ± {r['Dc_mis']['ci95']:.2f} | "
                  f"{r['Dc_first50']['D']:.2f} | {r['Dr_first50']['D']:.2f} | {r['words_median_letters']:.0f} / {r['words_median_whisper']:.0f} | "
                  f"{r['speech_seconds_median']:.1f} | {r['in_vocab_first50']:.3f} | "
                  + (f"{ec['letters']} / {ec['whisper']}" if ec else "-") + " |")
+    for n, v in out["unverified"].items():
+        L += ["", f"**{n}: {v}.** Its numbers are reported as measured."]
     c = S["controls"]
     L += ["", f"Judge controls on real text (first 50): real vs another real {c['a_other_real']['D']}, vs shuffled chunks "
           f"{c['b_shuffled_chunks']['D']}, vs floor {c['c_floor']['D']}.", ""]
@@ -176,7 +187,7 @@ def summary(a) -> None:
             L += [f"### {rec} transcripts", "", "| folder | words own / other | content words own / other | 3-grams own / other | 4-grams own / other |",
                   "|---|---|---|---|---|"]
             for n, t in X["copy"][rec].items():
-                L.append(f"| {n} | " + " | ".join(f"{f(t[k]['own_prompt'])} / {f(t[k]['other_prompt'])}"
+                L.append(f"| {tag(n)} | " + " | ".join(f"{f(t[k]['own_prompt'])} / {f(t[k]['other_prompt'])}"
                                                   for k in ("words", "content_words", "3grams", "4grams")) + " |")
             L.append("")
     if X.get("paired"):
@@ -184,10 +195,26 @@ def summary(a) -> None:
               "| x vs y | part | D(x over y) ± 95% | n | skipped (empty) | mean P(x) |", "|---|---|---|---|---|---|"]
         for k, r in X["paired"].items():
             for part, d in r.items():
-                L.append(f"| {k.replace(':', ' vs ')} | {part} | {d['D']:.2f} ± {d['ci95']:.2f} | {d['n']} | {d['skipped_empty']} | {d['mean_p_real']:.3f} |")
+                L.append(f"| {tag(k.split(':')[0]) + ' vs ' + tag(k.split(':')[1])} | {part} | {d['D']:.2f} ± {d['ci95']:.2f} | {d['n']} | {d['skipped_empty']} | {d['mean_p_real']:.3f} |")
         L += ["", "Question: " + X.get("paired_question", ""), ""]
     (E / "summary.md").write_text("\n".join(L) + "\n")
     print("\n".join(L), flush=True)
+
+
+def mark_listen(a) -> None:
+    """Marks the unverified folders in the listening set (transcripts.json and listen.md)."""
+    d = W / "eval" / a.round / "listen"
+    tj = json.loads((d / "transcripts.json").read_text())
+    for item in tj.values():
+        for v in item.values():
+            if isinstance(v, dict) and v.get("folder") in UNVERIFIED:
+                v["status"] = UNVERIFIED[v["folder"]]
+    tj["_notes"] = {n: v for n, v in UNVERIFIED.items()}
+    (d / "transcripts.json").write_text(json.dumps(tj, indent=1, ensure_ascii=False))
+    md = (d / "listen.md").read_text()
+    for n, v in UNVERIFIED.items():
+        md = md.replace(f"({n}):**", f"({n}, {v}):**")
+    (d / "listen.md").write_text(md)
 
 
 def main() -> None:
@@ -197,10 +224,11 @@ def main() -> None:
     x.add_argument("--round", required=True)
     x.add_argument("--folders", required=True)
     x.add_argument("--pairs", default="")
-    x = s.add_parser("summary")
-    x.add_argument("--round", required=True)
+    for c in ("summary", "mark_listen"):
+        x = s.add_parser(c)
+        x.add_argument("--round", required=True)
     a = p.parse_args()
-    {"extras": extras, "summary": summary}[a.cmd](a)
+    {"extras": extras, "summary": summary, "mark_listen": mark_listen}[a.cmd](a)
 
 
 if __name__ == "__main__":
