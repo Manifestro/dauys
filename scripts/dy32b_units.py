@@ -31,14 +31,15 @@ WIN = 20 * SR
 CHUNK = 256  # windows converted to float per step
 
 
-def shard_codes(ch: Channel, cbs: list[Codebook], pieces: list[np.ndarray], half: bool) -> list[list[np.ndarray]]:
+def shard_codes(ch: Channel, cbs: list[Codebook], pieces: list[np.ndarray], half: bool,
+                batch: int = 32) -> list[list[np.ndarray]]:
     wins = [(k, i) for k, w in enumerate(pieces) for i in range(0, len(w), WIN)]
     per = [[[] for _ in pieces] for _ in cbs]
     for b in range(0, len(wins), CHUNK):
         part = wins[b : b + CHUNK]
         x = [pieces[k][i : i + WIN].astype(np.float32) / 32768.0 for k, i in part]
         with torch.autocast("cuda", dtype=torch.float16, enabled=half):
-            fs = ch.feats(x, batch=32)
+            fs = ch.feats(x, batch=batch)
         for (k, _), f in zip(part, fs):
             for c, cb in enumerate(cbs):
                 per[c][k].append(cb.encode(f.float()).cpu().numpy())
@@ -104,7 +105,7 @@ def cmd_run(a) -> None:
         s, pieces, secs = nxt.result()
         wait = time.time() - t0
         nxt = dl.submit(fetch, a.src, mine[j + 1], work) if j + 1 < len(mine) else None
-        toks = shard_codes(ch, cbs, pieces, a.half)
+        toks = shard_codes(ch, cbs, pieces, a.half, a.batch)
         out = work / f"{s}.npz"
         n_tok = save(out, toks)
         del pieces, toks
@@ -155,6 +156,7 @@ def main() -> None:
         x.add_argument("--cb2", default="")
         x.add_argument("--src", default=SRC)
         x.add_argument("--half", action="store_true")
+        x.add_argument("--batch", type=int, default=32, help="windows per WavLM forward (lower = less GPU memory)")
     x = s.choices["run"]
     x.add_argument("--part", default="0/1")
     x.add_argument("--shards", default="")
