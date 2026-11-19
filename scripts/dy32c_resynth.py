@@ -58,6 +58,16 @@ def wer(ref: str, hyp: str) -> float:
     return float(jiwer.wer(r, h))
 
 
+def corpus_wer(refs: list[str], hyps: list[str]) -> float:
+    """Word errors over all pieces / reference words of all pieces (Whisper on the original audio as reference)."""
+    import jiwer
+
+    from dy30_eval import norm_text
+
+    pairs = [(norm_text(r), norm_text(h)) for r, h in zip(refs, hyps) if norm_text(r)]
+    return float(jiwer.wer([r for r, _ in pairs], [h for _, h in pairs]))
+
+
 def whisper(waves: list[np.ndarray], device) -> list[str]:
     from transformers import pipeline
 
@@ -105,12 +115,12 @@ def cmd_pack(a) -> None:
     for v in variants:
         hyp = whisper(res[v][:k], dev)
         ws = [wer(r, h) for r, h in zip(ref, hyp)]
-        asr["wer"][v] = {"mean": float(np.nanmean(ws)), "median": float(np.nanmedian(ws)), "hyp_first3": hyp[:3]}
-        print("ASR", v, json.dumps(asr["wer"][v]["mean"]), json.dumps(hyp[:2]), flush=True)
-    best_single = min((v for v in variants if v != "multi"), key=lambda v: asr["wer"][v]["mean"])
+        asr["wer"][v] = {"corpus": corpus_wer(ref, hyp), "median": float(np.nanmedian(ws)), "per_piece": ws, "hyp": hyp}
+        print("ASR", v, "corpus", round(asr["wer"][v]["corpus"], 4), "median", round(asr["wer"][v]["median"], 4), flush=True)
+    best_single = min((v for v in variants if v != "multi"), key=lambda v: asr["wer"][v]["corpus"])
     asr["best_single"] = best_single
     (out / "asr.json").write_text(json.dumps(asr, indent=2))
-    print("BEST SINGLE", best_single, "multi", asr["wer"]["multi"]["mean"], "single", asr["wer"][best_single]["mean"], flush=True)
+    print("BEST SINGLE", best_single, "multi", asr["wer"]["multi"]["corpus"], "single", asr["wer"][best_single]["corpus"], flush=True)
     if a.s3:
         for dst, v in (("c", "multi"), ("c-multi", "multi"), ("c-single", best_single)):
             sh(f"aws s3 sync {out / v} {BUCKET}/resynth/{dst}/ --only-show-errors")
