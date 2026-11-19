@@ -267,6 +267,12 @@ class Tacotron:
         pkg = types.ModuleType("textless")
         pkg.__path__ = [f"{textlesslib_dir}/textless"]
         sys.modules.setdefault("textless", pkg)
+        import librosa.util
+
+        if not getattr(librosa.util, "_positional", False):  # textlesslib calls the pre-0.10 positional signature
+            _pc = librosa.util.pad_center
+            librosa.util.pad_center = lambda data, size=None, **k: _pc(data, size=size, **k)
+            librosa.util._positional = True
         from textless.vocoders.tacotron2.vocoder import TacotronVocoder
 
         _load = torch.load

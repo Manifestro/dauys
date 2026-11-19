@@ -92,12 +92,20 @@ class Decoders:
 
 
 def whisper(audio: list[np.ndarray], device) -> list[str]:
-    from transformers import pipeline
+    """Plain Whisper generate on <= 30 s clips (no chunking pipeline), batches of 16."""
+    from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
-    asr = pipeline("automatic-speech-recognition", model=ASR, device=device, torch_dtype=torch.float16, chunk_length_s=30)
-    res = asr([{"raw": w.astype(np.float32), "sampling_rate": SR} for w in audio], batch_size=16,
-              generate_kwargs={"language": "en", "task": "transcribe"})
-    return [r["text"].strip() for r in res]
+    proc = WhisperProcessor.from_pretrained(ASR)
+    m = WhisperForConditionalGeneration.from_pretrained(ASR, torch_dtype=torch.float16).to(device).eval()
+    out = []
+    for b in range(0, len(audio), 16):
+        f = proc([w.astype(np.float32)[: 30 * SR] for w in audio[b : b + 16]], sampling_rate=SR, return_tensors="pt")
+        with torch.no_grad():
+            ids = m.generate(f.input_features.to(device, torch.float16), language="en", task="transcribe")
+        out += [t.strip() for t in proc.batch_decode(ids, skip_special_tokens=True)]
+    del m
+    torch.cuda.empty_cache()
+    return out
 
 
 def norm(t: str) -> str:
