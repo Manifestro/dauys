@@ -448,11 +448,31 @@ def seg_info(out: Path, split: str, arm: str, T: dict):
     return S, g0, g1, T["ep"][rows[S[:, 0]]], T["spk"][rows[S[:, 0]]]
 
 
+def frames_tensor(fr: np.ndarray):
+    """Frames on the GPU when they fit with 20 GB to spare, otherwise in RAM (gathered there, then moved)."""
+    import torch
+
+    need = fr.shape[0] * fr.shape[1] * 2
+    free, _ = torch.cuda.mem_get_info()
+    X = torch.from_numpy(np.asarray(fr, np.float16))
+    if need + 20 * 2**30 < free:
+        return X.cuda()
+    log("frames stay in RAM:", round(need / 2**30, 1), "GB; GPU free", round(free / 2**30, 1), "GB")
+    return X
+
+
+def gather(X, idx):
+    """X[idx] as float32 on the GPU, whichever device X is on."""
+    if X.is_cuda:
+        return X[idx].float()
+    return X[idx.cpu()].cuda(non_blocking=True).float()
+
+
 def mean_pool(fr: np.ndarray, g0: np.ndarray, g1: np.ndarray, chunk: int = 200000) -> np.ndarray:
     """Mean frame of every piece [g0, g1); pieces processed in chunks with index_add (no long cumulative sums)."""
     import torch
 
-    X = torch.from_numpy(np.asarray(fr, np.float16)).cuda()
+    X = frames_tensor(fr)
     out = np.zeros((len(g0), X.shape[1]), np.float32)
     for i in range(0, len(g0), chunk):
         a_ = torch.from_numpy(g0[i : i + chunk]).cuda()
@@ -462,7 +482,7 @@ def mean_pool(fr: np.ndarray, g0: np.ndarray, g1: np.ndarray, chunk: int = 20000
         first = torch.repeat_interleave(torch.cumsum(L, 0) - L, L)
         fidx = torch.repeat_interleave(a_, L) + torch.arange(len(seg), device="cuda") - first
         fidx = fidx.clamp(max=len(X) - 1)
-        S = torch.zeros(len(a_), X.shape[1], device="cuda").index_add_(0, seg, X[fidx].float())
+        S = torch.zeros(len(a_), X.shape[1], device="cuda").index_add_(0, seg, gather(X, fidx))
         out[i : i + chunk] = (S / L[:, None].float()).cpu().numpy()
     del X
     torch.cuda.empty_cache()
@@ -538,7 +558,7 @@ class Pieces:
         import torch
 
         self.t = torch
-        self.X = torch.from_numpy(np.asarray(fr, np.float16)).cuda()
+        self.X = frames_tensor(fr)
         self.g0, self.g1 = torch.from_numpy(g0).cuda(), torch.from_numpy(g1).cuda()
         self.u0 = torch.from_numpy(off[S[:, 0]]).cuda()
         self.u1 = torch.from_numpy(off[S[:, 0] + 1]).cuda()
@@ -572,7 +592,7 @@ class Pieces:
             drop = t.rand(mask.shape, device="cuda") < 0.10
             drop[:, 0] = False
             mask = mask & ~drop
-        x = self.X[src].float()
+        x = gather(self.X, src)
         return x, mask
 
 

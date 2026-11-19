@@ -21,7 +21,7 @@ for st in "${stages[@]}"; do
       [[ -f /data/dy36/dict/table.npz ]] || aws s3 cp s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys/dy36/dict/table.npz /data/dy36/dict/table.npz --only-show-errors
       $PY select || exit 1; up $W/split.npz split.npz ;;
     feats)
-      for sp in train dev test; do $PY feats --split $sp || { echo "FEATS $sp FAILED"; exit 1; }; done
+      for sp in train dev test; do $PY feats --split $sp --batch_sec ${BATCH_SEC:-600} || { echo "FEATS $sp FAILED"; exit 1; }; done
       up $W/pca.npz pca.npz ;;
     ref)
       for sp in dev test; do $PY ref --split $sp || { echo "REF $sp FAILED"; exit 1; }; up $W/$sp/ref.json $sp/ref.json; done ;;
