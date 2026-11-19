@@ -519,8 +519,10 @@ def cmd_g1(a) -> None:
 def cmd_bce(a) -> None:
     """Model b's held-out CE (256 random 2048-frame windows, seed 1234, as dy21_train validation) on the DY-32 b codes
     (20 s windows) and on the DY-35 chunked codes (WavLM alone per utterance / gap chunk) of the same held-out shards."""
-    from dy21_train import load_stream
+    import dy21_train
 
+    dy21_train.K = dy21_train.EOS = 2000  # as dy21_train --k 2000
+    load_stream = dy21_train.load_stream
     dev = torch.device("cuda")
     bm, bck = load_b(a.bckpt, dev)
     out = {"b_step": bck.get("step"), "b_val_reported": bck.get("val")}
