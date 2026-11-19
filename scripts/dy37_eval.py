@@ -321,7 +321,9 @@ def roll(m, x, r, z, has, sil, mode: str, first, bank: Bank, gen, n_gen: int = N
     h = None
     for t in range(P + n_gen):
         xt = toks[t]
-        if t < P:
+        if b_model:
+            rt = zt = ht = None
+        elif t < P:
             rt, zt, ht = r[:, t], z[:, t], has[:, t]
         else:
             s = sil[xt]
