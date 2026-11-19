@@ -342,9 +342,9 @@ def cmd_synth(a) -> None:
     res["before"] = test()
     log("SYNTH before", json.dumps(res["before"]))
     for step in range(a.steps):
-        bags = [S.bag(r) for _ in range(128)]
-        va = r.integers(0, S.V, 128)
-        vb = (va + r.integers(1, S.V, 128)) % S.V
+        bags = [S.bag(r) for _ in range(64)]
+        va = r.integers(0, S.V, 64)
+        vb = (va + r.integers(1, S.V, 64)) % S.V
         A, la = pad([S.render(r, b, v) for b, v in zip(bags, va)])
         B, lb = pad([S.render(r, b, v) for b, v in zip(bags, vb)])
         vv = torch.from_numpy(S.vvec[vb])
