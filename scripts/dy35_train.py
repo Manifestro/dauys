@@ -155,6 +155,7 @@ class Builder:
         B = len(starts)
         ids = np.stack([c.stream[s : s + T + 1] for s in starts]).astype(np.int64)
         enc: dict[int, int] = {}  # utterance id -> row in the encode list
+        swap_rows: list[int] = []  # per slot: row of a same-speaker utterance >= 60 s away, length within x2 (-1: none)
 
         def row(u: int) -> int:
             if u not in enc:
@@ -178,6 +179,10 @@ class Builder:
                     mode = 0
                 upos[b, q0:q1] = len(slots)
                 slots.append((b, int(u), row(int(u)), mode, ap if ap >= 0 else -1))
+                if not modes:  # validation: a swap partner for the swapped-z CE
+                    g = c.groups[c.grp[u]]
+                    el = g[c.eligible_mask(np.array([u]), g)[0]]
+                    swap_rows.append(row(int(rng.choice(el))) if len(el) else -1)
             # anchors: utterance start in [w + HEARD, w + T]
             lo, hi = np.searchsorted(c.st, w + HEARD), np.searchsorted(c.st, w + T, side="right")
             cand = np.arange(lo, hi)
@@ -209,7 +214,7 @@ class Builder:
             A.append((b, p, [tr] + same + oth.tolist()))
         lens = c.len[rows_u]
         codes = np.concatenate([c.codes(int(u)) for u in rows_u]).astype(np.int64) if len(rows_u) else np.zeros(0, np.int64)
-        return {"ids": ids, "upos": upos, "slots": slots, "anchors": A, "codes": codes, "lens": lens,
+        return {"ids": ids, "upos": upos, "slots": slots, "anchors": A, "codes": codes, "lens": lens, "swap_rows": swap_rows,
                 "rows_u": rows_u, "starts": starts}
 
 
@@ -289,7 +294,10 @@ def validate(model, enc, vbatches: list[dict], dev) -> dict:
     recognition accuracy among true + 15 same-speaker utterances."""
     model.eval()
     enc.eval()
-    tot = {k: 0.0 for k in ("ce_true", "ce_null", "ce_pred", "ceu_true", "ceu_null", "ceu_pred")}
+    tot = {k: 0.0 for k in ("ce_true", "ce_null", "ce_pred", "ce_swap", "ceu_true", "ceu_null", "ceu_pred", "ceu_swap")}
+    n_sw = 0
+    tot["ceu_true_on_swap_utts"] = 0.0
+    pz = em = 0.0
     n_all = n_u = 0
     hit = n_a = 0
     hit32 = 0
@@ -321,15 +329,30 @@ def validate(model, enc, vbatches: list[dict], dev) -> dict:
             zp, hp = thought_tables(nb, Z, zh_slot, dev)
             res["pred"] = model.states(x, zp, hp)
             res["null"] = model.states(x, None, None)
+            # swapped: every utterance carries z of another utterance of its speaker (>= 60 s, x2); none -> null
+            sw = [(bi, u, r2 if r2 >= 0 else r, 0 if r2 >= 0 else 2, a) for (bi, u, r, m, a), r2 in zip(vb["slots"], vb["swap_rows"])]
+            zs_, hs_ = thought_tables({**vb, "slots": sw}, Z, None, dev)
+            res["swap"] = model.states(x, zs_, hs_)
+            pz += float(model.proj(Z.to(model.proj.weight.dtype)).float().norm(dim=-1).mean())
+            em += float(model.lm.emb.weight[:K].float().norm(dim=-1).mean())
+            ok = torch.tensor([r2 >= 0 for r2 in vb["swap_rows"]] or [False], device=dev)
+            up = torch.from_numpy(vb["upos"]).to(dev)
+            insw = torch.cat([(up[:, 1:] >= 0) & ok[up[:, 1:].clamp(min=0)], torch.zeros_like(up[:, :1], dtype=torch.bool)], 1)
         for k, hh in res.items():
             l = F.cross_entropy(model.logits(hh).flatten(0, 1), y.flatten(), reduction="none").view_as(y)
             tot[f"ce_{k}"] += float(l.sum())
-            tot[f"ceu_{k}"] += float((l * inu).sum())
+            tot[f"ceu_{k}"] += float((l * inu).sum()) if k != "swap" else float((l * insw).sum())
+            if k == "true":
+                lt = l
         n_all += y.numel()
         n_u += int(inu.sum())
+        n_sw += int(insw.sum())
+        tot["ceu_true_on_swap_utts"] += float((lt * insw).sum())
     model.train()
     enc.train()
-    out = {k: v / (n_all if k.startswith("ce_") else max(n_u, 1)) for k, v in tot.items()}
+    out = {k: v / (n_all if k.startswith("ce_") else max(n_sw if ("swap" in k) else n_u, 1)) for k, v in tot.items()}
+    out["ceu_swap_minus_true_rel"] = (out["ceu_swap"] - out["ceu_true_on_swap_utts"]) / max(out["ceu_true_on_swap_utts"], 1e-9)
+    out["norm_proj_z"], out["norm_code_emb"] = pz / len(vbatches), em / len(vbatches)
     out.update({"acc16": hit / max(n_a, 1), "acc32": hit32 / max(n_a, 1), "anchors": n_a,
                 "z_cos_among_16": zcos / max(n_a, 1)})
     return out
@@ -415,6 +438,11 @@ def train(args, tr: Corpus, va: Corpus, cfg: LMConfig, out: Path, log=print, met
             (total / len(mbs)).backward()
             for k, v in part.items():
                 logs[k] = logs.get(k, 0.0) + v / len(mbs)
+        if (step + 1) % args.log_every == 0:
+            gn = lambda ps: float(torch.sqrt(sum((q.grad.float() ** 2).sum() for q in ps if q.grad is not None)))
+            logs["gnorm_proj"] = gn([model.proj.weight, model.null])
+            logs["gnorm_enc"] = gn(list(enc.parameters()))
+            logs["gnorm_zhead"] = gn(list(model.zhead.parameters()))
         logs["grad_norm"] = float(torch.nn.utils.clip_grad_norm_(list(model.parameters()) + list(enc.parameters()), 1.0))
         opt.step()
         with torch.no_grad():

@@ -135,6 +135,9 @@ def stats_100(c: Corpus, T: int, seed: int) -> dict:
 # ---------------------------------------------------------------- synthetic known answers
 def synth(kind: str, seed: int, n_ep: int = 40, ep_frames: int = 30000) -> Corpus:
     rng = np.random.default_rng(seed)
+    # zdist: 32 fixed classes (same for every corpus), each a Dirichlet(0.3) distribution over codes 1000-1199
+    dist = np.random.default_rng(777).dirichlet(np.full(200, 0.3), size=32)
+    cls = []
     parts, st, en, ep, spk, t0, t1, sin = [], [], [], [], [], [], [], []
     pos = 0
     for e in range(n_ep):
@@ -155,6 +158,10 @@ def synth(kind: str, seed: int, n_ep: int = 40, ep_frames: int = 30000) -> Corpu
             elif kind == "zmarker":  # 32 marker values, one frame at utterance frame 20
                 x[t:s] = 1999
                 x[s + 20] = 1000 + m % 32
+            elif kind == "zdist":  # every frame of the utterance from its class distribution; heard part: no class info
+                x[t:s] = 1999
+                x[s : s + L] = 1000 + rng.choice(200, L, p=dist[m % 32])
+            cls.append(m % 32)
             st.append(pos + s)
             en.append(pos + s + L)
             ep.append(e)
@@ -166,7 +173,9 @@ def synth(kind: str, seed: int, n_ep: int = 40, ep_frames: int = 30000) -> Corpu
         parts += [x, np.array([EOS], np.int16)]
         pos += ep_frames + 1
     a = lambda v: np.asarray(v)
-    return Corpus(np.concatenate(parts), a(st), a(en), a(ep), a(spk), a(t0), a(t1), a(sin), [f"synth-{kind}"])
+    c = Corpus(np.concatenate(parts), a(st), a(en), a(ep), a(spk), a(t0), a(t1), a(sin), [f"synth-{kind}"])
+    c.cls = np.asarray(cls)
+    return c
 
 
 def small_args(steps: int, out: str) -> SimpleNamespace:
@@ -227,7 +236,25 @@ def known(kind: str, steps: int, out: Path, n_ep: int = 40) -> dict:
     r = {"kind": kind, "steps": steps, "train_s": round(time.time() - t, 1), "val": res["history"][-1]}
     if kind == "zmarker":
         r["marker"] = zmarker_acc(res["model"], res["enc"], va, SMALL.ctx)
+    if kind == "zdist":
+        r["class_from_z"] = class_acc(res["enc"], tr, va)
     return r
+
+
+@torch.no_grad()
+def class_acc(enc, tr: Corpus, va: Corpus) -> dict:
+    """Class of a held-out synthetic utterance from its z: nearest class-mean z of 3000 training utterances."""
+    dev = torch.device("cuda")
+    enc.eval()
+    rng = np.random.default_rng(3)
+    enc_z = lambda c, us: enc.encode_many([torch.from_numpy(c.codes(int(u)).astype(np.int64)).to(dev) for u in us]).float()
+    ut, uv = rng.choice(tr.n, 3000, replace=False), rng.choice(va.n, 1000, replace=False)
+    zt, zv = enc_z(tr, ut), enc_z(va, uv)
+    ct = torch.from_numpy(tr.cls[ut]).to(dev)
+    mu = torch.stack([F.normalize(zt[ct == k].mean(0), dim=0) for k in range(32)])
+    acc = float(((zv @ mu.T).argmax(1).cpu().numpy() == va.cls[uv]).mean())
+    enc.train()
+    return {"acc": round(acc, 4), "chance": 1 / 32, "n": 1000}
 
 
 def overfit(tr: Corpus, cfg: LMConfig, steps: int) -> dict:
@@ -260,7 +287,7 @@ def main() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--only", default="1,2,3,4,5")
     p.add_argument("--known-steps", type=int, default=1500)
-    p.add_argument("--known-steps4", type=int, default=3000)
+    p.add_argument("--known-steps4", type=int, default=1500)
     a = p.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -308,11 +335,14 @@ def main() -> None:
         save()
         print("3", json.dumps(R["3_known_first_half"]), flush=True)
     if "4" in only:
-        # 2000 episodes (60M frames): with a small corpus the model memorises the random training sequences and
-        # predicts the training markers from context, so it never needs z
-        r = known("zmarker", a.known_steps4, out / "k4", n_ep=2000)
-        m = r["marker"]
-        R["4_known_second_half"] = {**r, "marker_values": 32, "pass": m["acc_true"] >= 0.9 and m["acc_swap"] <= 0.15}
+        # the gist is a property of the whole utterance: each utterance's frames come from one of 32 code distributions
+        # (overlapping, over codes 1000-1199); nothing in the heard part predicts the class. 400 episodes (12M frames),
+        # so the small model cannot memorise the random background.
+        r = known("zdist", a.known_steps4, out / "k4", n_ep=400)
+        v = r["val"]
+        r["ceu"] = {"true": v["ceu_true"], "null": v["ceu_null"], "swap": v["ceu_swap"]}
+        R["4_known_second_half"] = {**r, "pass": v["ceu_true"] < v["ceu_null"] - 0.05 and v["ceu_true"] < v["ceu_swap"] - 0.05
+                                    and r["class_from_z"]["acc"] >= 0.9}
         save()
         print("4", json.dumps(R["4_known_second_half"]), flush=True)
     if "5" in only:
