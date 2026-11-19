@@ -70,8 +70,20 @@ def gen_text(folder: str, i: int) -> str:
 def build(a) -> None:
     import soundfile as sf
 
+    import torch
+    from transformers import pipeline
+
+    from dy30_eval import ASR
+
     sel = json.loads(Path(a.ids).read_text())
     P, R, _ = texts()
+    asr = pipeline("automatic-speech-recognition", model=ASR, device=torch.device("cuda"), torch_dtype=torch.float16,
+                   chunk_length_s=30)
+
+    def wh(w: np.ndarray) -> str:
+        return asr({"raw": w.astype(np.float32), "sampling_rate": SR}, generate_kwargs={"language": "en", "task": "transcribe"})["text"].strip()
+
+    TJ = {}
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     t = np.arange(int(0.3 * SR)) / SR
@@ -81,21 +93,29 @@ def build(a) -> None:
     L = ["# Listening set (prompts chosen by prompt simplicity only)", "", "Rule: " + " ".join(sel["rule"].split()), "",
          f"Eligible prompts: {sel['eligible']}. Chosen ids (rank order): {', '.join(f'{i:03d}' for i in sel['ids'])}.", "",
          "Files: `<folder>__XXX.mp3` = last 5 s of the prompt, beep, then 10 s of the model; `real__XXX.mp3` = the same with "
-         "the real continuation. Folders: " + ", ".join(f"{f} ({a.labels.split(',')[k] if a.labels else f})" for k, f in enumerate(folders)) + ".", ""]
+         f"the real continuation. Main text = Whisper ({ASR}) on the full audio; the letters-recogniser text (the "
+         "measuring recogniser of the evaluation) is under it. Folders: " + ", ".join(f"{f} ({a.labels.split(',')[k] if a.labels else f})" for k, f in enumerate(folders)) + ".", ""]
     for r in sel["ranked"]:
         i = r["id"]
         pdir = Path("/data/dy32/prompts") if i < 50 else Path("/data/dy32/prompts_x")
         pf = pdir / (f"prompt_{i:02d}.wav" if i < 50 else f"prompt_{i:03d}.wav")
         rf = pdir / (f"real_{i:02d}.wav" if i < 50 else f"real_{i:03d}.wav")
-        tail = load(pf)[-5 * SR :]
-        sf.write(out / f"real__{i:03d}.mp3", np.concatenate([pk(tail), beep, pk(load(rf))]), SR, format="MP3")
+        pw, rw = load(pf), load(rf)
+        tail = pw[-5 * SR :]
+        sf.write(out / f"real__{i:03d}.mp3", np.concatenate([pk(tail), beep, pk(rw)]), SR, format="MP3")
+        TJ[f"{i:03d}"] = {"prompt": {"whisper": wh(pw), "letters": P[i]}, "real": {"whisper": wh(rw), "letters": R[i]}}
         L += [f"## {i:03d}  ({r['words_per_s']} words/s, top-1000 share {r['top1000_share']}, mean word length {r['mean_word_len']})", "",
-              f"**Prompt (15 s):** {P[i]}", "", f"**Real continuation:** {R[i]}", ""]
+              f"**Prompt (15 s):** {TJ[f'{i:03d}']['prompt']['whisper']}", "", f"_letters recogniser:_ {P[i]}", "",
+              f"**Real continuation:** {TJ[f'{i:03d}']['real']['whisper']}", "", f"_letters recogniser:_ {R[i]}", ""]
         for k, f in enumerate(folders):
-            sf.write(out / f"{f}__{i:03d}.mp3", np.concatenate([pk(tail), beep, pk(load(gen_file(f, i)))]), SR, format="MP3")
+            gw = load(gen_file(f, i))
+            sf.write(out / f"{f}__{i:03d}.mp3", np.concatenate([pk(tail), beep, pk(gw)]), SR, format="MP3")
             lab = a.labels.split(",")[k] if a.labels else f
-            L += [f"**{lab} ({f}):** {gen_text(f, i)}", ""]
+            key = lab.split()[0]
+            TJ[f"{i:03d}"][key] = {"folder": f, "whisper": wh(gw), "letters": gen_text(f, i)}
+            L += [f"**{lab} ({f}):** {TJ[f'{i:03d}'][key]['whisper']}", "", f"_letters recogniser:_ {gen_text(f, i)}", ""]
     (out / "listen.md").write_text("\n".join(L) + "\n")
+    (out / "transcripts.json").write_text(json.dumps(TJ, indent=1, ensure_ascii=False))
     print("LISTEN BUILT", out, len(list(out.glob("*.mp3"))), flush=True)
 
 
