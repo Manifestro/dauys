@@ -51,26 +51,14 @@ def mean_ci(x: np.ndarray) -> dict:
     return {"mean": round(m, 4), "ci95": [round(m - 1.96 * s, 4), round(m + 1.96 * s, 4)]}
 
 
-def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--held", required=True)
-    p.add_argument("--run", required=True)
-    p.add_argument("--centroids", required=True)
-    p.add_argument("--n", type=int, default=1200)
-    p.add_argument("--heard", default="15,5")
-    p.add_argument("--batch", type=int, default=24)
-    p.add_argument("--seed", type=int, default=2026)
-    p.add_argument("--out", required=True)
-    a = p.parse_args()
-    device = torch.device("cuda")
-    rng = np.random.default_rng(a.seed)
-    Hmax = max(int(x) for x in a.heard.split(","))
-    hs = n_samples(Hmax * 50)  # heard samples (frames = Hmax * 50)
+def build_windows(held: str, n: int, seed: int, Hmax: int):
+    """The test windows (deterministic in seed): returns pieces, wins, by_ep, shards, hs, os_."""
+    rng = np.random.default_rng(seed)
+    hs = n_samples(Hmax * 50)
     os_ = n_samples(OWN)
-
     # pieces of held-out shards with episode times
     pieces = []  # (segs, start_sample, len, ep, ep_t0)
-    for d in sorted(Path(a.held).iterdir()):
+    for d in sorted(Path(held).iterdir()):
         if not held_out(d.name) or not (d / "pieces.jsonl").exists():
             continue
         segs = np.memmap(d / "segs.bin", dtype=np.int16, mode="r")
@@ -84,14 +72,10 @@ def main() -> None:
         by_ep.setdefault(pc[3], []).append(i)
     shards = sorted({pc[3].split("/")[0] for pc in pieces})
 
-    def chunk(i: int, off: int, n: int) -> np.ndarray:
-        segs, st, ln, _, _ = pieces[i]
-        return np.asarray(segs[st + off : st + off + n], np.float32) / 32768.0
-
     # windows: a piece long enough for heard + own; (b) a chunk of the same episode >= 60 s away; (c) other episode
     wins = []
     tries = 0
-    while len(wins) < a.n and tries < 100000:
+    while len(wins) < n and tries < 100000:
         tries += 1
         i = int(rng.integers(len(pieces)))
         _, _, ln, ep, t0 = pieces[i]
@@ -122,6 +106,33 @@ def main() -> None:
         wins.append((i, off, j, offb, k, offc))
     print(json.dumps({"windows": len(wins), "tries": tries, "pieces": len(pieces), "episodes": len(by_ep),
                       "shards": shards}), flush=True)
+
+    return pieces, wins, by_ep, shards, hs, os_
+
+
+def read_chunk(pieces, i: int, off: int, n: int) -> np.ndarray:
+    segs, st, ln, _, _ = pieces[i]
+    return np.asarray(segs[st + off : st + off + n], np.float32) / 32768.0
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--held", required=True)
+    p.add_argument("--run", required=True)
+    p.add_argument("--centroids", required=True)
+    p.add_argument("--n", type=int, default=1200)
+    p.add_argument("--heard", default="15,5")
+    p.add_argument("--batch", type=int, default=24)
+    p.add_argument("--seed", type=int, default=2026)
+    p.add_argument("--out", required=True)
+    a = p.parse_args()
+    device = torch.device("cuda")
+    Hmax = max(int(x) for x in a.heard.split(","))
+
+    pieces, wins, by_ep, shards, hs, os_ = build_windows(a.held, a.n, a.seed, Hmax)
+
+    def chunk(i, off, n):
+        return read_chunk(pieces, i, off, n)
 
     ck = torch.load(Path(a.run) / "best.pt", map_location="cpu")
     model = HeardLM(HeardConfig(**ck["cfg"])).to(device).eval()
