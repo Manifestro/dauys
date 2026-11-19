@@ -49,22 +49,25 @@ class Encoder(nn.Module):
 
     @torch.no_grad()
     def encode_many(self, utts: list, budget: int = 16384) -> torch.Tensor:
+        """Variable-length code arrays -> z [n, 64]; sorted by length, padded on the host, one copy per batch."""
+        import numpy as np
+
         dev = self.emb.weight.device
-        order = sorted(range(len(utts)), key=lambda i: -len(utts[i]))
-        out = [None] * len(utts)
+        lens_all = np.array([len(u) for u in utts])
+        order = np.argsort(-lens_all, kind="stable")
+        out = torch.empty(len(utts), ZDIM, device=dev)
         i = 0
         while i < len(order):
-            L = len(utts[order[i]])
+            L = int(lens_all[order[i]])
             idx = order[i : i + max(1, budget // max(L, 1))]
-            c = torch.zeros(len(idx), L, dtype=torch.long, device=dev)
-            lens = torch.tensor([len(utts[j]) for j in idx], device=dev)
+            c = np.zeros((len(idx), L), np.int64)
             for r, j in enumerate(idx):
-                c[r, : len(utts[j])] = torch.as_tensor(utts[j], device=dev).long()
-            z = self.forward(c, lens)
-            for r, j in enumerate(idx):
-                out[j] = z[r]
+                c[r, : lens_all[j]] = np.asarray(utts[j])
+            cc = torch.from_numpy(c).pin_memory().to(dev, non_blocking=True)
+            lens = torch.from_numpy(lens_all[idx]).to(dev)
+            out[torch.from_numpy(idx).to(dev)] = self.forward(cc, lens)
             i += len(idx)
-        return torch.stack(out)
+        return out
 
 
 class Decoder(nn.Module):
