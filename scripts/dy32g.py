@@ -285,23 +285,38 @@ def fetch(src: str, s: str, work: Path) -> tuple[str, list[np.ndarray], float]:
     return s, pieces, sum(len(w) for w in pieces) / SR
 
 
-def shard_units(enc: Hubert, km: KMeans, pieces: list[np.ndarray], win: int, batch: int) -> list[np.ndarray]:
-    """Full-rate units per piece. Full 20 s windows go in batches; the shorter last window of each piece alone
-    (HuBERT base has no attention mask and uses group norm, so windows are never padded)."""
+class MultiUnits:
+    """One HuBERT pass, several (layer, k-means) unit sets: windows [B, N] -> {channel: units [B, T]}."""
+
+    def __init__(self, channels: list[str], models: Path, dev) -> None:
+        self.ch = {c: (CHANNELS[c][0], KMeans(str(models / CHANNELS[c][1]), dev)) for c in channels}
+        self.enc = Hubert(max(l for l, _ in self.ch.values()), dev)
+
+    @torch.no_grad()
+    def __call__(self, x: torch.Tensor) -> dict[str, np.ndarray]:
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            hs = self.enc.model(x.to(self.enc.device), output_hidden_states=True).hidden_states
+        return {c: km(hs[l].float()).cpu().numpy() for c, (l, km) in self.ch.items()}
+
+
+def shard_units(mu: MultiUnits, pieces: list[np.ndarray], win: int, batch: int) -> dict[str, list[np.ndarray]]:
+    """Full-rate units per piece and channel. Full 20 s windows go in batches; the shorter last window of each piece
+    alone (HuBERT base has no attention mask and uses group norm, so windows are never padded)."""
     full = [(k, i) for k, w in enumerate(pieces) for i in range(0, len(w) - win + 1, win)]
-    per = [dict() for _ in pieces]
+    per = {c: [dict() for _ in pieces] for c in mu.ch}
     for b in range(0, len(full), batch):
         part = full[b : b + batch]
         x = torch.from_numpy(np.stack([pieces[k][i : i + win] for k, i in part]).astype(np.float32) / 32768.0)
-        u = km(enc(x)).cpu().numpy()
-        for (k, i), r in zip(part, u):
-            per[k][i] = r
+        for c, u in mu(x).items():
+            for (k, i), r in zip(part, u):
+                per[c][k][i] = r
     for k, w in enumerate(pieces):
         i = (len(w) // win) * win
         if len(w) - i >= 400:
-            x = torch.from_numpy(w[i:].astype(np.float32)[None] / 32768.0)
-            per[k][i] = km(enc(x))[0].cpu().numpy()
-    return [np.concatenate([d[i] for i in sorted(d)]) if d else np.zeros(0, np.int64) for d in per]
+            for c, u in mu(torch.from_numpy(w[i:].astype(np.float32)[None] / 32768.0)).items():
+                per[c][k][i] = u[0]
+    return {c: [np.concatenate([d[i] for i in sorted(d)]) if d else np.zeros(0, np.int64) for d in ds]
+            for c, ds in per.items()}
 
 
 def cmd_units(a) -> None:
@@ -310,25 +325,24 @@ def cmd_units(a) -> None:
     work = Path(a.work)
     work.mkdir(parents=True, exist_ok=True)
     dev = torch.device("cuda")
-    layer, kmf, _, _ = CHANNELS[a.channel]
-    enc = Hubert(layer, dev)
-    km = KMeans(str(Path(a.models) / kmf), dev)
-    dst = a.dst or f"{OUT}/g/units-{a.channel}"
-    done = set(listing(dst, dirs=False))
+    chans = a.channels.split(",")
+    mu = MultiUnits(chans, Path(a.models), dev)
+    dst = {c: f"{OUT}/g/units-{c}" for c in chans}
+    done = set(listing(dst[chans[-1]], dirs=False))
     k, n = map(int, a.part.split("/"))
-    allsh = [s for s in listing(a.src, dirs=True) if a.held or not held_out(s)]
-    if a.held:
-        allsh = [s for s in allsh if held_out(s)]
+    allsh = [s for s in listing(a.src, dirs=True) if held_out(s) == a.held]
+    allsh = [allsh[j] for j in np.random.default_rng(a.order_seed).permutation(len(allsh))]  # diverse prefix
     mine = [s for s in allsh[k::n] if s not in done][: a.max_shards or None]
-    print(json.dumps({"part": a.part, "todo": len(mine), "already": len(done), "dst": dst}), flush=True)
+    print(json.dumps({"part": a.part, "todo": len(mine), "already": len(done), "channels": chans}), flush=True)
     dl, up = ThreadPoolExecutor(1), ThreadPoolExecutor(2)
     uploads, failed, lock = [], [], threading.Lock()
 
-    def upload(f: Path, s: str) -> None:
+    def upload(fs: dict[str, Path], s: str) -> None:
         try:
-            sh(f"aws s3 cp {f} {dst}/{s}.npz --only-show-errors")
-            if not a.keep:
-                f.unlink()
+            for c, f in fs.items():  # last channel last: it marks the shard done
+                sh(f"aws s3 cp {f} {dst[c]}/{s}.npz --only-show-errors")
+                if not a.keep:
+                    f.unlink()
         except Exception as e:
             with lock:
                 failed.append((s, str(e)[-200:]))
@@ -340,15 +354,17 @@ def cmd_units(a) -> None:
         s, pieces, secs = nxt.result()
         wait = time.time() - t0
         nxt = dl.submit(fetch, a.src, mine[j + 1], work) if j + 1 < len(mine) else None
-        units = shard_units(enc, km, pieces, int(20 * SR), a.batch)
-        index, pos = [], 0
-        for u in units:
-            index.append((pos, len(u)))
-            pos += len(u)
-        f = work / f"{s}.npz"
-        np.savez(f, tok=np.concatenate(units).astype(np.int16), index=np.asarray(index, np.int64).reshape(-1, 2))
+        units = shard_units(mu, pieces, int(20 * SR), a.batch)
+        fs = {}
+        for c, us in units.items():
+            index, pos = [], 0
+            for u in us:
+                index.append((pos, len(u)))
+                pos += len(u)
+            fs[c] = work / f"{s}.{c}.npz"
+            np.savez(fs[c], tok=np.concatenate(us).astype(np.int16), index=np.asarray(index, np.int64).reshape(-1, 2))
         del pieces, units
-        uploads.append(up.submit(upload, f, s))
+        uploads.append(up.submit(upload, fs, s))
         h_all += secs / 3600
         print(json.dumps({"shard": s, "done": j + 1, "of": len(mine), "hours": round(secs / 3600, 2),
                           "x_realtime": round(secs / (time.time() - t0), 1), "waited_s": round(wait, 1),
@@ -443,10 +459,10 @@ def main() -> None:
     s.choices["released"].add_argument("--k", type=int, default=100)
     s.choices["released"].add_argument("--variant", default="g-released")
     x = s.choices["units"]
-    x.add_argument("--channel", default="km100")
+    x.add_argument("--channels", default="km100,L9km500")
+    x.add_argument("--order-seed", type=int, default=0)
     x.add_argument("--part", default="0/1")
     x.add_argument("--src", default=SRC)
-    x.add_argument("--dst", default="")
     x.add_argument("--max-shards", type=int, default=0)
     x.add_argument("--batch", type=int, default=32)
     x.add_argument("--held", action="store_true", help="only held-out shards (validation units)")
