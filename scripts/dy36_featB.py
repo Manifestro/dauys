@@ -48,6 +48,7 @@ def cmd_pass(a) -> None:
     if a.part:
         k, n = map(int, a.part.split("/"))
         todo = todo[k::n]
+    torch.cuda.set_per_process_memory_fraction(a.mem_frac)  # leave room for the recognisers on a 24 GB GPU
     ch = Channel()
     ex = ThreadPoolExecutor(1)
     nxt = ex.submit(fetch, files[todo[0]], work) if todo else None
@@ -117,6 +118,7 @@ def main() -> None:
     x.add_argument("--work", required=True)
     x.add_argument("--part", default="")
     x.add_argument("--batch", type=int, default=32)
+    x.add_argument("--mem-frac", type=float, default=0.35)
     x = s.add_parser("reduce")
     x.add_argument("--dict", required=True)
     a = p.parse_args()
