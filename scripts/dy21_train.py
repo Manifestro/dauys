@@ -71,7 +71,11 @@ def main() -> None:
     p.add_argument("--experiment", default=EXPERIMENT, help="Airon experiment title")
     p.add_argument("--name", default="", help="Airon run name (default dy21-s<seed>)")
     p.add_argument("--patience", type=int, default=0, help="stop after this many validations without a new best (0 = off)")
+    p.add_argument("--k", type=int, default=8192, help="unit vocabulary size K (EOS = K, vocab = K + 1)")
+    p.add_argument("--stop-at", type=float, default=0, help="unix time: validate, keep best and stop after it (0 = off)")
     args = p.parse_args()
+    global K, EOS
+    K, EOS = args.k, args.k
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     out = Path(args.out)
@@ -83,12 +87,12 @@ def main() -> None:
     va_files = [f for f in files if held_out(f.stem)] or files[-1:]
     train, val = load_stream(tr_files), load_stream(va_files)
     if args.small:
-        cfg = LMConfig(d=256, layers=4, heads=4, ffn=1024, ctx=256)
+        cfg = LMConfig(vocab=K + 1, d=256, layers=4, heads=4, ffn=1024, ctx=256)
     elif args.cfg:
         d, layers, heads, ffn, ctx = map(int, args.cfg.split(","))
-        cfg = LMConfig(d=d, layers=layers, heads=heads, ffn=ffn, ctx=ctx)
+        cfg = LMConfig(vocab=K + 1, d=d, layers=layers, heads=heads, ffn=ffn, ctx=ctx)
     else:
-        cfg = LMConfig()
+        cfg = LMConfig(vocab=K + 1)
     T = cfg.ctx
     vrng = np.random.default_rng(1234)
     vstarts = vrng.integers(0, len(val) - T - 1, size=256)
@@ -157,7 +161,8 @@ def main() -> None:
             t0 = time.time()
             run.log({f"train/{k}": v for k, v in logs.items()}, step=step + 1)
             print(json.dumps({"step": step + 1, **{k: round(v, 4) for k, v in logs.items()}}), flush=True)
-        if (step + 1) % args.val_every == 0 or step + 1 == args.steps:
+        late = bool(args.stop_at and time.time() > args.stop_at)
+        if (step + 1) % args.val_every == 0 or step + 1 == args.steps or late:
             res = validate()
             run.log({f"val/{k}": v for k, v in res.items()}, step=step + 1)
             print(json.dumps({"step": step + 1, "val": res}), flush=True)
@@ -170,6 +175,9 @@ def main() -> None:
                 if args.patience and stale >= args.patience:
                     print(json.dumps({"early_stop": step + 1, "best_ce": best}), flush=True)
                     break
+            if late:
+                print(json.dumps({"stop_at_reached": step + 1, "best_ce": best}), flush=True)
+                break
     (out / "DONE").write_text(f"{best}\n")
     run.finish()
     print("TRAIN DONE", best, flush=True)
