@@ -44,6 +44,7 @@ def main() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--s3", default="")
     p.add_argument("--n", type=int, default=N)
+    p.add_argument("--first", type=int, default=0, help="extension pack: skip the first pieces of the same round-robin")
     a = p.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -52,14 +53,15 @@ def main() -> None:
     cands = candidates(val, MIN_S, tmp)
     rng = np.random.default_rng(SEED)
     order = [cands[i] for i in rng.permutation(len(cands))]
-    sel = round_robin(order, a.n)
+    sel = round_robin(order, a.n)[a.first :]
+    fmt = "03d" if a.first else "02d"
     audio = read_pieces(sel, tmp)
     man = []
-    for i, ((s, pc, st, ln), w) in enumerate(zip(sel, audio)):
+    for i, ((s, pc, st, ln), w) in enumerate(zip(sel, audio), start=a.first):
         assert held_out(s) and len(w) >= (PROMPT_S + REAL_S) * SR
-        sf.write(out / f"prompt_{i:02d}.wav", w[: PROMPT_S * SR], SR, subtype="PCM_16")
-        sf.write(out / f"real_{i:02d}.wav", w[PROMPT_S * SR : (PROMPT_S + REAL_S) * SR], SR, subtype="PCM_16")
-        man.append({"id": f"{i:02d}", "shard": s, "piece": pc, "piece_start_sample": st, "piece_len_s": round(ln / SR, 2),
+        sf.write(out / f"prompt_{i:{fmt}}.wav", w[: PROMPT_S * SR], SR, subtype="PCM_16")
+        sf.write(out / f"real_{i:{fmt}}.wav", w[PROMPT_S * SR : (PROMPT_S + REAL_S) * SR], SR, subtype="PCM_16")
+        man.append({"id": f"{i:{fmt}}", "shard": s, "piece": pc, "piece_start_sample": st, "piece_len_s": round(ln / SR, 2),
                     "prompt_s": [0, PROMPT_S], "real_s": [PROMPT_S, PROMPT_S + REAL_S]})
     info = {"source": SRC, "held_out_shards": val, "candidates": len(cands), "min_piece_s": MIN_S, "seed": SEED,
             "rule": "held-out shards (dy21_train.held_out), pieces >= 45 s, seed-1234 permutation, round-robin over shards",
