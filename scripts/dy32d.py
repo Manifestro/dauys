@@ -56,22 +56,42 @@ def load_vocoder(device):
 
 
 @torch.no_grad()
-def wavlm_feats(wavlm, wav: torch.Tensor, chunk: int = 16) -> torch.Tensor:
-    """wav [B, N] float in [-1, 1] (as knn-vc: no waveform normalisation, no padding) -> [B, frames, 1024] fp16."""
+def wavlm_feats(wavlm, wav: torch.Tensor, chunk: int = 16, fp32: bool = False) -> torch.Tensor:
+    """wav [B, N] float in [-1, 1] (as knn-vc: no waveform normalisation, no padding) -> [B, frames, 1024] fp16
+    (computed in fp16 autocast for training speed; fp32 for evaluation, as track B's channel)."""
     out = []
     for i in range(0, len(wav), chunk):
-        with torch.autocast("cuda", dtype=torch.float16):
-            f = wavlm.extract_features(wav[i : i + chunk], output_layer=LAYER, ret_layer_results=False)[0]
-        out.append(f.half())
+        with torch.autocast("cuda", dtype=torch.float16, enabled=not fp32):
+            f = wavlm.extract_features(wav[i : i + chunk].float(), output_layer=LAYER, ret_layer_results=False)[0]
+        out.append(f.float() if fp32 else f.half())
     return torch.cat(out)
 
 
 class Codebook:
-    def __init__(self, c: np.ndarray, metric: str, device) -> None:
+    """A plain [K, 1024] .npy (50 Hz, decode = centroid) or track B's .npz (cent, cent_n, dec [K, r, 1024], rate):
+    at rate 25 the 50 Hz frames are mean-pooled in pairs before assignment and each code decodes to r = 2 frames."""
+
+    def __init__(self, path: str, metric: str, device) -> None:
+        if path.endswith(".npz"):
+            z = np.load(path)
+            c, dec, self.rate = z["cent"], z["dec"], int(z["rate"])
+            metric = "cos"
+        else:
+            c = np.load(path)
+            dec, self.rate = c[:, None], 50
         self.c = torch.from_numpy(c).float().to(device)
+        self.dec = torch.from_numpy(dec).float().to(device)
         self.metric = metric
         self.cn = F.normalize(self.c, dim=-1)
         self.c2 = (self.c**2).sum(-1)
+
+    def pool(self, f: torch.Tensor) -> torch.Tensor:
+        """50 Hz features [B, T, D] -> model frames (mean of pairs at 25 Hz; an odd last frame is dropped)."""
+        if self.rate == 50:
+            return f
+        r = 50 // self.rate
+        t = f.shape[1] // r * r
+        return f[:, :t].float().reshape(f.shape[0], t // r, r, f.shape[2]).mean(2).to(f.dtype)
 
     @torch.no_grad()
     def ids(self, f: torch.Tensor) -> torch.Tensor:
@@ -87,7 +107,9 @@ class Codebook:
         return torch.cat(out).reshape(sh)
 
     def feats(self, ids: torch.Tensor) -> torch.Tensor:
-        return self.c[ids]
+        """codes [B, n] -> 50 Hz features [B, n * r, 1024] for the vocoder."""
+        d = self.dec[ids]
+        return d.reshape(ids.shape[0], -1, d.shape[-1])
 
 
 # ---------------------------------------------------------------- audio windows
@@ -192,21 +214,22 @@ def cmd_train(a) -> None:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     stop_at = deadline_ts(a.deadline)
-    cb = Codebook(np.load(a.centroids), a.metric, device)
+    cb = Codebook(a.centroids, a.metric, device)
+    r = 50 // cb.rate
     if a.small:
         cfg = HeardConfig(units=len(cb.c), d=256, layers=4, heads=4, ffn=1024, ctx=a.ctx)
     else:
         cfg = HeardConfig(units=len(cb.c), ctx=a.ctx)
     T = cfg.ctx
-    L = n_samples(T + 1)
+    L = n_samples(r * (T + 1))
     wavlm = load_wavlm(device)
     tr = Audio(a.audio, L, True, a.seed)
     va = Audio(a.held, L, False, 0)
-    # fixed validation windows; split at 750 frames (15 s, the prompt length of the eval pack)
+    # fixed validation windows; split at 15 s (the prompt length of the eval pack)
     vwav = va.batch(a.val_n, np.random.default_rng(1234))
-    vfeat = torch.cat([wavlm_feats(wavlm, to_wav(vwav[i : i + 16], device)) for i in range(0, len(vwav), 16)])
+    vfeat = torch.cat([cb.pool(wavlm_feats(wavlm, to_wav(vwav[i : i + 16], device))) for i in range(0, len(vwav), 16)])
     vids = cb.ids(vfeat)
-    vsplit = torch.full((len(vwav),), min(750, T - 1), device=device)
+    vsplit = torch.full((len(vwav),), min(15 * cb.rate, T - 1), device=device)
 
     model = HeardLM(cfg).to(device)
     decay = [q for n, q in model.named_parameters() if q.dim() >= 2 and "emb" not in n]
@@ -215,7 +238,7 @@ def cmd_train(a) -> None:
                             lr=a.lr, betas=(0.9, 0.95), fused=True)
     meta = {"run_id": str(uuid.uuid4()), "params": model.parameters_count(), "config": vars(cfg), "args": vars(a),
             "train_shards": len(tr.names), "train_hours": round(tr.hours, 1), "val_shards": va.names,
-            "frame_rate_hz": 50, "features": f"WavLM-Large layer {LAYER} (knn-vc release), frozen, fp16",
+            "frame_rate_hz": cb.rate, "codebook": a.centroids, "metric": cb.metric, "features": f"WavLM-Large layer {LAYER} (knn-vc release), frozen, fp16",
             "git": os.environ.get("DY21_COMMIT", "")}
     (out / "metadata.json").write_text(json.dumps(meta, indent=2))
     print(json.dumps(meta), flush=True)
@@ -265,7 +288,7 @@ def cmd_train(a) -> None:
         wav = q.get()
         waited += time.time() - tw
         wav = wav.to(device, non_blocking=True).float() / 32768.0
-        feats = wavlm_feats(wavlm, wav)
+        feats = cb.pool(wavlm_feats(wavlm, wav))
         ids = cb.ids(feats)
         B = len(ids)
         split = torch.randint(lo, hi + 1, (B,), device=device, generator=rng)
@@ -299,7 +322,7 @@ def cmd_train(a) -> None:
             if res["ce"] < best:
                 best = res["ce"]
                 torch.save({"model": model.state_dict(), "cfg": vars(cfg), "step": step + 1, "val": res,
-                            "metric": a.metric}, out / "best.pt.tmp")
+                            "metric": cb.metric, "rate": cb.rate}, out / "best.pt.tmp")
                 os.replace(out / "best.pt.tmp", out / "best.pt")
         if last:
             if time.time() > stop_at:
@@ -329,15 +352,17 @@ def cmd_gen(a) -> None:
     cfg = HeardConfig(**ck["cfg"])
     model = HeardLM(cfg).to(device).eval()
     model.load_state_dict(ck["model"])
-    cb = Codebook(np.load(a.centroids), ck.get("metric", a.metric), device)
+    cb = Codebook(a.centroids, ck.get("metric", a.metric), device)
+    r = 50 // cb.rate
+    frames = a.frames or 10 * cb.rate
     wavlm, voc = load_wavlm(device), load_vocoder(device)
     pdir = Path(a.prompts)
     names = sorted(p.stem.split("_")[1] for p in pdir.glob("prompt_*.wav"))
     prompts = [read_wav(pdir / f"prompt_{n}.wav") for n in names]
     P = min(len(x) for x in prompts)
-    P = min(P, n_samples(cfg.ctx - a.frames))
+    P = min(P, n_samples(r * (cfg.ctx - frames)))
     wav = torch.from_numpy(np.stack([x[-P:] for x in prompts])).to(device)  # last P samples (all 15 s if they fit)
-    feats = wavlm_feats(wavlm, wav)
+    feats = cb.pool(wavlm_feats(wavlm, wav, fp32=True))
     ids = cb.ids(feats)
     out = Path(a.out)
 
@@ -354,7 +379,7 @@ def cmd_gen(a) -> None:
         d.mkdir(parents=True, exist_ok=True)
         t0 = time.time()
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            gen = generate(model, ids, feats if mode == 0 else None, mode, a.frames, a.temp, a.top_p, a.seed)
+            gen = generate(model, ids, feats if mode == 0 else None, mode, frames, a.temp, a.top_p, a.seed)
         y = decode(gen)
         for n, w in zip(names, y):
             sf.write(d / f"{n}.wav", np.clip(w, -1, 1), SR, subtype="PCM_16")
@@ -363,8 +388,8 @@ def cmd_gen(a) -> None:
                 "discrete: the same frames as unit ids (nearest centroid)",
                 "checkpoint": a.ckpt, "step": ck["step"], "val": ck["val"], "config": ck["cfg"],
                 "params": model.parameters_count(),
-                "sampling": {"temperature": a.temp, "top_p": a.top_p, "seed": a.seed, "frames": a.frames,
-                             "frame_rate_hz": 50},
+                "sampling": {"temperature": a.temp, "top_p": a.top_p, "seed": a.seed, "frames": frames,
+                             "frame_rate_hz": cb.rate},
                 "prompt_seen_s": P / SR, "prompt_frames": int(ids.shape[1]),
                 "units": f"K={len(cb.c)} codebook on WavLM-Large layer {LAYER} (knn-vc), metric {cb.metric}: {a.unit_desc}",
                 "decoder": "unit -> centroid feature -> kNN-VC prematched HiFi-GAN (github.com/bshall/knn-vc, MIT), 16 kHz",
@@ -376,7 +401,7 @@ def cmd_gen(a) -> None:
         d.mkdir(parents=True, exist_ok=True)
         for n in names:
             x = torch.from_numpy(read_wav(pdir / f"real_{n}.wav")).to(device)[None]
-            y = decode(cb.ids(wavlm_feats(wavlm, x)))
+            y = decode(cb.ids(cb.pool(wavlm_feats(wavlm, x, fp32=True))))
             sf.write(d / f"{n}.wav", np.clip(y[0], -1, 1), SR, subtype="PCM_16")
         print("RESYNTH DONE", flush=True)
     print("GEN DONE", flush=True)
@@ -421,7 +446,7 @@ def main() -> None:
     x.add_argument("--prompts", required=True)
     x.add_argument("--out", required=True)
     x.add_argument("--suffix", default="")
-    x.add_argument("--frames", type=int, default=500)
+    x.add_argument("--frames", type=int, default=0, help="own frames to generate (default 10 s)")
     x.add_argument("--temp", type=float, default=0.8)
     x.add_argument("--top-p", type=float, default=0.95)
     x.add_argument("--seed", type=int, default=1234)
