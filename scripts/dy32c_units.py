@@ -184,8 +184,11 @@ def cmd_known(a) -> None:
     dev = torch.device("cuda")
     u = Units(dev)
     _, pieces, _ = fetch(a.src, a.shard, Path(a.work))
-    use = [w for w in pieces if len(w) <= 40 * SR][: a.pieces]
+    use = [w[: 50 * SR] for w in pieces[: a.pieces]]
+    t0 = time.time()
     new = piece_codes(u, use)
+    torch.cuda.synchronize()
+    print("batched x_realtime", round(sum(len(w) for w in use) / SR / (time.time() - t0), 1), flush=True)
     u.dtype = torch.float32
     ref = [u.codes([w.astype(np.float32) / 32768.0])[0] for w in use]
     agree = np.zeros(len(LAYERS))
