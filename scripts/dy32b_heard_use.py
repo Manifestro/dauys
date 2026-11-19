@@ -183,7 +183,7 @@ def main() -> None:
                                 "mean_frame_db": round(en_sum[c] / max(cnt[c], 1), 2)} for c in codes},
                     "quietest_10_codes_by_mean_db": [[int(c), round(en_sum[c] / cnt[c], 1), round(cnt[c] / n_frames, 4)]
                                                     for c in np.argsort(np.where(cnt > 50, en_sum / np.maximum(cnt, 1), 1e9))[:10]]}
-    Path(a.out).write_text(json.dumps(out, indent=1))
+    Path(a.out).write_text(json.dumps(out, indent=1, default=float))
     lines = ["# DY-32 track B: likelihood test of heard content (UnitLM 409M, corpus K2000 50 Hz, step "
              f"{ck['step']})", "", f"windows {len(wins)}, episodes {winfo['episodes']}, held-out shards la-00030, "
              "la-00071, la-00109. CE of the true own codes (nats/frame).", "",
@@ -195,7 +195,7 @@ def main() -> None:
                          f"{v['share_a_lt_b_ci95']} | {v['share_a_lt_c']} {v['share_a_lt_c_ci95']} | "
                          f"{v['gap_b_minus_a']['mean']} {v['gap_b_minus_a']['ci95']} |")
     lines += ["", f"(b-a at 30 s) - (b-a at 5 s), 3-10 s bucket: {out['gap30_minus_gap5_3-10s']}", "",
-              f"Codes on own audio: {json.dumps(out['codes'])}", "", out["notes"]]
+              f"Codes on own audio: {json.dumps(out['codes'], default=float)}", "", out["notes"]]
     Path(a.out).with_suffix(".md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines), flush=True)
 
