@@ -962,8 +962,11 @@ def nmi_purity(word: np.ndarray, tok: np.ndarray) -> dict:
     for t in np.unique(tok):
         m = tok == t
         pur += np.bincount(word[m]).max()
+    cons = 0  # word consistency: tokens of a word that fall into that word's most common dictionary token
+    for w in np.unique(word):
+        cons += np.bincount(tok[word == w]).max()
     return {"NMI": round(float(normalized_mutual_info_score(word, tok)), 4), "purity": round(pur / len(word), 4),
-            "tokens_used": int(len(np.unique(tok)))}
+            "consistency": round(cons / len(word), 4), "tokens_used": int(len(np.unique(tok)))}
 
 
 def cmd_eval(a) -> None:
@@ -1008,7 +1011,8 @@ def cmd_eval(a) -> None:
         R[kind] = res
     o, t, b = R["own"], R["own"]["trained"], R["own"]["base"]
     g2 = t["AP_cross"] >= 0.50 and t["AP_cross"] >= b["AP_cross"] + 0.10 and t["ratio_cross_within"] >= 0.75
-    g3 = t["dict"]["NMI"] >= b["dict"]["NMI"] + 0.05 and t["dict"]["purity"] >= 0.40
+    # purity is near 1 by construction when K=20000 >> test tokens, so G3 uses consistency (fixed before the full run)
+    g3 = t["dict"]["NMI"] >= b["dict"]["NMI"] + 0.05 and t["dict"]["consistency"] >= b["dict"]["consistency"] + 0.05
     R["gates"] = {"G2": g2, "G3": g3}
     (out / a.name / "eval.json").write_text(json.dumps(R, indent=1))
     log("EVAL", json.dumps(R))
