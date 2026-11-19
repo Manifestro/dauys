@@ -239,7 +239,59 @@ def known(kind: str, steps: int, out: Path, n_ep: int = 40) -> dict:
     if kind == "zdist":
         r["class_from_z"] = class_acc(res["enc"], tr, va)
         r["ce_first20"] = head_ce(res["model"], res["enc"], va, SMALL.ctx)
+        r["follow"] = follow(res["model"], res["enc"], va, SMALL.ctx)
     return r
+
+
+@torch.no_grad()
+def follow(model, enc, c: Corpus, T: int, n_batches: int = 16) -> dict:
+    """Class implied by the model's own predictions on utterance frames 1-20 (mean predicted distribution over codes
+    1000-1199, class = argmax_c sum_v p(v) log dist_c(v)) with the true z and with a swapped z: does it follow z?"""
+    dev = torch.device("cuda")
+    dist = torch.from_numpy(np.random.default_rng(777).dirichlet(np.full(200, 0.3), size=32)).float().to(dev)
+    ld = torch.log(dist + 1e-9)
+    b = Builder(c, T, np.random.default_rng(51))
+    rng = np.random.default_rng(52)
+    res = {"true_follows_true": 0, "swap_follows_swap": 0, "swap_follows_true": 0, "n": 0, "n_diff_class": 0}
+    model.eval()
+    enc.eval()
+    for _ in range(n_batches):
+        starts = rng.integers(0, len(c.stream) - T - 1, size=16)
+        mb = b.build(starts, pred_on=False, modes=False)
+        ids = torch.from_numpy(mb["ids"]).to(dev)
+        items = []
+        for (bi, u, r, m, a), r2 in zip(mb["slots"], mb["swap_rows"]):
+            q0 = int(c.st[u] - starts[bi])
+            if q0 >= 0 and q0 + 21 <= T and r2 >= 0:
+                items.append((bi, q0, int(c.cls[u]), int(c.cls[mb["rows_u"][r2]])))
+        if not items:
+            continue
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            Z = encode_rows(enc, mb, dev)
+            out = {}
+            for k in ("true", "swap"):
+                sl = mb["slots"] if k == "true" else [(bi, u, r2 if r2 >= 0 else r, m, a) for (bi, u, r, m, a), r2 in zip(mb["slots"], mb["swap_rows"])]
+                zin, has = thought_tables({**mb, "slots": sl}, Z, None, dev)
+                h = model.states(ids[:, :-1], zin, has)
+                pc = []
+                for bi, q0, _, _ in items:
+                    p = torch.softmax(model.logits(h[bi, q0 : q0 + 20]), -1)[:, 1000:1200].mean(0)
+                    pc.append(int((ld @ (p / p.sum())).argmax()))
+                out[k] = pc
+        for j, (_, _, ct, cs) in enumerate(items):
+            res["n"] += 1
+            res["true_follows_true"] += out["true"][j] == ct
+            if cs != ct:
+                res["n_diff_class"] += 1
+                res["swap_follows_swap"] += out["swap"][j] == cs
+                res["swap_follows_true"] += out["swap"][j] == ct
+    model.train()
+    enc.train()
+    n, nd = max(res["n"], 1), max(res["n_diff_class"], 1)
+    return {"n": res["n"], "n_swap_with_other_class": res["n_diff_class"],
+            "acc_true_z": round(res["true_follows_true"] / n, 4),
+            "swap_z_predicts_swap_class": round(res["swap_follows_swap"] / nd, 4),
+            "swap_z_predicts_true_class": round(res["swap_follows_true"] / nd, 4)}
 
 
 @torch.no_grad()
@@ -295,6 +347,16 @@ def class_acc(enc, tr: Corpus, va: Corpus) -> dict:
     acc = float(((zv @ mu.T).argmax(1).cpu().numpy() == va.cls[uv]).mean())
     enc.train()
     return {"acc": round(acc, 4), "chance": 1 / 32, "n": 1000}
+
+
+def judge4(r: dict) -> dict:
+    v = r["val"]
+    r["rule"] = ("(fixed by the coordinator) CE on utterance frames with the true z lower than with a swapped z by >= 10 % "
+                 "and lower than with null z; a probe on z (nearest class mean) recovers the class with accuracy >= 0.9; "
+                 "with a swapped z the model's own predicted class follows the swapped z (majority)")
+    r["pass"] = bool((v["ceu_swap"] - v["ceu_true"]) / v["ceu_true"] >= 0.10 and v["ceu_true"] < v["ceu_null"]
+                     and r["class_from_z"]["acc"] >= 0.9 and r["follow"]["swap_z_predicts_swap_class"] > 0.5)
+    return r
 
 
 def overfit(tr: Corpus, cfg: LMConfig, steps: int) -> dict:
@@ -381,11 +443,23 @@ def main() -> None:
         r = known("zdist", a.known_steps4, out / "k4", n_ep=400)
         v = r["val"]
         r["ceu"] = {"true": v["ceu_true"], "null": v["ceu_null"], "swap": v["ceu_swap"]}
-        h = r["ce_first20"]
-        r["rule"] = ("pass: on utterance frames 1-20 CE(true z) < CE(null) - 0.3 and < CE(swapped z) - 0.3; over whole "
-                     "utterances CE(true) < CE(swap); class of the utterance from z (nearest class mean) >= 0.8 (chance 1/32)")
-        R["4_known_second_half"] = {**r, "pass": h["true"] < h["null"] - 0.3 and h["true"] < h["swap"] - 0.3
-                                    and v["ceu_true"] < v["ceu_swap"] and r["class_from_z"]["acc"] >= 0.8}
+        R["4_known_second_half"] = judge4(r)
+        save()
+        print("4", json.dumps(R["4_known_second_half"]), flush=True)
+    if "4e" in only:  # re-evaluate item 4 from the saved synthetic run (no retraining)
+        from dy35_train import make_models
+
+        ck = torch.load(out / "k4" / "best.pt", map_location="cpu", weights_only=False)
+        model, enc, _ = make_models(SMALL, torch.device("cuda"))
+        model.load_state_dict(ck["model"])
+        enc.load_state_dict(ck["enc"])
+        tr, va = synth("zdist", 1, n_ep=400), synth("zdist", 2, n_ep=10)
+        r = R["4_known_second_half"]
+        r["val"] = ck["val"]
+        r["class_from_z"] = class_acc(enc, tr, va)
+        r["ce_first20"] = head_ce(model, enc, va, SMALL.ctx)
+        r["follow"] = follow(model, enc, va, SMALL.ctx)
+        R["4_known_second_half"] = judge4(r)
         save()
         print("4", json.dumps(R["4_known_second_half"]), flush=True)
     if "5" in only:
