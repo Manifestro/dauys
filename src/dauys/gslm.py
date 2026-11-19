@@ -216,7 +216,7 @@ class FairseqULM(nn.Module):
     def load(cls, path: str, device) -> "FairseqULM":
         s = torch.load(path, map_location="cpu", weights_only=False)
         args = s["cfg"]["model"]
-        args = dict(args) if not hasattr(args, "__dict__") else vars(args)
+        args = vars(args) if hasattr(args, "_get_kwargs") else {k: args[k] for k in args}
         m = cls(s["model"], args)
         m.pos = m.pos.to(device)
         return m.to(device).eval()
