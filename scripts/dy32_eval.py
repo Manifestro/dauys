@@ -124,7 +124,7 @@ def self_pairs(j, prompts: list[str], g: list[str], jj: np.ndarray, min_words: i
     return {**strip_p(r), "skipped": len(g) - len(idx), "min_words": min_words}
 
 
-def transcribe(device, folders: dict[str, Path]) -> dict:
+def transcribe(device, folders: dict[str, list[Path]]) -> dict:
     import torch
     from transformers import pipeline
 
@@ -135,10 +135,10 @@ def transcribe(device, folders: dict[str, Path]) -> dict:
     asr = pipeline("automatic-speech-recognition", model=ASR, device=device, torch_dtype=torch.float16, chunk_length_s=30)
     out = {}
     for name, d in folders.items():
-        waves = [load(d / f"{i:02d}.wav") for i in range(N)]
+        waves = [load(f) for f in d]
         ids = [L(w) for w in waves]
         idx = [i for i, w in enumerate(waves) if len(w) >= SR // 10]
-        wt = [""] * N
+        wt = [""] * len(waves)
         for i, r in zip(idx, asr([{"raw": waves[i], "sampling_rate": SR} for i in idx], batch_size=16,
                                  generate_kwargs={"language": "en", "task": "transcribe"})):
             wt[i] = r["text"].strip()
@@ -190,9 +190,35 @@ def main() -> None:
     for spec in a.extra:
         n, d = spec.split("=", 1)
         folders[n] = Path(d)
+    folders = {n: d for n, d in folders.items() if not n.endswith("-x")}
     log("folders", list(folders))
     b = base(device)
-    tr = transcribe(device, folders)
+    # extension pack (prompts_x, pieces 050-199): union controls for folders with a "<name>-x" twin
+    PX = Path("/data/dy32/prompts_x")
+    sh(f"aws s3 sync {S3}/prompts_x/ {PX}/ --only-show-errors")
+    ext_ids = [i for i in range(50, 200) if (PX / f"prompt_{i:03d}.wav").exists() and (PX / f"real_{i:03d}.wav").exists()]
+    twins = {}
+    for n, d in folders.items():
+        tw = Path(str(d) + "-x") if n != "anchor-real" else PX
+        pat = "real_{:03d}.wav" if n == "anchor-real" else "{:03d}.wav"
+        ids = [i for i in ext_ids if (tw / pat.format(i)).exists()]
+        if ids:
+            twins[n] = (tw, pat, ids)
+    jobs = {n: [d / f"{i:02d}.wav" for i in range(N)] for n, d in folders.items()}
+    bx = {}
+    if twins:
+        fx = W / "eval_base_x.json"
+        bx = json.loads(fx.read_text()) if fx.exists() else {}
+        if sorted(map(int, bx.get("ids", []))) != ext_ids:
+            jobs["_px"] = [PX / f"prompt_{i:03d}.wav" for i in ext_ids]
+            jobs["_rx"] = [PX / f"real_{i:03d}.wav" for i in ext_ids]
+        for n, (tw, pat, ids) in twins.items():
+            jobs[n + "@x"] = [tw / pat.format(i) for i in ids]
+    log("twins", {n: len(v[2]) for n, v in twins.items()})
+    tr = transcribe(device, jobs)
+    if "_px" in tr:
+        bx = {"ids": ext_ids, "prompt": dict(zip(map(str, ext_ids), tr["_px"]["gen"])), "real": dict(zip(map(str, ext_ids), tr["_rx"]["gen"]))}
+        (W / "eval_base_x.json").write_text(json.dumps(bx))
     prompt_t, real_t, floor_t = b["prompt"], b["real"], b["floor"]
     oi = other_index(N)
     other_t = [real_t[i] for i in oi]
@@ -214,6 +240,19 @@ def main() -> None:
         D[n]["Dself"] = self_pairs(j, prompt_t, g, dj, 1)
         D[n]["Dself_5w"] = self_pairs(j, prompt_t, g, dj, 5)
         log("JUDGE", n, json.dumps({k: strip_p(v) for k, v in D[n].items()}))
+    U = {}
+    for n, (tw, pat, ids) in twins.items():
+        pu = b["prompt"] + [bx["prompt"][str(i)] for i in ids]
+        ru = b["real"] + [bx["real"][str(i)] for i in ids]
+        gu = tr[n]["gen"] + tr[n + "@x"]["gen"]
+        uj, uk = derange(len(gu))
+        U[n] = {"n": len(gu), "Dc_mis": strip_p(j.pairs(pu, [gu[x] for x in uj], [ru[x] for x in uk])),
+                "Dself": self_pairs(j, pu, gu, uj, 1), "Dself_5w": self_pairs(j, pu, gu, uj, 5),
+                "speech_seconds_median": float(np.median(tr[n]["speech_seconds"] + tr[n + "@x"]["speech_seconds"])),
+                "words_median": float(np.median([len(t.split()) for t in gu])),
+                "whisper_words_median": float(np.median([len(t.split()) for t in tr[n]["whisper"] + tr[n + "@x"]["whisper"]])),
+                "empty_share": float(np.mean([not t for t in gu]))}
+        log("UNION", n, json.dumps(U[n]))
     del j
     cleanup()
     refs = text_refs(device, prompt_t, {"real": real_t, "floor": floor_t, **{n: tr[n]["gen"] for n in folders}}) if folders else {"summary": {}, "logppl": {}}
@@ -242,6 +281,8 @@ def main() -> None:
              "whisper_words_median": float(np.median([len(t.split()) for t in tr[n]["whisper"]])),
              "whisper_words_in_heldout_vocab": in_vocab_share([" ".join(x for x in t.lower().split()) for t in tr[n]["whisper"]], vocab),
              "info": info}
+        if n in U:
+            s["union"] = U[n]
         summary["folders"][n] = s
         out = E / n
         out.mkdir(parents=True, exist_ok=True)
@@ -288,6 +329,14 @@ def main() -> None:
                  f"{s['words_in_heldout_vocab']:.3f} | {s['gpt2'].get('median_logppl', float('nan')):.2f} | {s['rep4_words']:.3f} | "
                  f"{s['words_median']:.0f} / {s['whisper_words_median']:.0f} | {s['empty_share']:.2f} | "
                  f"{s['speech_seconds_median']:.1f} / {s['gen_seconds_median']:.1f} |")
+    if U:
+        L += ["", "## Union controls (first 50 + extension pieces 050-199 where the track wrote `<name>-x`; Dc/Dr stay on the first 50)", "",
+              "| folder | n | Dc_mis | Dself ± 95% (n used, skipped) | Dself5 ± 95% (n used) | words median (letters / Whisper) | empty | speech s |",
+              "|---|---|---|---|---|---|---|---|"]
+        for n, u in U.items():
+            L.append(f"| {n} | {u['n']} | {u['Dc_mis']['D']:.2f} ± {u['Dc_mis']['ci95']:.2f} | {u['Dself']['D']:.2f} ± {u['Dself']['ci95']:.2f} "
+                     f"({u['Dself']['n']}, {u['Dself']['skipped']}) | {u['Dself_5w']['D']:.2f} ± {u['Dself_5w']['ci95']:.2f} ({u['Dself_5w']['n']}) | "
+                     f"{u['words_median']:.0f} / {u['whisper_words_median']:.0f} | {u['empty_share']:.2f} | {u['speech_seconds_median']:.1f} |")
     pairs_ = [("idea 2 downstream (one voice vs corpus codes)", "g-lj", "b"), ("idea 1 downstream (several streams vs one)", "c", "b"),
               ("idea 3 (continuous vs discrete input)", "d-cont", "d-disc"), ("codebook size (8000 vs 2000)", "h-k8000", "b")]
     pairs_ += [(f"{t} (early)", x + "-early", y + "-early") for t, x, y in pairs_]

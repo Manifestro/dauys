@@ -74,7 +74,7 @@ def main() -> None:
          "Channels: `<name>__XX` = the original 10 s piece, beep, then the same piece through that channel (pieces 00-02). "
          "Texts below come from the letters recogniser on audio.", "", "## Continuations (gen/)", ""]
     tab = json.loads((W / "channel.json").read_text()) if (W / "channel.json").exists() else {}
-    for d in sorted(x for x in G.iterdir() if x.is_dir()) if G.exists() else []:
+    for d in sorted(x for x in G.iterdir() if x.is_dir() and not x.name.endswith("-x")) if G.exists() else []:
         if not complete(d, N_GEN):
             L += [f"- **{d.name}**: incomplete, skipped", ""]
             continue
@@ -86,8 +86,15 @@ def main() -> None:
         if ev.exists():
             e = json.loads(ev.read_text())
             s = e["summary"]
-            L += [f"Dc {s['judge']['Dc']['D']}, Dr {s['judge']['Dr']['D']} ({s['verdict']['verdict']}); words in held-out vocabulary "
-                  f"{s['words_in_heldout_vocab']:.3f}", ""]
+            jd = s["judge"]
+            L += [f"Dc {jd['Dc']['D']}, Dr {jd['Dr']['D']} ({s['verdict']['verdict']}); controls: Dc_mis {jd['Dc_mis']['D']}, "
+                  f"Dself {jd['Dself']['D']} (n {jd['Dself']['n']}), Dself5 {jd['Dself_5w']['D']} (n {jd['Dself_5w']['n']}); "
+                  f"speech {s['speech_seconds_median']:.1f} s of {s['gen_seconds_median']:.1f} s; words {s['words_median']:.0f} "
+                  f"(Whisper {s['whisper_words_median']:.0f}); in held-out vocabulary {s['words_in_heldout_vocab']:.3f}", ""]
+            if "union" in s:
+                u = s["union"]
+                L += [f"Union ({u['n']} prompts): Dc_mis {u['Dc_mis']['D']}, Dself {u['Dself']['D']} ± {u['Dself']['ci95']} "
+                      f"(n {u['Dself']['n']}), Dself5 {u['Dself_5w']['D']} (n {u['Dself_5w']['n']}), speech {u['speech_seconds_median']:.1f} s", ""]
             for r in e["rows"][:N_GEN]:
                 L += [f"- {r['id']} prompt: {r['prompt'][-300:]}", f"  - model: {r['gen']}", f"  - real: {r['real']}"]
             L.append("")
