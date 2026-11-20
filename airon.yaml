@@ -16,13 +16,13 @@ stages:
   setup: bash scripts/dy41_job.sh setup
   data: bash scripts/dy41_job.sh data
   test: bash scripts/dy41_job.sh test
-  dry: bash scripts/dy41_job.sh train --more 60 --min-start 6000
-  train: bash scripts/dy41_job.sh train --min-start 6000
+  dry: bash scripts/dy41_job.sh train --more 60 --min-start 5700
+  train: bash scripts/dy41_job.sh train --min-start 5700
   eval: bash scripts/dy41_job.sh eval
 
 datasets: [dauys-mimi-en16k, duplexchat-en16k]
 
-estimate: {steps: 40000}           # left after DY-41/23 (stopped near step 6.5k): 0.39 steps/s x ~29 h; the trainer stops by 38 h in all
+estimate: {steps: 40000}           # left after DY-41/23 (state in S3 at step 5758): 0.39 steps/s x ~29 h; the trainer stops by 38 h in all
 
 checkpoint: {every: 30m}
 
