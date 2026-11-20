@@ -22,7 +22,7 @@ stages:
 
 datasets: [dauys-mimi-en16k, duplexchat-en16k]
 
-estimate: {steps: 55000}           # 0.40 steps/s (DY-40 on this GPU) x 38 h; validation stops it earlier if it plateaus
+estimate: {steps: 46000}           # 0.354 steps/s (dry run, DY-41/22) x 36 h; the trainer itself stops by 38 h or earlier on a validation plateau
 
 checkpoint: {every: 30m}
 
