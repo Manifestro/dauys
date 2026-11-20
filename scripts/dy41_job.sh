@@ -54,6 +54,7 @@ assert not miss, 'run the split Mimi pass first (airon launch airon-pass.yaml)'
 pass)
   # one machine of the split Mimi pass (airon-pass.yaml, resources.shards): $1 workers (default 1; A10G is GPU-bound)
   k=${AIRON_SHARD:-0}; n=${AIRON_SHARDS:-1}; nw=${1:-1}; shift || true  # further arguments go to dy40_mimi.py pass
+  (( $# )) || set -- --batch 2 --chunk-s 60  # A10G 24 GB: batch 8 x 120 s ran out of GPU memory
   pids=()
   for w in $(seq 0 $((nw-1))); do
     python "$repo/scripts/dy40_mimi.py" pass --part $((nw*k+w))/$((nw*n)) --n-train 100000 --out $NV/units --work $NV/w$w "$@" > $W/logs/pass_$w.log 2>&1 &
