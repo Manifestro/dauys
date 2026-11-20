@@ -135,7 +135,9 @@ def runs_of(meta: list[dict], max_gap: float) -> list[list[int]]:
 
 
 def shard_list(n_train: int) -> list[str]:
-    allp = listing(SRC)
+    import re
+
+    allp = [s for s in listing(SRC) if re.fullmatch(r"la-\d{5}", s)]
     train = [s for s in allp if not held_out(s)][:n_train]
     return train + HELD
 
