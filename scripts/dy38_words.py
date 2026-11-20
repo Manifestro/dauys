@@ -48,6 +48,7 @@ TOL40, TOL20 = 2, 1  # frames
 EDGE = 2  # boundaries this close to an utterance edge are not scored
 MIN_LETTERS, MIN_WORD_FR = 3, 10
 PER_WORD = 20
+EXPERIMENT = "Словарь слов из звука: одно слово любым голосом — один токен (200 ч, без текста)"
 
 
 def log(*a) -> None:
@@ -887,11 +888,12 @@ def cmd_train(a) -> None:
 
     meta.update({"arm": arm, "params": npar, "rounds": a.rounds, "steps": a.steps, "batch": a.batch, "tau": a.tau,
                  "lr": a.lr, "K": K, "pieces": len(S)})
+    fresh = not meta["airon_run_id"]
     meta["airon_run_id"] = meta["airon_run_id"] or str(uuid.uuid4())
     meta_f.write_text(json.dumps(meta, indent=1))
     log("encoder params", npar, "pieces", len(S), "arm", arm)
-    run = airon.init(project="dauys", name=a.name, config=meta, experiment="DY-38", tags=["dy38"],
-                     total_steps=a.rounds * a.steps, run_id=meta["airon_run_id"], resume="allow",
+    run = airon.init(project="dauys", name=f"dy38-{a.name}", config=meta, experiment=EXPERIMENT, tags=["dy38"],
+                     total_steps=a.rounds * a.steps, run_id=meta["airon_run_id"], resume="never" if fresh else "allow",
                      mode="disabled" if a.dry else None)
     V = np.load(out / "train" / "base.npy")
     cache, hist, best = {}, [], (-1.0, None)
