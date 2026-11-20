@@ -96,7 +96,7 @@ if ! done_ check2; then
   mark check2
 fi
 if ! done_ train; then
-  python "$repo/scripts/dy40_train.py" --units $NV/units --out $W/run > $W/train.log 2>&1
+  python "$repo/scripts/dy40_train.py" --units $NV/units --out $W/run ${TRAIN_ARGS:-} > $W/train.log 2>&1
   tail -3 $W/train.log; grep -q "TRAIN DONE" $W/train.log || { echo "TRAIN FAILED"; tail -30 $W/train.log; exit 1; }
   aws s3 cp $W/train.log $S3/logs/train.log --only-show-errors
   mark train
