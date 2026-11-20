@@ -43,7 +43,7 @@ do_pass() {
     pids=()
     for w in $(seq 0 $((WPG - 1))); do
       part=$((POD * WPG + w))/$((NPODS * WPG))
-      python "$repo/scripts/dy40_mimi.py" pass --part $part --n-train $NTRAIN --out $NV/units --work $NV/w$w > $W/logs/pass_$w.log 2>&1 &
+      python "$repo/scripts/dy40_mimi.py" pass --part ${PART:-$part} --n-train $NTRAIN --out $NV/units --work $NV/w$w ${PASS_ARGS:-} > $W/logs/pass_$w.log 2>&1 &
       pids+=($!)
     done
     ok=1; for p in "${pids[@]}"; do wait $p || ok=0; done

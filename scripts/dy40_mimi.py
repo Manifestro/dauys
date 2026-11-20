@@ -150,6 +150,8 @@ def cmd_pass(a) -> None:
     todo = a.shards.split(",") if a.shards else shard_list(a.n_train)
     k, n = map(int, a.part.split("/"))
     todo = todo[k::n]
+    if a.reverse:  # helper machines walk a part from its end, meeting the forward worker in the middle
+        todo = todo[::-1]
     have = set(listing(DST)) if not a.no_skip else set()
     todo = [s for s in todo if s not in have and not (out / f"{s}.npz").exists()]
     print(json.dumps({"part": a.part, "todo": len(todo)}), flush=True)
@@ -160,11 +162,19 @@ def cmd_pass(a) -> None:
     dl = ThreadPoolExecutor(2)
     futs = [dl.submit(fetch, s, work) for s in todo[:2]]
     t_all, h_all = time.time(), 0.0
+    def in_s3(s: str) -> bool:
+        import subprocess
+
+        return subprocess.run(f"aws s3 ls {DST}/{s}.npz", shell=True, capture_output=True).returncode == 0
+
     for j, s in enumerate(todo):
         t0 = time.time()
         _, keep, secs = futs[j].result()
         if j + 2 < len(todo):
             futs.append(dl.submit(fetch, todo[j + 2], work))
+        if not a.no_skip and in_s3(s):  # another worker finished it meanwhile
+            print(json.dumps({"shard": s, "skipped": "already in S3"}), flush=True)
+            continue
         meta = [m for _, _, m in keep]
         runs = runs_of(meta, a.max_gap)
         waves = [np.concatenate([keep[i][1] for i in r]) for r in runs]
@@ -236,6 +246,7 @@ def main() -> None:
     q.add_argument("--max-gap", type=float, default=0.05)
     q.add_argument("--no-upload", action="store_true")
     q.add_argument("--no-skip", action="store_true")
+    q.add_argument("--reverse", action="store_true")
     r = sp.add_parser("resynth")
     r.add_argument("--pack", default="/data/dy32/prompts")
     r.add_argument("--out", required=True)
