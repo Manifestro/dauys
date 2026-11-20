@@ -839,7 +839,8 @@ def cmd_check(a) -> None:
     # measure checks on test tokens
     Tk = tokens(out, "test", arm, T, oracle=False)
     rng = np.random.default_rng(0)
-    oh = np.eye(len(Tk["vocab"]), dtype=np.float32)[Tk["word"]] + 0.1 * rng.standard_normal((len(Tk["word"]), len(Tk["vocab"]))).astype(np.float32)
+    V = len(Tk["vocab"])  # answer vectors + noise of total norm ~0.3 whatever the vocabulary size
+    oh = np.eye(V, dtype=np.float32)[Tk["word"]] + (0.3 / math.sqrt(V)) * rng.standard_normal((len(Tk["word"]), V)).astype(np.float32)
     ka = same_different(oh, Tk["word"], Tk["ep"], Tk["spk"])
     rnd = same_different(rng.standard_normal((len(Tk["word"]), 64)).astype(np.float32), Tk["word"], Tk["ep"], Tk["spk"])
     R["measure_known_answer"] = {"AP_cross": ka["AP_cross"], "pass": ka["AP_cross"] > 0.95}
