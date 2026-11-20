@@ -38,7 +38,7 @@ def check_layout(dev) -> dict:
     rng = np.random.default_rng(0)
     fr = rng.integers(0, 2048, size=(37, 8))
     d = delay(fr, 2049)
-    rt = bool(np.array_equal(undelay(d, 37), fr)) and d.shape == (38, 8) and (d[0, 1:] == 2049).all() and d[-1, 0] == 2049
+    rt = bool(np.array_equal(undelay(d, 37), fr) and d.shape == (38, 8) and (d[0, 1:] == 2049).all() and d[-1, 0] == 2049)
     torch.manual_seed(0)
     cfg = DLConfig(d=128, layers=2, heads=4, ffn=256, ctx=512, dd=64, dlayers=2, dheads=4, dffn=128)
     m = DepthLM(cfg).to(dev).eval()
@@ -100,7 +100,7 @@ def main() -> None:
         res["known"] = check_known(dev, Path(a.pack))
     res["ok"] = all(v["ok"] for v in res.values())
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(a.out).write_text(json.dumps(res, indent=1))
+    Path(a.out).write_text(json.dumps(res, indent=1, default=lambda o: o.item() if hasattr(o, "item") else str(o)))
     print(json.dumps(res, indent=1), flush=True)
     print("CHECKLIST", "PASS" if res["ok"] else "FAIL", flush=True)
 
