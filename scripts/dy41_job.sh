@@ -26,6 +26,7 @@ sudo mkdir -p /data && sudo chown "$USER" /data
 W=/data/dy41; mkdir -p $W/logs
 B=s3://manifestro-dataset-876108973178-us-east-1-an/outputs
 S3=$B/dauys/dy41
+export DY41_INIT=$S3/ckpt/state_periodic.pt  # DY-41/23's state: its checkpoints did not reach Airon's store
 export DY_OUT_S3=$S3 DY_COMMIT=$(git -C "$repo" rev-parse HEAD)
 V=$HOME/venv
 export PATH=$V/bin:$PATH PYTHONPATH=$repo/src:$repo/scripts PYTHONWARNINGS=ignore HF_HUB_DISABLE_PROGRESS_BARS=1 OMP_NUM_THREADS=4 MALLOC_ARENA_MAX=2
@@ -88,7 +89,7 @@ EOF
   aws s3 cp $W/checklist.json $S3/checklist.json --only-show-errors
   ;;
 train)
-  python "$repo/scripts/dy41_train.py" --units $NV/units --out $W/run "$@"
+  python "$repo/scripts/dy41_train.py" --units $NV/units --out $W/run --init-from $DY41_INIT "$@"
   ;;
 eval)
   python "$repo/scripts/dy40_gen.py" gen --run $W/run --out $W/gen --pack-src prompts --variants "m-t10:t10;m-ra08:ra08" --upload
@@ -113,6 +114,7 @@ s = json.load(open("/data/dy32/a/eval/final/summary.json"))
 t = s["table"]
 m = {}
 for n, r in t.items():
+    n = n.replace("-", "_")
     m[f"eval/dself_{n}"] = r["Dself"]["D"]
     m[f"eval/words_whisper_{n}"] = r["words_median_whisper"]
     m[f"eval/invocab_{n}"] = r["in_vocab_first50"]

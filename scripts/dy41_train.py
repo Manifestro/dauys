@@ -37,7 +37,11 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--units", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--steps", type=int, default=1_000_000, help="hard cap (the dry run uses a small one)")
+    p.add_argument("--steps", type=int, default=1_000_000, help="hard cap on the global step")
+    p.add_argument("--more", type=int, default=0, help="stop this many steps after the start (the dry run: 60)")
+    p.add_argument("--init-from", default="", help="s3:// state to start from when airon.resume() gives none")
+    p.add_argument("--min-start", type=int, default=0,
+                   help="fail unless training starts at least at this global step (a resume that silently starts over)")
     p.add_argument("--batch", type=int, default=32)
     p.add_argument("--micro", type=int, default=8)
     p.add_argument("--lr", type=float, default=3e-4)
@@ -84,13 +88,22 @@ def main() -> None:
           "elapsed": 0.0}
 
     resume_path = airon.resume()
-    if not resume_path and args.steps > 1000:  # the full run on the same machine: continue from the local state
-        local = [f for f in (out / "state_final.pt", out / "state_periodic.pt") if f.exists()]
-        resume_path = str(max(local, key=lambda f: f.stat().st_mtime)) if local else None
+    if not resume_path and args.init_from:  # no checkpoint from Airon yet: the state another job left in S3
+        import subprocess
+
+        local = out / "init_state.pt"
+        if not local.exists():
+            subprocess.run(["aws", "s3", "cp", args.init_from, str(local), "--only-show-errors"], check=True)
+        resume_path = str(local)
     if resume_path:
         f = Path(resume_path)
-        f = f / "state.pt" if f.is_dir() else f
+        if f.is_dir():  # a stored checkpoint may come back as a folder holding the file
+            f = max(f.rglob("*.pt"), key=lambda x: x.stat().st_size)
         ck = torch.load(f, map_location="cpu", weights_only=False)
+        if "opt" not in ck:  # a weights-only file (best.pt): take the full local state instead
+            g = out / "last.pt" if (out / "last.pt").exists() else out / "init_state.pt"
+            print(json.dumps({"resume_skipped": str(f), "using": str(g)}), flush=True)
+            ck = torch.load(g, map_location="cpu", weights_only=False)
         model.load_state_dict(ck["model"])
         opt.load_state_dict(ck["opt"])
         rng.bit_generator.state = ck["rng"]
@@ -99,6 +112,9 @@ def main() -> None:
             torch.save({"model": ck["best_model"], "cfg": vars(cfg), "step": ck["best_step"], "val": ck["best_val"]},
                        out / "best.pt")
         print(json.dumps({"resumed_from": str(resume_path), "step": st["step"]}), flush=True)
+    if st["step"] < args.min_start:
+        raise RuntimeError(f"training would start at step {st['step']}, expected >= {args.min_start} (resume: {resume_path})")
+    stop_at = min(args.steps, st["step"] + args.more) if args.more else args.steps
 
     meta = {"params": model.parameters_count(), "config": {**vars(cfg), "vocab": cfg.vocab}, "args": vars(args),
             "train_files": len(tr_files), "val_files": [f.stem for f in va_files],
@@ -112,6 +128,9 @@ def main() -> None:
         run = airon.init(config=meta, mode=mode)
     else:
         run = airon.init(project="dauys", name="dy41", config=meta, experiment=EXPERIMENT, tags=["dy41"], mode=mode)
+
+    def name(k: str) -> str:  # Airon's standard: the optimised total is loss, its parts loss_<part>
+        return {"ce": "loss", "ce_mean": "loss_mean"}.get(k, k.replace("ce_l", "loss_l"))
 
     @torch.no_grad()
     def validate() -> dict:
@@ -133,12 +152,12 @@ def main() -> None:
         best_model = {"w": {k: v.to(torch.bfloat16) for k, v in b["model"].items()}, "step": b["step"], "val": b["val"]}
 
     def save_state(tag: str) -> None:
-        f = out / f"state_{tag}.pt"
+        f = out / "last.pt"
         torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "rng": rng.bit_generator.state,
                     "state": {**st, "elapsed": st["elapsed"] + time.time() - t_begin}, "best_model": best_model["w"],
                     "best_step": best_model["step"], "best_val": best_model["val"], "cfg": vars(cfg)}, f.with_suffix(".tmp"))
         os.replace(f.with_suffix(".tmp"), f)
-        run.checkpoint(str(f), step=st["step"], label=tag)
+        run.checkpoint(str(f), step=st["step"])
         print(json.dumps({"checkpoint": str(f), "step": st["step"]}), flush=True)
 
     def lr_now(step: int) -> float:
@@ -155,12 +174,13 @@ def main() -> None:
 
     def validation(step: int) -> None:
         res = validate()
-        run.log({f"val/{k}": v for k, v in res.items()}, step=step)
+        run.log({f"eval/{name(k)}": v for k, v in res.items()}, step=step)
         print(json.dumps({"step": step, "val": res, "utc": time.strftime("%H:%M", time.gmtime())}), flush=True)
         if res["ce"] < st["best"] - args.min_delta or (st["phase"] == "decay" and res["ce"] < st["best"]):
             st["best"], st["stale"] = res["ce"], 0
             torch.save({"model": model.state_dict(), "cfg": vars(cfg), "step": step, "val": res}, out / "best.tmp")
             os.replace(out / "best.tmp", out / "best.pt")
+            run.checkpoint(str(out / "best.pt"), step=step, label="best")
             best_model.update(w={k: v.detach().to("cpu", torch.bfloat16) for k, v in model.state_dict().items()},
                               step=step, val=res)
         else:
@@ -172,7 +192,7 @@ def main() -> None:
     t_ckpt, t_log = time.time(), time.time()
     first = st["step"]
     stop_reason = "step cap"
-    while st["step"] < args.steps:
+    while st["step"] < stop_at:
         step = st["step"]
         for g in opt.param_groups:
             g["lr"] = lr_now(step)
@@ -196,7 +216,7 @@ def main() -> None:
             logs["lr"] = opt.param_groups[0]["lr"]
             logs["steps_per_s"] = args.log_every / max(time.time() - t_log, 1e-9) if step % args.log_every == 0 else 0.0
             t_log = time.time()
-            run.log({f"train/{k}": v for k, v in logs.items()}, step=step)
+            run.log({f"train/{name(k)}": v for k, v in logs.items()}, step=step, tokens=args.batch * T)
             print(json.dumps({"step": step, **{k: round(v, 4) for k, v in logs.items()}}), flush=True)
         hours = (st["elapsed"] + time.time() - t_begin) / 3600
         if st["phase"] == "stable" and hours > args.max_hours - args.decay_before_h:
@@ -209,7 +229,7 @@ def main() -> None:
             stop_reason = "decay finished"
             save_state("final")
             break
-        if step == args.first_ckpt or time.time() - t_ckpt > args.ckpt_min * 60:
+        if step == first + args.first_ckpt or time.time() - t_ckpt > args.ckpt_min * 60:
             save_state("periodic")
             t_ckpt = time.time()
     if stop_reason == "step cap":

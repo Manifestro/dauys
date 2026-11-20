@@ -16,15 +16,19 @@ stages:
   setup: bash scripts/dy41_job.sh setup
   data: bash scripts/dy41_job.sh data
   test: bash scripts/dy41_job.sh test
-  dry: bash scripts/dy41_job.sh train --steps 60
-  train: bash scripts/dy41_job.sh train
+  dry: bash scripts/dy41_job.sh train --more 60 --min-start 6000
+  train: bash scripts/dy41_job.sh train --min-start 6000
   eval: bash scripts/dy41_job.sh eval
 
 datasets: [dauys-mimi-en16k, duplexchat-en16k]
 
-estimate: {steps: 46000}           # 0.354 steps/s (dry run, DY-41/22) x 36 h; the trainer itself stops by 38 h or earlier on a validation plateau
+estimate: {steps: 40000}           # left after DY-41/23 (stopped near step 6.5k): 0.39 steps/s x ~29 h; the trainer stops by 38 h in all
 
 checkpoint: {every: 30m}
+
+metrics:
+  primary: eval/loss               # validation CE on la-00030 + la-00071; the experiment's verdict is Dself (eval stage)
+  goal: min
 
 on_fail: {hold: 60m}
 quiet_ok: 40m                      # loading ~19k h of codes prints nothing for several minutes
