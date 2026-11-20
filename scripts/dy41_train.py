@@ -84,6 +84,9 @@ def main() -> None:
           "elapsed": 0.0}
 
     resume_path = airon.resume()
+    if not resume_path and args.steps > 1000:  # the full run on the same machine: continue from the local state
+        local = [f for f in (out / "state_final.pt", out / "state_periodic.pt") if f.exists()]
+        resume_path = str(max(local, key=lambda f: f.stat().st_mtime)) if local else None
     if resume_path:
         f = Path(resume_path)
         f = f / "state.pt" if f.is_dir() else f

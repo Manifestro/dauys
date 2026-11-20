@@ -12,7 +12,14 @@
 #   bash scripts/dy41_job.sh <stage> [args]
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
+# inside an Airon job the job's own key and address must win over the machine secrets (with the project key
+# run.checkpoint() is refused: "This key is not a job key", and nothing is stored to resume from)
+job_key=${AIRON_API_KEY:-}; job_url=${AIRON_URL:-}
 [[ -f /etc/airon.env ]] && { set -a; . /etc/airon.env; set +a; }
+if [[ -n ${AIRON_JOB:-} ]]; then
+  [[ -n $job_key ]] && export AIRON_API_KEY=$job_key
+  [[ -n $job_url ]] && export AIRON_URL=$job_url
+fi
 export AIRON_URL=${AIRON_URL%/v1}
 NV=/opt/dlami/nvme; if mountpoint -q $NV 2>/dev/null; then sudo chown "$USER" $NV; else NV=$HOME/nvme; mkdir -p $NV; fi
 sudo mkdir -p /data && sudo chown "$USER" /data
