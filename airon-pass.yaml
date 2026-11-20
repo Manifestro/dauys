@@ -1,0 +1,22 @@
+# airon-pass.yaml: the Mimi pass of DY-41 split over several machines (airon 0.5.0 shards).
+#   airon launch airon-pass.yaml
+# Each machine encodes its part of the en-16k training shards not yet in S3 (outputs/dauys/dy40/units/);
+# the training job (airon.yaml) then finds them there and skips them.
+
+experiment: DY-41
+
+resources:
+  gpu: g7e.2xlarge
+  disk: 200
+  ttl: 4h
+  wait: 1h
+  shards: 6
+
+stages:
+  setup: bash scripts/dy41_job.sh setup
+  train: bash scripts/dy41_job.sh pass
+
+datasets: [duplexchat-en16k]
+
+on_fail: {hold: 30m}
+quiet_ok: 30m

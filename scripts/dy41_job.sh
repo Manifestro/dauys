@@ -3,6 +3,7 @@
 #   setup  venv with the pinned packages
 #   data   Mimi pass over every en-16k training shard not yet in S3 (catalogue dauys-mimi-en16k; two workers),
 #          then all codes, the two held-out shards' audio and the prompt packs onto the local disk
+#   pass   one machine's part of the split Mimi pass (airon-pass.yaml)
 #   test   checklist: leak by shard names, layout (generation = training), known answer (Mimi on 50 real pieces),
 #          one-batch overfit (300 steps)
 #   train  scripts/dy41_train.py (extra arguments are passed on: the dry run adds --steps 60)
@@ -48,6 +49,17 @@ data)
   echo "units on disk: $(ls $NV/units/*.npz | wc -l)"
   for s in la-00030 la-00071; do aws s3 sync $B/duplexchat/en-16k/$s/ $NV/held/$s/ --only-show-errors; done
   for p in prompts prompts_x; do aws s3 sync $B/dauys/dy32/$p/ /data/dy32/$p/ --only-show-errors; done
+  ;;
+pass)
+  # one machine of the split Mimi pass (airon-pass.yaml, resources.shards): two workers, each walks its part from the end
+  k=${AIRON_SHARD:-0}; n=${AIRON_SHARDS:-1}
+  pids=()
+  for w in 0 1; do
+    python "$repo/scripts/dy40_mimi.py" pass --part $((2*k+w))/$((2*n)) --reverse --n-train 100000 --out $NV/units --work $NV/w$w > $W/logs/pass_$w.log 2>&1 &
+    pids+=($!)
+  done
+  for p in "${pids[@]}"; do wait $p || { tail -n 20 $W/logs/pass_*.log; exit 1; }; done
+  grep -h "PASS DONE" $W/logs/pass_*.log
   ;;
 test)
   python "$repo/scripts/dy40_checklist.py" --units $NV/units --out $W/checklist.json
