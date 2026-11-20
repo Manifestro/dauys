@@ -5,7 +5,7 @@
 #          shards' audio and the prompt packs onto the local disk
 #   pass   one machine's part of the split Mimi pass (airon-pass.yaml)
 #   test   checklist: leak by shard names, layout (generation = training), known answer (Mimi on 50 real pieces),
-#          one-batch overfit (300 steps)
+#          one-batch overfit (600 steps; at 300 the warmup keeps it at CE 2.9, still falling)
 #   train  scripts/dy41_train.py (extra arguments are passed on: the dry run adds --steps 60)
 #   eval   continuations (prompts + prompts_x, t10 + ra08), heard-content test, DY-33/40 evaluation against DY-40's
 #          model and model b, eval/... metrics into the run, HF dauys-runs/dy41/
@@ -67,7 +67,7 @@ test)
   python "$repo/scripts/dy40_checklist.py" --units $NV/units --out $W/checklist.json
   rm -rf $NV/units_small && mkdir -p $NV/units_small  # overfit on a small subset: three training shards + one held-out
   for f in $(ls $NV/units/*.npz | grep -v -e la-00030 -e la-00071 | head -n 3) $NV/units/la-00030.npz; do ln -s $f $NV/units_small/; done
-  python "$repo/scripts/dy40_train.py" --units $NV/units_small --out $W/overfit --overfit 300 --tracking off > $W/logs/overfit.log 2>&1
+  python "$repo/scripts/dy40_train.py" --units $NV/units_small --out $W/overfit --overfit 600 --tracking off > $W/logs/overfit.log 2>&1
   grep -E "overfit_step\": (0|299)," $W/logs/overfit.log | cut -c1-160
   python - <<EOF
 import json
