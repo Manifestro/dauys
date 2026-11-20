@@ -170,6 +170,7 @@ def cmd_pass(a) -> None:
     for j, s in enumerate(todo):
         t0 = time.time()
         _, keep, secs = futs[j].result()
+        futs[j] = None  # drop the shard's audio held by the finished future (memory grew ~2 GB per shard)
         if j + 2 < len(todo):
             futs.append(dl.submit(fetch, todo[j + 2], work))
         if not a.no_skip and in_s3(s):  # another worker finished it meanwhile
