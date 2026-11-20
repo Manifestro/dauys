@@ -13,7 +13,7 @@ resources:
 
 stages:
   setup: bash scripts/dy41_job.sh setup
-  train: bash scripts/dy41_job.sh pass 1
+  train: bash scripts/dy41_job.sh pass 1 --batch 2 --chunk-s 60   # A10G 24 GB: batch 8 x 120 s ran out of GPU memory
 
 datasets: [duplexchat-en16k]
 
