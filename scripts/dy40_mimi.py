@@ -45,7 +45,9 @@ def sh(cmd: str) -> str:
 
 
 def listing(prefix: str) -> list[str]:
-    out = sh(f"aws s3 ls {prefix}/")
+    import subprocess
+
+    out = subprocess.run(f"aws s3 ls {prefix}/", shell=True, capture_output=True, text=True).stdout  # empty prefix: exit 1
     return sorted(l.split()[-1].rstrip("/").removesuffix(".npz") for l in out.splitlines() if l.strip())
 
 
