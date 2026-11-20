@@ -17,6 +17,7 @@ resynth:  the 50 DY-32 prompts' real continuations (real_XX.wav) -> Mimi 8 codes
 
 import argparse
 import json
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -30,8 +31,8 @@ from dy21_train import held_out
 
 BUCKET = "s3://manifestro-dataset-876108973178-us-east-1-an/outputs"
 SRC = f"{BUCKET}/duplexchat/en-16k"
-S3 = f"{BUCKET}/dauys/dy40"
-DST = f"{S3}/units"
+S3 = os.environ.get("DY_OUT_S3", f"{BUCKET}/dauys/dy40")  # where continuations / resynth go (DY-41: dy41)
+DST = f"{BUCKET}/dauys/dy40/units"  # the Mimi codes (catalogue: dauys-mimi-en16k)
 MIMI = "kyutai/mimi"
 MIMI_REV = "89091b3e466eb6a9d11e537bf26b144f194978f7"
 SR, MSR, HOP = 16000, 24000, 1920  # Mimi frame = 1920 samples at 24 kHz = 80 ms = 1280 samples at 16 kHz

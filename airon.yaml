@@ -1,0 +1,30 @@
+# airon.yaml: how Airon runs this repository's training on a GPU machine (airon 0.4.0).
+#   airon check            validate this file (free)
+#   git push && airon launch
+#   airon status DY-41 --watch
+# Stages are in scripts/dy41_job.sh; the training script continues from airon.resume() and saves with run.checkpoint().
+
+experiment: DY-41
+
+resources:
+  gpu: g7e.2xlarge                 # RTX PRO 6000 96 GB, 64 GB RAM (the codes take ~30 GB at load)
+  disk: 300                        # GB; image 75, en-16k codes ~20, models and continuations ~40
+  ttl: 48h                         # Mimi pass ~3 h + checks ~1 h + train up to 38 h + evaluation ~1.5 h
+  wait: 6h
+
+stages:
+  setup: bash scripts/dy41_job.sh setup
+  data: bash scripts/dy41_job.sh data
+  test: bash scripts/dy41_job.sh test
+  dry: bash scripts/dy41_job.sh train --steps 60
+  train: bash scripts/dy41_job.sh train
+  eval: bash scripts/dy41_job.sh eval
+
+datasets: [dauys-mimi-en16k, duplexchat-en16k]
+
+estimate: {steps: 55000}           # 0.40 steps/s (DY-40 on this GPU) x 38 h; validation stops it earlier if it plateaus
+
+checkpoint: {every: 30m}
+
+on_fail: {hold: 60m}
+quiet_ok: 40m                      # loading ~19k h of codes prints nothing for several minutes

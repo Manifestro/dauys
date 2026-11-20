@@ -5,7 +5,7 @@
 #   bash scripts/dy33_setup.sh
 set -uo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
-set -a; . /etc/airon.env; set +a
+[[ -f /etc/airon.env ]] && { set -a; . /etc/airon.env; set +a; }
 V=${VENV:-$HOME/venv}  # evaluation venv (an own one on a shared machine)
 B=s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys
 W=/data/dy32/a
