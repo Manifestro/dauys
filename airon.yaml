@@ -9,7 +9,7 @@ experiment: DY-41
 resources:
   gpu: g7e.2xlarge                 # RTX PRO 6000 96 GB, 64 GB RAM (the codes take ~30 GB at load)
   disk: 300                        # GB; image 75, en-16k codes ~20, models and continuations ~40
-  ttl: 48h                         # Mimi pass ~3 h + checks ~1 h + train up to 38 h + evaluation ~1.5 h
+  ttl: 44h                         # checks ~1 h + train up to 38 h + evaluation ~1.5 h; codes come from airon-pass.yaml (step 1)
   wait: 6h
 
 stages:

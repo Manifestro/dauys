@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # DY-41 stages for `airon launch` (airon.yaml at the repository root names them):
 #   setup  venv with the pinned packages
-#   data   Mimi pass over every en-16k training shard not yet in S3 (catalogue dauys-mimi-en16k; two workers),
-#          then all codes, the two held-out shards' audio and the prompt packs onto the local disk
+#   data   all codes (made beforehand by the split pass, airon-pass.yaml), checked complete; the two held-out
+#          shards' audio and the prompt packs onto the local disk
 #   pass   one machine's part of the split Mimi pass (airon-pass.yaml)
 #   test   checklist: leak by shard names, layout (generation = training), known answer (Mimi on 50 real pieces),
 #          one-batch overfit (300 steps)
@@ -38,24 +38,25 @@ setup)
   python -c "import torch; from transformers import MimiModel; assert torch.cuda.is_available(); print('GPU', torch.cuda.get_device_name(0))"
   ;;
 data)
-  pids=()
-  for w in 0 1; do
-    python "$repo/scripts/dy40_mimi.py" pass --part $w/2 --n-train 100000 --out $NV/units --work $NV/w$w > $W/logs/pass_$w.log 2>&1 &
-    pids+=($!)
-  done
-  for p in "${pids[@]}"; do wait $p || { tail -n 20 $W/logs/pass_*.log; exit 1; }; done
-  grep -h "PASS DONE" $W/logs/pass_*.log
+  # the codes come from the split pass (airon-pass.yaml); here they are only fetched and checked complete
   aws s3 sync $B/dauys/dy40/units/ $NV/units/ --only-show-errors
-  echo "units on disk: $(ls $NV/units/*.npz | wc -l)"
+  python -c "
+from pathlib import Path
+from dy40_mimi import shard_list
+want = set(shard_list(100000)); have = {f.stem for f in Path('$NV/units').glob('*.npz')}
+miss = sorted(want - have)
+print('units on disk:', len(have), 'expected:', len(want), 'missing:', len(miss), miss[:10])
+assert not miss, 'run the split Mimi pass first (airon launch airon-pass.yaml)'
+"
   for s in la-00030 la-00071; do aws s3 sync $B/duplexchat/en-16k/$s/ $NV/held/$s/ --only-show-errors; done
   for p in prompts prompts_x; do aws s3 sync $B/dauys/dy32/$p/ /data/dy32/$p/ --only-show-errors; done
   ;;
 pass)
-  # one machine of the split Mimi pass (airon-pass.yaml, resources.shards): two workers, each walks its part from the end
-  k=${AIRON_SHARD:-0}; n=${AIRON_SHARDS:-1}
+  # one machine of the split Mimi pass (airon-pass.yaml, resources.shards): $1 workers (default 1; A10G is GPU-bound)
+  k=${AIRON_SHARD:-0}; n=${AIRON_SHARDS:-1}; nw=${1:-1}
   pids=()
-  for w in 0 1; do
-    python "$repo/scripts/dy40_mimi.py" pass --part $((2*k+w))/$((2*n)) --reverse --n-train 100000 --out $NV/units --work $NV/w$w > $W/logs/pass_$w.log 2>&1 &
+  for w in $(seq 0 $((nw-1))); do
+    python "$repo/scripts/dy40_mimi.py" pass --part $((nw*k+w))/$((nw*n)) --n-train 100000 --out $NV/units --work $NV/w$w > $W/logs/pass_$w.log 2>&1 &
     pids+=($!)
   done
   for p in "${pids[@]}"; do wait $p || { tail -n 20 $W/logs/pass_*.log; exit 1; }; done
