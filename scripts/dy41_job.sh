@@ -112,6 +112,10 @@ content)
   # does Mimi (and the DY-41 LM) carry utterance content? DY-36's yardstick (airon-content.yaml)
   python "$repo/scripts/dy41_mimi_content.py" --out $W/mc ${1:+--lm $1}
   ;;
+teacher)
+  # teachers trained with text (Whisper large-v3 encoder, wav2vec2-960h): content by DY-36's yardstick (airon-teacher.yaml)
+  python "$repo/scripts/dy41_teacher_content.py" --out $W/tc
+  ;;
 listen)
   # mid-run listening (airon-listen.yaml): newest best checkpoint of the training job -> HF dy41/listen-mid/
   aws s3 sync $B/dauys/dy32/prompts/ /data/dy32/prompts/ --only-show-errors

@@ -1,0 +1,23 @@
+# airon-teacher.yaml: do teachers trained with text carry the content of an utterance? DY-36's yardstick, no training.
+#   airon launch airon-teacher.yaml
+# Whisper large-v3 encoder layers 8-32 and wav2vec2-large-960h-lv60-self layers 12-24, every utterance alone, pooled;
+# neighbour text closeness vs random (text +0.41, WavLM-L18 +0.096, Mimi and DY-41 <= +0.054; content from +0.10).
+
+experiment: DY-41
+
+resources:
+  gpu: g5.2xlarge                  # A10G 24 GB: two encoders in inference, one after the other
+  disk: 100
+  ttl: 3h
+  wait: 1h
+
+stages:
+  setup: bash scripts/dy41_job.sh setup
+  train: bash scripts/dy41_job.sh teacher
+
+datasets: [duplexchat-en16k]
+
+metrics: {primary: eval/loss, goal: min}   # the experiment's primary; this job only measures
+
+on_fail: {hold: 30m}
+quiet_ok: 30m
