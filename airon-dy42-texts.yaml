@@ -1,0 +1,11 @@
+# DY-42 step 2: Whisper large-v3-turbo transcripts of the ~600k utterances past DY-41/34's 200k (reused), one RTX PRO
+# 6000; kept as the dataset dy42-whisper-texts. Transcripts are the head's training target only.
+experiment: DY-42
+type: run
+gpu: g7e.4xlarge
+disk: 100
+ttl: 5h
+dry: bash scripts/dy42_job.sh texts --limit 300
+run: bash scripts/dy42_job.sh texts
+result:
+  dataset: dy42-whisper-texts

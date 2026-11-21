@@ -1,0 +1,13 @@
+# DY-42 step 1: wav2vec2-960h layer-12 frames (12.5 Hz, fp16) of all ~800k eligible en-16k utterances, once,
+# split over 8 A10G machines; kept as the dataset dy42-w2v-l12-frames for the head (airon-dy42-head.yaml).
+# Audio is read by byte range from the en-16k shards (dy36_common.Audio), as in DY-41/33-35.
+experiment: DY-42
+type: run
+gpu: g5.2xlarge          # A10G 24 GB, 32 GB RAM
+shards: 8
+disk: 150                # image 75 + ~13 GB of frames per machine
+ttl: 3h
+dry: bash scripts/dy42_job.sh frames --limit 200 --batch 24
+run: bash scripts/dy42_job.sh frames --batch 24
+result:
+  dataset: dy42-w2v-l12-frames
