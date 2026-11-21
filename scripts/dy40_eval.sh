@@ -11,7 +11,7 @@ B=s3://manifestro-dataset-876108973178-us-east-1-an/outputs/dauys
 export PATH=$V/bin:$PATH PYTHONPATH=$repo/src PYTHONWARNINGS=ignore HF_HUB_DISABLE_PROGRESS_BARS=1
 DD=${DY_DIR:-dy40}
 export DY_S3=$B/$DD DY_HF=$DD DY_TITLE=${DY_TITLE:-DY-40}
-export DY_DECLARED='{"S1 (temperature 1.0)": ["m-t10", "b-t10"], "S2 (repeat-aware sharpening)": ["m-ra08", "b-ra08"]}'
+export DY_DECLARED=${DY_DECLARED:-'{"S1 (temperature 1.0)": ["m-t10", "b-t10"], "S2 (repeat-aware sharpening)": ["m-ra08", "b-ra08"]}'}
 export DY_MODELS="${DY_MODELS_PREFIX:-Model m = DY-40} depth LM on Mimi 8 x 2048 (12.5 Hz, acoustic codes one frame after code 0, loss weight 10:1); model b = DY-32 track B (WavLM L6 K2000, 50 Hz);"
 R=${1:-final}
 W=/data/dy32/a

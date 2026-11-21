@@ -71,6 +71,36 @@ pass)
   for p in "${pids[@]}"; do wait $p || { tail -n 20 $W/logs/pass_*.log; exit 1; }; done
   grep -h "PASS DONE" $W/logs/pass_*.log
   ;;
+mideval)
+  # mid-run evaluation (airon-mideval.yaml): one checkpoint of the training job -> continuations of all 200 prompts
+  # (t10, ra08) as m<tag>-*, Dself etc. by DY-33/40's pipeline against DY-40 (p40) and model b, round mid<tag>,
+  # plus the listening set; S3 dy41/eval/mid<tag>/, HF dy41/eval/mid<tag>/ and dy41/listen-mid/
+  uri=${1:?checkpoint uri}; tag=${2:?tag, e.g. 10k}
+  mkdir -p $W/mid$tag
+  python -c "import airon, shutil; shutil.copy(airon.fetch('$uri'), '$W/mid$tag/best.pt')"
+  python "$repo/scripts/dy40_gen.py" gen --run $W/mid$tag --out $W/gen-mid$tag --pack-src prompts --variants "m$tag-t10:t10;m$tag-ra08:ra08" --batch 25 --upload
+  python "$repo/scripts/dy40_gen.py" gen --run $W/mid$tag --out $W/gen-mid$tag-x --pack-src prompts_x --variants "m$tag-t10-x:t10;m$tag-ra08-x:ra08" --batch 25 --upload
+  VENV=$V bash "$repo/scripts/dy33_setup.sh" > $W/logs/eval_setup.log 2>&1
+  for x in b-t10 b-t10-x; do aws s3 sync $B/dauys/dy32/gen/$x/ $S3/gen/$x/ --only-show-errors; done
+  for x in b-ra08 b-ra08-x; do aws s3 sync $B/dauys/dy33/gen/$x/ $S3/gen/$x/ --only-show-errors; done
+  for x in t10 ra08 t10-x ra08-x; do
+    v=${x%-x}; sfx=${x#$v}
+    aws s3 sync $B/dauys/dy40/gen/m-$x/ $S3/gen/p40-$v$sfx/ --only-show-errors
+  done
+  mkdir -p /data/dy34/eval; [[ -s /data/dy34/eval/listen_ids.json ]] || cp /data/dy32/a/listen_ids.json /data/dy34/eval/listen_ids.json
+  DY_DIR=dy41 DY_TITLE="DY-41 mid $tag" DY_MODELS_PREFIX="Model m$tag = DY-41 at step $tag (all ~14k h usable); p40 = DY-40 (7.2k h);" \
+    DY_FOLDERS=m$tag-t10,m$tag-ra08,p40-t10,p40-ra08,b-t10,b-ra08 DY_PAIRS=m$tag-t10:p40-t10,m$tag-ra08:p40-ra08 \
+    DY_LISTEN=p40-t10,m$tag-t10,m$tag-ra08 \
+    DY_DECLARED="{\"S1 (temperature 1.0)\": [\"m$tag-t10\", \"p40-t10\"], \"S2 (repeat-aware sharpening)\": [\"m$tag-ra08\", \"p40-ra08\"]}" \
+    VENV=$V bash "$repo/scripts/dy40_eval.sh" mid$tag
+  python "$repo/scripts/dy41_listen.py" --uri "$uri" --out $W/listen || echo "LISTEN FAILED"
+  python - <<EOF
+import json
+t = json.load(open("/data/dy32/a/eval/mid$tag/summary.json"))["table"]
+for n, r in t.items():
+    print(n, "Dself", r["Dself"]["D"], "words", r["words_median_whisper"], "in_vocab", r["in_vocab_first50"])
+EOF
+  ;;
 listen)
   # mid-run listening (airon-listen.yaml): newest best checkpoint of the training job -> HF dy41/listen-mid/
   aws s3 sync $B/dauys/dy32/prompts/ /data/dy32/prompts/ --only-show-errors

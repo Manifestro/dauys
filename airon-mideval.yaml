@@ -1,0 +1,23 @@
+# airon-mideval.yaml: DY-41 mid-run evaluation beside the training job (nothing is trained here).
+#   airon launch airon-mideval.yaml          (edit the checkpoint and tag in stages.train first)
+# One checkpoint of DY-41/24 from Airon's store -> continuations of all 200 prompts (t10, ra08), the DY-33/40
+# evaluation (Dself, words, in-vocabulary, late Dself, copy) against DY-40 and model b, and the listening set.
+
+experiment: DY-41
+
+resources:
+  gpu: g7e.2xlarge                 # RTX PRO 6000 96 GB: 400 continuations of a 483M model, then the Qwen judge
+  disk: 200
+  ttl: 4h
+  wait: 1h
+
+stages:
+  setup: bash scripts/dy41_job.sh setup
+  train: bash scripts/dy41_job.sh mideval s3://airon-checkpoints-876108973178/dauys/DY-41/24/step-000010000-a1/best.pt 10k
+
+datasets: [duplexchat-en16k]
+
+metrics: {primary: eval/loss, goal: min}   # the experiment's primary; this job only evaluates
+
+on_fail: {hold: 30m}
+quiet_ok: 30m
