@@ -1,6 +1,6 @@
 # airon-phrase.yaml: phrase vectoriser (a small head on wav2vec2-L12 frames, taught by sentence embeddings of Whisper transcripts); DY-36 yardstick.
 #   airon launch airon-phrase.yaml
-# 200k training utterances (was 24k: +0.175, overfitted) transcribed by Whisper, embedded by all-mpnet-base-v2 (target only); head trained by InfoNCE;
+# 200k utterances, 16k steps, 4-layer head (4k steps, 2 layers: +0.204 still rising; 24k utterances: +0.175) transcribed by Whisper, embedded by all-mpnet-base-v2 (target only); head trained by InfoNCE;
 # read on 500 held-out references vs 8,000 subset utterances (text +0.41, best feature +0.104; gate +0.25).
 
 experiment: DY-41
@@ -13,7 +13,7 @@ resources:
 
 stages:
   setup: bash scripts/dy41_job.sh setup
-  train: bash scripts/dy41_job.sh phrase --n-train 200000
+  train: bash scripts/dy41_job.sh phrase --n-train 200000 --reuse-texts --steps 16000 --layers 4
 
 datasets: [duplexchat-en16k]
 

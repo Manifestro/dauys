@@ -105,11 +105,11 @@ def w2v_frames(wavs: list[np.ndarray], batch: int = 48) -> list[torch.Tensor]:
 
 
 class Head(nn.Module):
-    def __init__(self, din: int = 1024, d: int = 512, dout: int = 768) -> None:
+    def __init__(self, din: int = 1024, d: int = 512, dout: int = 768, layers: int = 2) -> None:
         super().__init__()
         self.inp = nn.Linear(din, d)
         layer = nn.TransformerEncoderLayer(d, 8, 4 * d, dropout=0.1, batch_first=True, norm_first=True)
-        self.enc = nn.TransformerEncoder(layer, 2)
+        self.enc = nn.TransformerEncoder(layer, layers)
         self.q = nn.Parameter(torch.randn(1, 1, d) * 0.02)
         self.att = nn.MultiheadAttention(d, 8, batch_first=True)
         self.out = nn.Linear(d, dout)
@@ -146,6 +146,8 @@ def main() -> None:
     p.add_argument("--out", default="/data/pv")
     p.add_argument("--steps", type=int, default=4000)
     p.add_argument("--n-train", type=int, default=N_TRAIN)
+    p.add_argument("--layers", type=int, default=2)
+    p.add_argument("--reuse-texts", action="store_true", help="take the transcripts from S3 dy41/phrase_vec/ instead of Whisper")
     p.add_argument("--chunk", type=int, default=20000)
     p.add_argument("--batch", type=int, default=256)
     p.add_argument("--seed", type=int, default=0)
@@ -171,12 +173,17 @@ def main() -> None:
     core = np.concatenate([Y.sub, Y.refs])
     # in chunks, so that only the 12.5 Hz frames (not the audio) of all training utterances stay in memory
     texts: list[str] = []
+    reuse: list[str] | None = None
+    if a.reuse_texts:  # transcripts of the same draw (same seed and size) from an earlier run
+        s3get("dy41/phrase_vec/train_texts.json", out / "reuse_texts.json")
+        reuse = json.loads((out / "reuse_texts.json").read_text())
+        assert len(reuse) == len(tr), (len(reuse), len(tr))
     fr_tr: list[torch.Tensor] = []
     h_tr = 0.0
     for c in range(0, len(tr), a.chunk):
         wav = au.many([utt_job(T, int(u)) for u in tr[c : c + a.chunk]])
         h_tr += sum(len(w) for w in wav) / SR / 3600
-        texts += whisper(wav)
+        texts += reuse[c : c + a.chunk] if reuse is not None else whisper(wav)
         fr_tr += w2v_frames(wav)
         del wav
         log("chunk", c // a.chunk + 1, "of", -(-len(tr) // a.chunk), "train audio h so far", round(h_tr, 1))
@@ -193,7 +200,7 @@ def main() -> None:
     rng.shuffle(ids)
     nval = min(len(ids) // 20, 2000)
     val, trn = ids[:nval], ids[nval:]
-    head = Head().cuda()
+    head = Head(layers=a.layers).cuda()
     opt = torch.optim.AdamW(head.parameters(), lr=3e-4, weight_decay=0.01)
     Et = torch.from_numpy(E).cuda()
     import airon
@@ -228,7 +235,7 @@ def main() -> None:
     nsub = len(Y.sub)
     r = Y.score(V[nsub:], V[:nsub])
     res = {"reading": r, "gate": GATE, "passed": bool(r["diff"] >= GATE), "n_train": int(len(trn)),
-           "target": TARGET, "input": f"wav2vec2-960h layer {LAYER}, 12.5 Hz", "steps": a.steps,
+           "target": TARGET, "input": f"wav2vec2-960h layer {LAYER}, 12.5 Hz", "steps": a.steps, "head_layers": a.layers,
            "references": "text +0.41, wav2vec2-L12 mean +0.104, WavLM-L18 +0.096, Mimi/DY-41 <= +0.054"}
     log("PHRASE VECTOR", json.dumps(res))
     run.log({"eval/content_phrase_head": r["diff"], "eval/content_phrase_head_ci_lo": r["ci95"][0],
