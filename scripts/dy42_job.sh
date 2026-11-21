@@ -20,6 +20,17 @@ python -c "import torch; assert torch.cuda.is_available(); print('GPU', torch.cu
 cmd=${1:?command}; shift || true
 case $cmd in
 frames|texts) python "$repo/scripts/dy42_prep.py" $cmd "$@" ;;
-head) python "$repo/scripts/dy42_head.py" "$@" ;;
+head)
+  # transcripts (dataset dy42-whisper-texts, small) by their store addresses: inputs.data holds only the frames
+  [[ ${1:-} == --texts-uri ]] || { echo "head: --texts-uri <comma-separated s3 addresses> first"; exit 2; }
+  uris=$2; shift 2
+  mkdir -p /data/dy42/texts/texts
+  python - "$uris" <<'PY'
+import shutil, sys, airon
+for i, u in enumerate(sys.argv[1].split(",")):
+    shutil.copy(airon.fetch(u), f"/data/dy42/texts/texts/{i:02d}.json")
+    print("texts", u)
+PY
+  python "$repo/scripts/dy42_head.py" --texts /data/dy42/texts "$@" ;;
 *) echo "unknown command $cmd"; exit 2 ;;
 esac
