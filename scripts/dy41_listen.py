@@ -43,14 +43,16 @@ def main() -> None:
     p.add_argument("--job", default="DY-41/24")
     p.add_argument("--out", default="/data/dy41/listen")
     p.add_argument("--seed", type=int, default=1234)
+    p.add_argument("--uri", default="", help="checkpoint address in Airon's store (get_run lists them)")
     a = p.parse_args()
     dev = torch.device("cuda")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    uri, step = newest_best(a.job)
-    ckf = out / "best.pt"
-    run(f"aws s3 cp {uri} {ckf} --only-show-errors")
+    import airon
+
+    uri = a.uri or newest_best(a.job)[0]
+    ckf = Path(airon.fetch(uri))  # Airon's store is read through Airon, not with our S3 keys
     ck = torch.load(ckf, map_location="cpu", weights_only=False)
     model = DepthLM(DLConfig(**ck["cfg"])).to(dev).eval()
     model.load_state_dict(ck["model"])

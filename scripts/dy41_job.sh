@@ -74,7 +74,7 @@ pass)
 listen)
   # mid-run listening (airon-listen.yaml): newest best checkpoint of the training job -> HF dy41/listen-mid/
   aws s3 sync $B/dauys/dy32/prompts/ /data/dy32/prompts/ --only-show-errors
-  python "$repo/scripts/dy41_listen.py" --job ${1:-DY-41/24} --out $W/listen
+  python "$repo/scripts/dy41_listen.py" --job ${1:-DY-41/24} --out $W/listen --uri ${2:-s3://airon-checkpoints-876108973178/dauys/DY-41/24/step-000007000-a1/best.pt}
   ;;
 test)
   python "$repo/scripts/dy40_checklist.py" --units $NV/units --out $W/checklist.json
