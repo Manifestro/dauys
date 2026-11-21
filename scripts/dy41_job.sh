@@ -95,10 +95,17 @@ mideval)
     VENV=$V bash "$repo/scripts/dy40_eval.sh" mid$tag
   python "$repo/scripts/dy41_listen.py" --uri "$uri" --out $W/listen || echo "LISTEN FAILED"
   python - <<EOF
-import json
+import json, airon
 t = json.load(open("/data/dy32/a/eval/mid$tag/summary.json"))["table"]
+m = {}
 for n, r in t.items():
     print(n, "Dself", r["Dself"]["D"], "words", r["words_median_whisper"], "in_vocab", r["in_vocab_first50"])
+    n = n.replace("-", "_")
+    m[f"eval/dself_{n}"] = r["Dself"]["D"]
+    m[f"eval/words_whisper_{n}"] = r["words_median_whisper"]
+    m[f"eval/invocab_{n}"] = r["in_vocab_first50"]
+run = airon.init()  # the job's run: the numbers are readable in Airon (get_run), not only on S3/HF
+run.log(m)
 EOF
   ;;
 listen)
