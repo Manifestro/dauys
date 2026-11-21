@@ -1,0 +1,13 @@
+# DY-42 step 3: the phrase head (4 layers, ~14.6M parameters) on the stored frames of all ~800k utterances
+# (dataset dy42-w2v-l12-frames, ~100 GB, memory-mapped from local disk) and their transcripts (dy42-whisper-texts).
+# 16k steps x 256 = ~5 passes over ~780k pairs; primary: DY-36's yardstick on the head's vectors.
+experiment: DY-42
+type: train
+gpu: g7e.4xlarge          # RTX PRO 6000 96 GB, 128 GB RAM (page cache holds most of the frames)
+disk: 250
+ttl: 3h
+inputs:
+  data: dy42-w2v-l12-frames
+dry: bash scripts/dy42_job.sh head --texts-uri TEXTS_URI --steps 200 --ckpt-every 100 --limit 20000
+run: bash scripts/dy42_job.sh head --texts-uri TEXTS_URI --steps 16000
+metrics: {primary: eval/content_phrase_head, goal: max}
