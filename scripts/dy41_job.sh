@@ -116,6 +116,10 @@ teacher)
   # teachers trained with text (Whisper large-v3 encoder, wav2vec2-960h): content by DY-36's yardstick (airon-teacher.yaml)
   python "$repo/scripts/dy41_teacher_content.py" --out $W/tc
   ;;
+export)
+  # a DY-41 checkpoint as a self-contained private HF model repo (airon-export.yaml)
+  python "$repo/scripts/dy41_export.py" --uri ${1:?checkpoint uri} --repo ${2:-manifestro/dauys-dy41-mimi-lm}
+  ;;
 listen)
   # mid-run listening (airon-listen.yaml): newest best checkpoint of the training job -> HF dy41/listen-mid/
   aws s3 sync $B/dauys/dy32/prompts/ /data/dy32/prompts/ --only-show-errors
