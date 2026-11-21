@@ -7,8 +7,8 @@ repo=$(cd "$(dirname "$0")/.." && pwd)
 sudo mkdir -p /data && sudo chown "$USER" /data
 V=$HOME/venv
 if ! $V/bin/python -c "import torch, transformers, airon, boto3, sklearn" 2>/dev/null; then
-  python3 -m pip install -q --user virtualenv
-  python3 -m virtualenv -q $V
+  /usr/bin/python3 -m pip install -q --user virtualenv  # system python: the job's .venv (no pip) is first on PATH
+  /usr/bin/python3 -m virtualenv -q $V
   $V/bin/pip install -q --upgrade pip
   $V/bin/pip install -q torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
   printf "torch==2.7.1\ntorchaudio==2.7.1\n" > /tmp/constraints.txt
