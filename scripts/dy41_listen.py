@@ -59,9 +59,14 @@ def main() -> None:
     print(json.dumps({"checkpoint": uri, "step": ck["step"], "val": ck["val"]["ce"]}), flush=True)
 
     mm = Mimi(dev)
-    names, waves = read_pack(Path("/data/dy32/prompts"), "prompt", "prompts")
-    keep = [i for i, n in enumerate(names) if int(n) in IDS]
-    names, waves = [names[i] for i in keep], [waves[i] for i in keep]
+    names, waves = [], []
+    for src in ("prompts", "prompts_x"):  # ids < 50 are in `prompts`, the rest in `prompts_x` (as in dy34_listen)
+        ns, ws = read_pack(Path(f"/data/dy32/{src}"), "prompt", src)
+        for n_, w_ in zip(ns, ws):
+            if int(n_) in IDS and (int(n_) < 50) == (src == "prompts"):
+                names.append(f"{int(n_):03d}")
+                waves.append(w_)
+    assert len(names) == len(IDS), names
     toks = mm.encode(waves)
     n = min(len(t) for t in toks)
     K = model.cfg.k
@@ -83,11 +88,13 @@ def main() -> None:
             sf.write(d / f"{nm}_dy41-{var}.wav", np.concatenate([ctx[nm], gap, w]), MSR)
             files16[f"{nm}_dy41-{var}"] = to16(w)
     for var in ("t10", "ra08"):  # DY-40 (7.2k h) on the same prompts, made at its end
-        src = Path("/data/dy40_listen") / var
-        src.mkdir(parents=True, exist_ok=True)
-        run(f"aws s3 sync {BUCKET}/dauys/dy40/listen24/m-{var}/ {src}/ --only-show-errors")
+        for sfx in ("", "-x"):
+            src = Path("/data/dy40_listen") / f"{var}{sfx}"
+            src.mkdir(parents=True, exist_ok=True)
+            run(f"aws s3 sync {BUCKET}/dauys/dy40/listen24/m-{var}{sfx}/ {src}/ --only-show-errors")
         for nm in names:
-            f = src / f"{nm}.wav"
+            i = int(nm)
+            f = Path("/data/dy40_listen") / (f"{var}/{i:02d}.wav" if i < 50 else f"{var}-x/{i:03d}.wav")
             if f.exists():
                 w, _ = sf.read(f, dtype="float32")
                 sf.write(d / f"{nm}_dy40-{var}.wav", np.concatenate([ctx[nm], gap, w]), MSR)
