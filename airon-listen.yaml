@@ -1,0 +1,23 @@
+# airon-listen.yaml: DY-41 mid-run listening, beside the training job (no training here).
+#   airon launch airon-listen.yaml
+# The newest best checkpoint of DY-41/24 from Airon's store -> continuations of the 8 listening prompts (t10, ra08),
+# DY-40's continuations of the same prompts, Whisper transcripts -> HF manifestro/dauys-runs dy41/listen-mid/step_<N>/.
+
+experiment: DY-41
+
+resources:
+  gpu: g5.2xlarge                  # A10G 24 GB: generation of 8 prompts and Whisper
+  disk: 100
+  ttl: 2h
+  wait: 1h
+
+stages:
+  setup: bash scripts/dy41_job.sh setup
+  train: bash scripts/dy41_job.sh listen DY-41/24
+
+datasets: [duplexchat-en16k]
+
+on_fail: {hold: 20m}
+quiet_ok: 20m
+
+metrics: {primary: eval/loss, goal: min}   # the experiment's primary; this job only listens (no dry, nothing trained)

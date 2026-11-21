@@ -71,6 +71,11 @@ pass)
   for p in "${pids[@]}"; do wait $p || { tail -n 20 $W/logs/pass_*.log; exit 1; }; done
   grep -h "PASS DONE" $W/logs/pass_*.log
   ;;
+listen)
+  # mid-run listening (airon-listen.yaml): newest best checkpoint of the training job -> HF dy41/listen-mid/
+  aws s3 sync $B/dauys/dy32/prompts/ /data/dy32/prompts/ --only-show-errors
+  python "$repo/scripts/dy41_listen.py" --job ${1:-DY-41/24} --out $W/listen
+  ;;
 test)
   python "$repo/scripts/dy40_checklist.py" --units $NV/units --out $W/checklist.json
   rm -rf $NV/units_small && mkdir -p $NV/units_small  # overfit on a small subset: three training shards + one held-out
