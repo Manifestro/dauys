@@ -1,19 +1,19 @@
 # airon-phrase.yaml: phrase vectoriser (a small head on wav2vec2-L12 frames, taught by sentence embeddings of Whisper transcripts); DY-36 yardstick.
 #   airon launch airon-phrase.yaml
-# 24k training utterances transcribed by Whisper, embedded by all-mpnet-base-v2 (target only); head trained by InfoNCE;
+# 200k training utterances (was 24k: +0.175, overfitted) transcribed by Whisper, embedded by all-mpnet-base-v2 (target only); head trained by InfoNCE;
 # read on 500 held-out references vs 8,000 subset utterances (text +0.41, best feature +0.104; gate +0.25).
 
 experiment: DY-41
 
 resources:
-  gpu: g7e.2xlarge                 # RTX PRO 6000 96 GB: Whisper on 24k utterances, two encoders, the head
+  gpu: g7e.4xlarge                 # RTX PRO 6000 96 GB, 128 GB RAM: 12.5 Hz frames of 200k utterances stay in memory (~25 GB)
   disk: 100
-  ttl: 4h
+  ttl: 5h
   wait: 1h
 
 stages:
   setup: bash scripts/dy41_job.sh setup
-  train: bash scripts/dy41_job.sh phrase
+  train: bash scripts/dy41_job.sh phrase --n-train 200000
 
 datasets: [duplexchat-en16k]
 

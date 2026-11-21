@@ -145,6 +145,8 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--out", default="/data/pv")
     p.add_argument("--steps", type=int, default=4000)
+    p.add_argument("--n-train", type=int, default=N_TRAIN)
+    p.add_argument("--chunk", type=int, default=20000)
     p.add_argument("--batch", type=int, default=256)
     p.add_argument("--seed", type=int, default=0)
     a = p.parse_args()
@@ -163,28 +165,33 @@ def main() -> None:
     used_eps = set(T["ep"][np.concatenate([Y.sub, Y.refs, Y.rand])].tolist())
     ok = (~T["held"]) & (T["len"] >= 100) & (T["len"] <= 750) & ~np.isin(T["ep"], list(used_eps))
     rng = np.random.default_rng(a.seed)
-    tr = rng.choice(np.flatnonzero(ok), size=min(N_TRAIN, int(ok.sum())), replace=False)
+    tr = rng.choice(np.flatnonzero(ok), size=min(a.n_train, int(ok.sum())), replace=False)
     assert not np.isin(T["ep"][tr], list(used_eps)).any()
     log("training utterances", len(tr), "from", int(ok.sum()), "eligible; recordings", len(np.unique(T["ep"][tr])))
     core = np.concatenate([Y.sub, Y.refs])
-    wav_tr = au.many([utt_job(T, int(u)) for u in tr])
+    # in chunks, so that only the 12.5 Hz frames (not the audio) of all training utterances stay in memory
+    texts: list[str] = []
+    fr_tr: list[torch.Tensor] = []
+    h_tr = 0.0
+    for c in range(0, len(tr), a.chunk):
+        wav = au.many([utt_job(T, int(u)) for u in tr[c : c + a.chunk]])
+        h_tr += sum(len(w) for w in wav) / SR / 3600
+        texts += whisper(wav)
+        fr_tr += w2v_frames(wav)
+        del wav
+        log("chunk", c // a.chunk + 1, "of", -(-len(tr) // a.chunk), "train audio h so far", round(h_tr, 1))
     wav_core = au.many([utt_job(T, int(u)) for u in core])
-    log("audio h: train", round(sum(len(w) for w in wav_tr) / SR / 3600, 1), "core", round(sum(len(w) for w in wav_core) / SR / 3600, 1))
-
+    fr_core = w2v_frames(wav_core)
+    del wav_core
     txt_f = out / "train_texts.json"
-    texts = json.loads(txt_f.read_text()) if txt_f.exists() else whisper(wav_tr)
     txt_f.write_text(json.dumps(texts))
     keep = np.array([len(t.split()) >= 3 for t in texts])
-    log("transcripts with >= 3 words", int(keep.sum()), "of", len(texts))
+    log("transcripts with >= 3 words", int(keep.sum()), "of", len(texts), "train audio h", round(h_tr, 1))
     E = embed(texts, TARGET)
-
-    fr_tr = w2v_frames(wav_tr)
-    fr_core = w2v_frames(wav_core)
-    del wav_tr, wav_core
 
     ids = np.flatnonzero(keep)
     rng.shuffle(ids)
-    nval = len(ids) // 20
+    nval = min(len(ids) // 20, 2000)
     val, trn = ids[:nval], ids[nval:]
     head = Head().cuda()
     opt = torch.optim.AdamW(head.parameters(), lr=3e-4, weight_decay=0.01)
