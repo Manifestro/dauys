@@ -13,7 +13,7 @@ resources:
 
 stages:
   setup: bash scripts/dy41_job.sh setup
-  train: bash scripts/dy41_job.sh mideval s3://airon-checkpoints-876108973178/dauys/DY-41/24/step-000010000-a1/best.pt 10k
+  train: bash scripts/dy41_job.sh mideval s3://airon-checkpoints-876108973178/dauys/DY-41/24/step-000022000-a1/best.pt 22k
 
 datasets: [duplexchat-en16k]
 
