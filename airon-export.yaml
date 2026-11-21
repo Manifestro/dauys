@@ -6,7 +6,7 @@ experiment: DY-41
 
 resources:
   gpu: g5.xlarge                   # A10G: one 10 s continuation for the check
-  disk: 60
+  disk: 100                        # the machine image alone takes 75
   ttl: 2h
   wait: 1h
 
