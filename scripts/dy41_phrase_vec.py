@@ -50,7 +50,7 @@ def whisper(wavs: list[np.ndarray]) -> list[str]:
 
     asr = pipeline("automatic-speech-recognition", model=ASR, device=torch.device("cuda"), torch_dtype=torch.float16,
                    chunk_length_s=30)
-    res = asr([{"raw": w.astype(np.float32) / 32768.0, "sampling_rate": SR} for w in wavs], batch_size=32,
+    res = asr([{"raw": w.astype(np.float32) / 32768.0, "sampling_rate": SR} for w in wavs], batch_size=96,
               generate_kwargs={"language": "en", "task": "transcribe"})
     del asr
     torch.cuda.empty_cache()
@@ -74,7 +74,7 @@ def embed(texts: list[str], name: str) -> np.ndarray:
     return np.concatenate(out)
 
 
-def w2v_frames(wavs: list[np.ndarray], batch: int = 16) -> list[torch.Tensor]:
+def w2v_frames(wavs: list[np.ndarray], batch: int = 48) -> list[torch.Tensor]:
     """hidden state LAYER of wav2vec2-960h, 50 Hz -> 12.5 Hz (mean of POOL frames), fp16 on CPU."""
     from transformers import Wav2Vec2ForCTC
 

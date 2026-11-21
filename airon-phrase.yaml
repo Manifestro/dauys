@@ -6,7 +6,7 @@
 experiment: DY-41
 
 resources:
-  gpu: g5.2xlarge                  # A10G 24 GB: two encoders in inference, one after the other
+  gpu: g7e.2xlarge                 # RTX PRO 6000 96 GB: Whisper on 24k utterances, two encoders, the head
   disk: 100
   ttl: 4h
   wait: 1h
