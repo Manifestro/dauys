@@ -120,6 +120,11 @@ export)
   # a DY-41 checkpoint as a self-contained private HF model repo (airon-export.yaml)
   python "$repo/scripts/dy41_export.py" --uri ${1:?checkpoint uri} --repo ${2:-manifestro/dauys-dy41-mimi-lm}
   ;;
+phrase)
+  # phrase vectoriser: wav2vec2-L12 frames -> one vector per utterance, taught by a sentence embedding of its Whisper
+  # transcript (training target only), read by DY-36's yardstick (airon-phrase.yaml)
+  python "$repo/scripts/dy41_phrase_vec.py" --out $W/pv "$@"
+  ;;
 listen)
   # mid-run listening (airon-listen.yaml): newest best checkpoint of the training job -> HF dy41/listen-mid/
   aws s3 sync $B/dauys/dy32/prompts/ /data/dy32/prompts/ --only-show-errors
