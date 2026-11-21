@@ -34,14 +34,14 @@ stage=${1:?stage}; shift || true
 
 case $stage in
 setup)
-  if ! $V/bin/python -c "import torch, transformers, airon, jiwer" 2>/dev/null; then
+  if ! $V/bin/python -c "import torch, transformers, airon, jiwer, boto3, sklearn" 2>/dev/null; then
     python3 -m pip install -q --user virtualenv
     python3 -m virtualenv -q $V
     $V/bin/pip install -q --upgrade pip
     $V/bin/pip install -q torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
     printf "torch==2.7.1\ntorchaudio==2.7.1\n" > /tmp/constraints.txt
     $V/bin/pip install -q -c /tmp/constraints.txt "numpy<2.1" scipy transformers==4.46.3 huggingface_hub safetensors \
-      soundfile pyyaml numba accelerate "airon>=0.4.0" "datasets==3.6.0" jiwer onnxruntime
+      soundfile pyyaml numba accelerate boto3 scikit-learn "airon>=0.4.0" "datasets==3.6.0" jiwer onnxruntime
   fi
   python -c "import torch; from transformers import MimiModel; assert torch.cuda.is_available(); print('GPU', torch.cuda.get_device_name(0))"
   ;;
@@ -107,6 +107,10 @@ for n, r in t.items():
 run = airon.init()  # the job's run: the numbers are readable in Airon (get_run), not only on S3/HF
 run.log(m)
 EOF
+  ;;
+content)
+  # does Mimi (and the DY-41 LM) carry utterance content? DY-36's yardstick (airon-content.yaml)
+  python "$repo/scripts/dy41_mimi_content.py" --out $W/mc ${1:+--lm $1}
   ;;
 listen)
   # mid-run listening (airon-listen.yaml): newest best checkpoint of the training job -> HF dy41/listen-mid/

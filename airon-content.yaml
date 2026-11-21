@@ -1,0 +1,23 @@
+# airon-content.yaml: does Mimi (and the DY-41 LM) carry the content of an utterance? DY-36's yardstick, no training.
+#   airon launch airon-content.yaml
+# ~8,500 utterances (DY-36's subset + references, plus speaker mates for centring) encoded alone by Mimi; pooled
+# encoder output, semantic latent, code-0 vector and bag, DY-41 LM layers 8-24; neighbour text closeness vs random.
+
+experiment: DY-41
+
+resources:
+  gpu: g5.2xlarge                  # A10G 24 GB: Mimi encoder + the 483M LM in inference
+  disk: 100
+  ttl: 3h
+  wait: 1h
+
+stages:
+  setup: bash scripts/dy41_job.sh setup
+  train: bash scripts/dy41_job.sh content s3://airon-checkpoints-876108973178/dauys/DY-41/24/step-000023688-a1/last.pt
+
+datasets: [duplexchat-en16k]
+
+metrics: {primary: eval/loss, goal: min}   # the experiment's primary; this job only measures
+
+on_fail: {hold: 30m}
+quiet_ok: 30m
